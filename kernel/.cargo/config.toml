@@ -4,4 +4,4 @@ build-std = ["core", "compiler_builtins"]
 
 [target.x86_64]
 linker = "rust-lld"
-rustflags = ["-C", "link-arg=-Tconfig/x86_64/linker.ld"]
+rustflags = ["-C", "link-arg=-Tkernel/config/x86_64/linker.ld"]

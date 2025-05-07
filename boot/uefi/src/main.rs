@@ -2,23 +2,20 @@
 #![no_std]
 
 
+mod loader;
+mod logger;
 
-use log::info;
 use uefi::prelude::*;
 
 extern crate alloc;
-use alloc::vec;
 
 #[entry]
 fn main() -> Status {
     uefi::helpers::init().unwrap();
+    logger::init_logger();
 
-    info!("Starting bootloader...");
-    let mut some_objects = vec![1,2,3,4];
-
-    for i in 0..20 {
-        info!("objects:{:?}", some_objects);
-    }
+    loader::list_fs();
+    
     loop {}
     Status::SUCCESS
 }
