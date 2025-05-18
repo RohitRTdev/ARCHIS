@@ -1,26 +1,35 @@
-CONFIG = debug
+CONFIG ?= debug
 BLR_TARGET = x86_64-unknown-uefi
-BLR_TARGET_PLACEHOLDER = boot/uefi/placeholder.txt
+KERNEL_ARCH = X86_64
 ENV_PLACEHOLDER = placeholder.txt
-KERNEL_TARGET = config/x86_64/x86_64.json
+KERNEL_TARGET = config/$(KERNEL_ARCH)/$(KERNEL_ARCH).json
 BLR_CRATE_PATH = boot/uefi
 KERNEL_CRATE_PATH = kernel
 BLR_EXE = target/$(BLR_TARGET)/$(CONFIG)/boot.efi
-KERNEL_EXE = target/x86_64/$(CONFIG)/aris
+KERNEL_EXE = target/$(KERNEL_ARCH)/$(CONFIG)/libaris.so
+LINKER_SCRIPT = $(KERNEL_CRATE_PATH)/config/$(KERNEL_ARCH)/linker.ld
 OUTPUT_DIR = output
-IMAGE_NAME=disk-tools
-GEN_MSG = "Automatically generated file..\nDo not remove file manually.."
+IMAGE_NAME = disk-tools
+GEN_MSG = "Automatically generated file..\nDo not remove manually.."
+DRIVER_DIRS := $(wildcard kernel/src/drivers/*)
 
 ifeq ($(OS),Windows_NT)
     RUN_DOCKER_SCRIPT = @./scripts/docker.bat
 else
-    RUN_DOCKER_SCRIPT = @echo "Not Windows, skipping batch script."
+    RUN_DOCKER_SCRIPT = @docker run -it --privileged -v "$(pwd)":/workspace -w /workspace $(IMAGE_NAME) ./scripts/create_image.sh
+endif
+
+ifeq ($(CONFIG),release)
+	BUILD_OPTIONS := --release
+else ifeq ($(CONFIG),debug)
+	BUILD_OPTIONS :=
+else 
+$(error Config flag must be either 'debug' or 'release')
 endif
 
 
 .PHONY: all clean build_blr build_kernel build_image
 
-# Default build
 all: build_image
 
 $(ENV_PLACEHOLDER): 
@@ -28,41 +37,64 @@ $(ENV_PLACEHOLDER):
 	@docker build -t $(IMAGE_NAME) ./scripts
 	@echo -e $(GEN_MSG) > $(ENV_PLACEHOLDER)
 
-build_image: build_kernel build_blr $(ENV_PLACEHOLDER)
+build_image: build_kernel build_blr build_drivers $(ENV_PLACEHOLDER)
 	@echo "Starting image creation"
+	@touch $(OUTPUT_DIR)/archis_os.iso
 	$(RUN_DOCKER_SCRIPT)
 
 $(OUTPUT_DIR):
 	@mkdir -p $(OUTPUT_DIR)
 
-# Rule to build the UEFI crate
-build_blr: $(BLR_TARGET_PLACEHOLDER) $(OUTPUT_DIR)
-	@echo "Building boot/uefi crate..."
-	@cd $(BLR_CRATE_PATH) && cargo build --target $(BLR_TARGET)
+build_blr: $(OUTPUT_DIR)
+	@rustup target list --installed | grep -qx $(BLR_TARGET) || {\
+		echo "Adding blr target configuration";\
+		rustup target add $(BLR_TARGET);\
+	}
+	@echo "Building boot/uefi crate..." 
+	@(cd $(BLR_CRATE_PATH) && \
+		cargo build $(BUILD_OPTIONS) \
+		-Z build-std=core,alloc \
+		--target $(BLR_TARGET) \
+	)
 	@cp $(BLR_EXE) $(OUTPUT_DIR)
-
-$(BLR_TARGET_PLACEHOLDER):
-	@echo "Adding blr target configuration"
-	@rustup target add $(BLR_TARGET)
-	@echo -e $(GEN_MSG) > $(BLR_TARGET_PLACEHOLDER)
 
 build_kernel: $(OUTPUT_DIR)
 	@echo "Building kernel crate..."
-	@cd kernel && cargo build --target $(KERNEL_TARGET) 
-	@cp $(KERNEL_EXE) $(OUTPUT_DIR)
+	@(cd kernel && RUSTFLAGS="-C link-arg=-T$(LINKER_SCRIPT)" \
+		cargo build $(BUILD_OPTIONS) \
+    	-Z build-std=core,compiler_builtins \
+    	-Z build-std-features=compiler-builtins-mem \
+    	--target $(KERNEL_TARGET)\
+	) 
+	@cp $(KERNEL_EXE) $(OUTPUT_DIR)/aris.elf
+
+build_drivers: build_kernel
+	@echo "Building drivers..."
+	@for dir in $(DRIVER_DIRS); do \
+		if [ -f $$dir/Cargo.toml ]; then \
+			echo "Building driver in $$dir..."; \
+			(cd $$dir && \
+				RUSTFLAGS="-C link-arg=-T$(LINKER_SCRIPT)" \
+				cargo build $(BUILD_OPTIONS) \
+				-Z build-std=core,compiler_builtins \
+				-Z build-std-features=compiler-builtins-mem \
+				--target ../../../$(KERNEL_TARGET)); \
+		fi \
+	done
 
 test:
 	@echo "Starting simulator..."
 	@qemu-system-x86_64 -cpu Nehalem -bios scripts/OVMF.fd\
- -drive file=$(OUTPUT_DIR)/archis_os.iso,format=raw,if=ide -serial mon:stdio | tee >(sed 's/\x1b\[[0-9;=]*[A-Za-z]//g' > output/con_log.txt)
+ -drive file=$(OUTPUT_DIR)/archis_os.iso,format=raw,if=ide -serial mon:stdio | tee >(sed 's/\x1b\[[0-9;=]*[A-Za-z]//g' > $(OUTPUT_DIR)/con_log.txt)
 
-# Clean all builds
 clean:
 	@echo "Cleaning all builds..."
 	@cd $(BLR_CRATE_PATH) && cargo clean
 	@cd $(KERNEL_CRATE_PATH) && cargo clean
-	@rm -rf $(OUTPUT_DIR)
 
+# Execute this to restart build process from very beginning
+# Use this if facing some problems with build
 reset: clean
 	@echo "Removing placeholders"
 	@rm -f $(BLR_TARGET_PLACEHOLDER) $(ENV_PLACEHOLDER)
+	@rm -rf $(OUTPUT_DIR)

@@ -1,5 +1,5 @@
 OUTPUT_FORMAT("elf64-x86-64")
-ENTRY(kern_main)
+ENTRY(kern_start)
 
 SECTIONS {
     .text : {
@@ -17,5 +17,14 @@ SECTIONS {
     .bss : {
         *(.bss*)
         *(COMMON)
+    }
+
+    /DISCARD/ : {
+        *(.comment)
+        *(.eh_frame)
+        *(.eh_frame_hdr)
+        *(.note*)
+        *(.debug*)
+        *(.gnu*)
     }
 }

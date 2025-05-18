@@ -1,3 +1,5 @@
+#![no_std]
+
 use core::panic::PanicInfo;
 
 #[cfg(not(test))]
@@ -11,8 +13,7 @@ fn panic(_info: &PanicInfo) -> ! {
 }
 
 
-#[cfg(not(test))]
-#[no_mangle]
-extern "C" fn panic_handler(info: &PanicInfo) -> ! {
-    panic(info);
+
+fn test_function() {
+    let bootInfo: common::BootInfo;
 }

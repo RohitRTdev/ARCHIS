@@ -12,6 +12,8 @@
     "panic-strategy": "abort",
     "disable-redzone": true,
     "features": "-mmx,-sse,+soft-float",
-    "rustc-abi": "x86-softfloat"
+    "rustc-abi": "x86-softfloat",
+    "dynamic-linking": true,
+    "relocation-model": "pic"
 }
 

@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "boot/uefi",
     "kernel",
+    "kernel/src/drivers/*"
 ]
 
 [profile.dev]
@@ -11,3 +12,7 @@ panic = "abort"
 
 [profile.release]
 panic = "abort"
+
+
+[workspace.dependencies]
+common = {path = "lib/common"}

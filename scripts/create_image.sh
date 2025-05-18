@@ -8,11 +8,8 @@ EFI_SIZE_MB=100
 EFI_LABEL="EFI"
 ROOT_LABEL="ARCHIS"
 BLR="output/boot.efi"
-KERNEL="output/aris"  
+KERNEL="output/aris.elf"  
 ROOT_UUID="9ffd2959-915c-479f-8787-1f9f701e1034"  # Custom partition UUID
-
-# === CLEANUP IF EXISTS ===
-rm -f $IMG
 
 echo "Creating empty image file"
 dd if=/dev/zero of=$IMG bs=1M count=$SIZE_MB > /dev/null 2>&1
