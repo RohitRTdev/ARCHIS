@@ -50,16 +50,16 @@ build_blr: $(OUTPUT_DIR)
 		echo "Adding blr target configuration";\
 		rustup target add $(BLR_TARGET);\
 	}
-	@echo "Building boot/uefi crate..." 
+	@echo "Building bootloader..." 
 	@(cd $(BLR_CRATE_PATH) && \
 		cargo build $(BUILD_OPTIONS) \
 		-Z build-std=core,alloc \
 		--target $(BLR_TARGET) \
 	)
-	@cp $(BLR_EXE) $(OUTPUT_DIR)
+	@cp $(BLR_EXE) $(OUTPUT_DIR)/bootx64.efi
 
 build_kernel: $(OUTPUT_DIR)
-	@echo "Building kernel crate..."
+	@echo "Building kernel..."
 	@(cd kernel && RUSTFLAGS="-C link-arg=-T$(LINKER_SCRIPT)" \
 		cargo build $(BUILD_OPTIONS) \
     	-Z build-std=core,compiler_builtins \
@@ -70,15 +70,18 @@ build_kernel: $(OUTPUT_DIR)
 
 build_drivers: build_kernel
 	@echo "Building drivers..."
+	@mkdir -p $(OUTPUT_DIR)/drivers
 	@for dir in $(DRIVER_DIRS); do \
 		if [ -f $$dir/Cargo.toml ]; then \
-			echo "Building driver in $$dir..."; \
+			driver_name=$$(basename $$dir); \
+			echo "Building driver $$dir"; \
 			(cd $$dir && \
 				RUSTFLAGS="-C link-arg=-T$(LINKER_SCRIPT)" \
 				cargo build $(BUILD_OPTIONS) \
 				-Z build-std=core,compiler_builtins \
 				-Z build-std-features=compiler-builtins-mem \
 				--target ../../../$(KERNEL_TARGET)); \
+			cp target/$(KERNEL_ARCH)/$(CONFIG)/lib$$driver_name.so $(OUTPUT_DIR)/drivers; \
 		fi \
 	done
 
@@ -91,10 +94,10 @@ clean:
 	@echo "Cleaning all builds..."
 	@cd $(BLR_CRATE_PATH) && cargo clean
 	@cd $(KERNEL_CRATE_PATH) && cargo clean
+	@rm -rf $(OUTPUT_DIR)
 
 # Execute this to restart build process from very beginning
 # Use this if facing some problems with build
 reset: clean
 	@echo "Removing placeholders"
 	@rm -f $(BLR_TARGET_PLACEHOLDER) $(ENV_PLACEHOLDER)
-	@rm -rf $(OUTPUT_DIR)

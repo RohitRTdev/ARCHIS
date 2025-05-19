@@ -7,10 +7,9 @@ SIZE_MB=200
 EFI_SIZE_MB=100
 EFI_LABEL="EFI"
 ROOT_LABEL="ARCHIS"
-BLR="output/boot.efi"
-KERNEL="output/aris.elf"  
 ROOT_UUID="9ffd2959-915c-479f-8787-1f9f701e1034"  # Custom partition UUID
-
+KERNEL_MNT_POINT="/mnt/kernel"
+BLR_MNT_POINT="/mnt/esp"
 echo "Creating empty image file"
 dd if=/dev/zero of=$IMG bs=1M count=$SIZE_MB > /dev/null 2>&1
 
@@ -34,30 +33,36 @@ mkfs.vfat -F32 -n $EFI_LABEL ${LOOPp0} > /dev/null
 # === FORMAT ROOT PARTITION ===
 mkfs.vfat -F32 -n $ROOT_LABEL ${LOOPp1} > /dev/null
 
+install_kernel_image() {
+    local src="output"
+    local dst_kernel=$KERNEL_MNT_POINT
+    local dst_blr=$BLR_MNT_POINT
 
-# === MOUNT AND COPY EFI FILE ===
+    echo "Installing kernel and blr into image..."
+
+    mkdir -p "$dst_kernel/sys/drivers"
+    mkdir -p "$dst_blr/efi/boot"
+
+    cp "$src"/drivers/*.so "$dst_kernel/sys/drivers/" || echo "No drivers found..."
+    cp "$src"/aris.elf "$dst_kernel/sys/" || echo "Kernel not found..."
+    cp "$src"/bootx64.efi "$dst_blr/efi/boot/" || echo "Bootloader not found..."
+}
+
+# === CREATE MOUNTPOINTS ===
 mkdir -p /mnt/esp
-mount ${LOOPp0} /mnt/esp
-
-mkdir -p /mnt/esp/EFI/BOOT
-cp "$BLR" /mnt/esp/EFI/BOOT/BOOTX64.EFI
-
-
-# === COPY KERNEL FILE === 
 mkdir -p /mnt/kernel
+mount ${LOOPp0} /mnt/esp
 mount ${LOOPp1} /mnt/kernel
 
-mkdir -p /mnt/kernel/sys/drivers
-mkdir -p /mnt/kernel/bin
-cp "$KERNEL" /mnt/kernel/sys/aris.elf
+install_kernel_image
 
 # === CLEANUP ===
-umount /mnt/esp
-umount /mnt/kernel
+umount $BLR_MNT_POINT 
+umount $KERNEL_MNT_POINT
 losetup -d $LOOPp0
 losetup -d $LOOPp1
-rmdir /mnt/esp
-rmdir /mnt/kernel
+rmdir $BLR_MNT_POINT
+rmdir $KERNEL_MNT_POINT
 
 echo "Setting partition UUID"
 
