@@ -16,7 +16,7 @@ DRIVER_DIRS := $(wildcard kernel/src/drivers/*)
 ifeq ($(OS),Windows_NT)
     RUN_DOCKER_SCRIPT = @./scripts/docker.bat
 else
-    RUN_DOCKER_SCRIPT = @docker run -it --privileged -v "$(pwd)":/workspace -w /workspace $(IMAGE_NAME) ./scripts/create_image.sh
+    RUN_DOCKER_SCRIPT = @docker run -it --privileged -v "$$(pwd)":/workspace -w /workspace $(IMAGE_NAME) ./scripts/create_image_uefi.sh
 endif
 
 ifeq ($(CONFIG),release)
@@ -64,7 +64,7 @@ build_kernel: $(OUTPUT_DIR)
 		cargo build $(BUILD_OPTIONS) \
     	-Z build-std=core,compiler_builtins \
     	-Z build-std-features=compiler-builtins-mem \
-    	--target $(KERNEL_TARGET)\
+    	--target $(KERNEL_TARGET) \
 	) 
 	@cp $(KERNEL_EXE) $(OUTPUT_DIR)/aris.elf
 

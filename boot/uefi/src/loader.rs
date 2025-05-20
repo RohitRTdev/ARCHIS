@@ -29,7 +29,7 @@ pub fn list_fs() {
                 if let media::PartitionSignature::Guid(guid) = device_node_data.partition_signature() {
                     let ascii_data = guid.to_ascii_hex_lower();
                     if str::from_utf8(&ascii_data).unwrap() == ROOT_GUID {
-                        info!("Found root parition with guid:{}", ROOT_GUID);
+                        info!("Found root partition with guid:{}", ROOT_GUID);
                         found_partition = true;
                     }
                 }           
