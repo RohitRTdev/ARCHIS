@@ -1,0 +1,35 @@
+# ARCHIS
+ARCHIS is targeted to be a cross-platform multi-arch supporting Rust based OS.
+
+## Description
+Current plan is to support x86_64 architecture for intel/amd chipsets which translates to UEFI platform for most modern machines.
+
+## Prerequisites
+The build has been tested on Windows, WSL and Ubuntu, and for now, it works<br>
+Tools required
+* Rust
+* Docker
+* Make
+* Clang
+* Standard GNU tools
+
+If you're on windows, simply download MSYS2, and use pacman (MSYS2 default package manager) to download the required tools. 
+Make sure to add the usr/bin folder to system path (MSYS2 by default doesn't add that to system path)
+
+## Build
+To build the OS, run following from project root
+>make
+
+This will build debug version of kernel, bootloader, drivers and the disk image<br>
+If you want release version, simply invoke
+>make CONFIG=release
+
+## Testing 
+Testing can be done by burning the image file to a flash drive (tools like rufus or balena etcher should be fine) and running it on real machine by choosing to boot through the flash drive in BIOS setup.
+Make sure that you have disabled secure boot in the BIOS setup or the OS won't load.
+
+The image file can also be loaded in qemu and run.
+Download qemu for your platform and simply invoke
+>make test
+
+
