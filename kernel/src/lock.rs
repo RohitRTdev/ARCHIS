@@ -5,6 +5,7 @@ use crate::hal;
 
 pub struct SpinlockGuard<'a, T> {
     lock: &'a hal::Spinlock,
+    int_status: bool,
     data: RefMut<'a, T>
 }
 
@@ -26,6 +27,7 @@ impl<T> DerefMut for SpinlockGuard<'_, T> {
 impl<T> Drop for SpinlockGuard<'_, T> {
     fn drop(&mut self) {
         self.lock.unlock();
+        hal::enable_interrupts(self.int_status);
     }
 }
 
@@ -49,7 +51,8 @@ impl<T> Spinlock<T> {
     }
 
     pub fn lock(&self) -> SpinlockGuard<'_, T> {
+        let int_status = hal::disable_interrupts();
         self.lock.lock();
-        SpinlockGuard { lock: &self.lock, data: self.data.borrow_mut()}
+        SpinlockGuard { lock: &self.lock, int_status, data: self.data.borrow_mut()}
     }
 }

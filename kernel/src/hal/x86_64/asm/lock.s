@@ -1,4 +1,10 @@
-.global acquire_lock
+#include "asm_macros.inc"
 
-acquire_lock:
-    nop
+// Acquire semantics are guaranteed since xchg also acts as memory fence
+FUNC acquire_lock
+    movq $1, %rax
+    lock xchgq %rax, (%rdi)
+    testq %rax, %rax
+    jnz acquire_lock
+    ret
+ENDF acquire_lock

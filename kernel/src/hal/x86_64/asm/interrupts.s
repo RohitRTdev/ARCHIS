@@ -1,10 +1,13 @@
-.global _cli
-
-_cli:
+#include "asm_macros.inc"
+FUNC cli
+    pushfq
+    popq %rax
     cli
     ret
+ENDF cli
 
-.global _sti
-_sti:
+
+FUNC sti
     sti
     ret
+ENDF sti

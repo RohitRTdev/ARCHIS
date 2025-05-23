@@ -14,16 +14,17 @@ fn main() {
 
     for entry in fs::read_dir(&asm_dir).unwrap().flatten() {
         let path = entry.path();
-        if path.extension().map_or(false, |e| e == "s") {
+        if path.extension().map_or(false, |e| e == "S") {
             let file_stem = path.file_stem().unwrap();
             let output_obj = out_dir.join(format!("{}.o", file_stem.to_string_lossy()));
-
+            let input_path = path.to_str().unwrap().replace('\\', "/");
+            
             let status = Command::new("clang")
                 .args(&[
                     "-c",                        
                     "-target", &target,          
                     "-o", output_obj.to_str().unwrap(),
-                    path.to_str().unwrap(),
+                    &input_path,
                 ])
                 .status()
                 .expect("failed to execute assembler");

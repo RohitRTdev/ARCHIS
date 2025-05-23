@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 common.workspace = true
+log.workspace = true
 uefi = { version = "*", features = [ "panic_handler", "alloc", "global_allocator" ] }
 uefi-services = "*"
-log = "*"
 

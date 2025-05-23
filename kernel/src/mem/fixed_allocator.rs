@@ -1,7 +1,9 @@
-use core::ffi::c_void;
 use core::alloc::Layout;
 use core::marker::PhantomData;
 use core::mem;
+use core::ptr::NonNull;
+use common::ceil_div;
+use crate::lock::Spinlock;
 
 #[repr(usize)]
 pub enum Regions {
@@ -24,16 +26,18 @@ const BITMAP_SIZE: usize = (TOTAL_BOOT_MEMORY / MIN_SLOT_SIZE) >> 3;
 #[repr(align(4096))]
 struct HeapWrapper {
     heap: [u8; TOTAL_BOOT_MEMORY],
-    bitmap: [u8; BITMAP_SIZE]
+    bitmap: [u8; BITMAP_SIZE],
+    lock: Spinlock<core::marker::PhantomData<bool>>
 }
 
 static HEAP: HeapWrapper = HeapWrapper { 
     heap: [0; TOTAL_BOOT_MEMORY],
-    bitmap: [0; BITMAP_SIZE]
+    bitmap: [0; BITMAP_SIZE],
+    lock: Spinlock::new(core::marker::PhantomData)
 };
 
 // Forces FixedAllocator monomorphization only when slot size (size of the contained data) is >= MIN_SLOT_SIZE
-struct FixedAllocator<T, const REGION: usize> 
+pub struct FixedAllocator<T, const REGION: usize> 
 where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
     _marker: PhantomData<T> 
 }
@@ -56,48 +60,99 @@ where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
 }
 
 
-impl<T, const REGION: usize> super::Allocator 
+impl<T, const REGION: usize> super::Allocator<T> 
 for FixedAllocator<T, REGION> 
 where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
 
-    fn alloc(layout: Layout) -> *mut c_void {
+    fn alloc(layout: Layout) -> NonNull<T> {
+        let _sync = HEAP.lock.lock();
+        
         let (base, hdr_base) = Self::fetch_hdr_and_base();
-        let num_slots = BOOT_REGION_SIZE / layout.size();
+        let slot_size = mem::size_of::<T>();
+        let num_slots = BOOT_REGION_SIZE / slot_size;
+        let mut slots_required = ceil_div(layout.size(), slot_size);
         let mut slot_offset= 0;
+        let mut start_slot = 0;
+        let mut num_slots_found = 0;
 
         for slot_idx in 0..BITMAP_SIZE {
-            let mut slot_group = unsafe {
+            // Search bitmap to find 'n' continuous free slots
+            let slot_group = unsafe {
                 *hdr_base.add(slot_idx)
             };
             for bit in 0..8 {
                 if slot_group & (1 << bit) == 0 {
-                    slot_group |= 1 << bit;
-                    unsafe {
-                        *(hdr_base.add(slot_idx) as *mut u8) = slot_group;
+                    if num_slots_found == 0 {
+                        start_slot = slot_offset;
                     }
-                    break;
+                    num_slots_found += 1;
+
+                    if num_slots_found == slots_required {
+                        break;
+                    }
+                }
+                else {
+                    num_slots_found = 0;
                 }
                 slot_offset += 1;
             }
         }
 
+        if slot_offset >= num_slots {
+            panic!("Fixed allocator region:{} ran out of space, num_slots:{}, slots_required:{}, num_slots_found:{}!", 
+            REGION, num_slots, slots_required, num_slots_found);
+        }
+
+        // Set all those n bits to '1'
+        while slots_required > 0 {
+            let slot_idx = start_slot >> 3;
+            let bit_idx = start_slot % 8;
+            let mut slot_group = unsafe {
+                *hdr_base.add(slot_idx)
+            };
+
+            slot_group |= 1 << bit_idx;
+            unsafe {
+                *hdr_base.add(slot_idx) = slot_group;
+            }
+
+            start_slot += 1;
+            slots_required -= 1;
+        }
+
         unsafe {
-            base.add(slot_offset * layout.size())
-            as *mut c_void
+            NonNull::new(base.add(slot_offset * slot_size) as *mut T).unwrap()
         }
     }
 
-    fn dealloc(address: *mut c_void) {
+    unsafe fn dealloc(address: NonNull<T>, layout: Layout) {
+        let _sync = HEAP.lock.lock();
+        
         let (base, hdr_base) = Self::fetch_hdr_and_base();
 
+        let total_size = layout.size();
         let slot_size = mem::size_of::<T>();
-        let slot_offset = (address as usize - base as usize) / slot_size;
-        let slot_group = slot_offset >> 3;
-        let group_idx = slot_offset % 8;
+        let mut slots = ceil_div(total_size, slot_size);
+        let mut slot_offset = (address.as_ptr() as usize - base as usize) / slot_size;
+        let num_slots = BOOT_REGION_SIZE / slot_size;
 
-        unsafe {
-            let slot = *hdr_base.add(slot_group);
-            *(hdr_base.add(slot_group) as *mut u8) = slot & !(1 << group_idx);  
-        } 
+        debug_assert!(slot_offset < num_slots, 
+            "Wrong address given to dealloc function for fixed allocator => slot_offset:{}, num_slots:{} for Fixed allocator Region:{}!", 
+            slot_offset, num_slots, REGION);
+
+        while slots > 0 {
+            let slot_group = slot_offset >> 3;
+            let bit_idx = slot_offset % 8;
+            
+            unsafe {
+                // Clear that bit in the given byte (0 means free)
+                let slot = *hdr_base.add(slot_group);
+                *hdr_base.add(slot_group) = slot & !(1 << bit_idx);  
+            } 
+            
+            slot_offset += 1;
+            slots -= 1;
+        }
+
     }
 }

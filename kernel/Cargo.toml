@@ -10,3 +10,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 common.workspace = true
+log.workspace = true

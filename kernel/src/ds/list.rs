@@ -1,15 +1,15 @@
 use crate::mem::Allocator;
 use core::ptr;
 use core::alloc::Layout;
-use core::ffi::c_void;
+use core::ptr::NonNull;
 use core::marker::PhantomData;
-struct ListNode<T> {
+pub struct ListNode<T> {
     data: T,
     prev: *mut ListNode<T>,
     next: *mut ListNode<T>
 }
 
-struct List<T, A: Allocator> {
+pub struct List<T, A: Allocator<ListNode<T>>> {
     head: *mut ListNode<T>,
     tail: *mut ListNode<T>,
     num_nodes: usize,
@@ -17,7 +17,7 @@ struct List<T, A: Allocator> {
 }
 
 
-impl<T, A: Allocator> List<T, A> {
+impl<T, A: Allocator<ListNode<T>>> List<T, A> {
     pub fn new() -> Self {
         List {
             head: ptr::null_mut(),
@@ -34,13 +34,13 @@ impl<T, A: Allocator> List<T, A> {
             data
         };
 
-        let addr = A::alloc(Layout::for_value(&node)) as *mut ListNode<T>;
+        let addr = A::alloc(Layout::for_value(&node)).as_ptr();
 
         self.insert_node_at_tail(addr);
     }
 
     pub unsafe fn delete_node(this: *mut ListNode<T>) {
-        A::dealloc(this as *mut c_void);
+        A::dealloc(NonNull::new(this).unwrap(), Layout::for_value(&*this));
     }
 
     fn insert_node(&mut self, this: *mut ListNode<T>, insert_at_tail: bool) {

@@ -16,3 +16,4 @@ panic = "abort"
 
 [workspace.dependencies]
 common = {path = "lib/common"}
+log = "*"
