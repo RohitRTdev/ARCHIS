@@ -11,9 +11,19 @@ fn panic(_info: &PanicInfo) -> ! {
         a += 2;
     }
 }
+#[cfg(test)]
+unsafe fn exported_function() {}
 
+#[cfg(not(test))]
+#[link(name="aris")]
+extern "C" {
+    fn exported_function();
+}
 
+#[no_mangle]
+extern "C" fn test_function() -> i32 {
+    let _boot_info: common::BootInfo;
+    unsafe {exported_function();}
 
-fn test_function() {
-    let bootInfo: common::BootInfo;
+    25
 }

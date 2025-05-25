@@ -18,7 +18,34 @@ SECTIONS {
         *(.bss*)
         *(COMMON)
     }
-
+    
+    .dynamic : {
+        *(.dynamic)
+    } 
+    
+    .got : {
+        *(.got.plt) 
+        *(.got) 
+    }
+    
+    .dynsym : {
+        *(.dynsym) 
+    }
+    
+    .dynstr : {
+        *(.dynstr) 
+    }
+    
+    .rela.dyn : {
+        *(.rela.dyn) 
+        *(.rela*) 
+    }
+    
+    .plt : {
+        *(.plt) 
+    }
+    
+    
     /DISCARD/ : {
         *(.comment)
         *(.eh_frame)

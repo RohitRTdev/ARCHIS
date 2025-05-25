@@ -96,6 +96,10 @@ where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
                 }
                 slot_offset += 1;
             }
+            
+            if num_slots_found == slots_required {
+                break;
+            }
         }
 
         if slot_offset >= num_slots {

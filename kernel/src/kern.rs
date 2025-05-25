@@ -1,5 +1,6 @@
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 #![feature(generic_const_exprs)]
+
 
 mod infra;
 mod hal;
@@ -9,14 +10,20 @@ mod ds;
 mod logger;
 use common::*;
 
-fn kern_main() {
+#[cfg(test)]
+mod tests;
+
+pub fn kern_main() {
+}
+
+#[no_mangle]
+extern "C" fn exported_function() {
 
 }
 
-
 #[no_mangle]
-extern "C" fn kern_start(boot_info: &BootInfo) -> ! {
-    logger::init();   
+extern "C" fn kern_start(_boot_info: &BootInfo) -> ! {
+    logger::init();  
     loop {}
 }
 

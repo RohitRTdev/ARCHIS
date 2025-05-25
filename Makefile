@@ -1,7 +1,9 @@
 CONFIG ?= debug
+SHELL = /bin/bash
 BLR_TARGET = x86_64-unknown-uefi
 KERNEL_ARCH = X86_64
 ENV_PLACEHOLDER = placeholder.txt
+KERN_PLACEHOLDER = kernel/placeholder_test.txt
 KERNEL_TARGET = config/$(KERNEL_ARCH)/$(KERNEL_ARCH).json
 BLR_CRATE_PATH = boot/uefi
 KERNEL_CRATE_PATH = kernel
@@ -60,6 +62,7 @@ build_blr: $(OUTPUT_DIR)
 
 build_kernel: $(OUTPUT_DIR)
 	@echo "Building kernel..."
+	@rm -f $(KERN_PLACEHOLDER)
 	@(cd kernel && RUSTFLAGS="-C link-arg=-T$(LINKER_SCRIPT)" \
 		cargo build $(BUILD_OPTIONS) \
     	-Z build-std=core,compiler_builtins \
@@ -71,12 +74,12 @@ build_kernel: $(OUTPUT_DIR)
 build_drivers: build_kernel
 	@echo "Building drivers..."
 	@mkdir -p $(OUTPUT_DIR)/drivers
-	@for dir in $(DRIVER_DIRS); do \
+	@set -e; for dir in $(DRIVER_DIRS); do \
 		if [ -f $$dir/Cargo.toml ]; then \
 			driver_name=$$(basename $$dir); \
 			echo "Building driver $$dir"; \
 			(cd $$dir && \
-				RUSTFLAGS="-C link-arg=-T$(LINKER_SCRIPT)" \
+				RUSTFLAGS="-C link-arg=-T$(LINKER_SCRIPT) -C link-arg=-Ltarget/$(KERNEL_ARCH)/$(CONFIG)" \
 				cargo build $(BUILD_OPTIONS) \
 				-Z build-std=core,compiler_builtins \
 				-Z build-std-features=compiler-builtins-mem \
@@ -84,6 +87,11 @@ build_drivers: build_kernel
 			cp target/$(KERNEL_ARCH)/$(CONFIG)/lib$$driver_name.so $(OUTPUT_DIR)/drivers; \
 		fi \
 	done
+
+run_unit_test:
+	@echo -e $(GEN_MSG) > $(KERN_PLACEHOLDER) 
+	@cargo test --manifest-path=boot/blr/Cargo.toml -- --nocapture
+	@cargo test --manifest-path=kernel/Cargo.toml -- --nocapture
 
 test:
 	@echo "Starting simulator..."
@@ -100,4 +108,4 @@ clean:
 # Use this if facing some problems with build
 reset: clean
 	@echo "Removing placeholders"
-	@rm -f $(BLR_TARGET_PLACEHOLDER) $(ENV_PLACEHOLDER)
+	@rm -f $(KERN_PLACEHOLDER) $(ENV_PLACEHOLDER)

@@ -13,14 +13,14 @@ impl core::fmt::Write for KernelLogger {
 
 struct KernelLogger;
 
-impl log::Log for KernelLogger {
+impl log::Log for Spinlock<KernelLogger> {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
         metadata.level() <= log::Level::Info 
     }
 
     fn log(&self, record: &log::Record) {
         if self.enabled(record.metadata()) {
-            let _ = write!(&mut *LOGGER.lock(), "[{}]: {}\n", record.level(), record.args());
+            let _ = write!(&mut *self.lock(), "[{}]: {}\n", record.level(), record.args());
         }
     }
 
@@ -31,4 +31,6 @@ static LOGGER: Spinlock<KernelLogger> = Spinlock::new(KernelLogger{});
 
 pub fn init() {
     serial_logger::init();
+    log::set_logger(&LOGGER).unwrap();
+    log::set_max_level(log::LevelFilter::Info);
 }

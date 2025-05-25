@@ -11,4 +11,3 @@ fn panic(_info: &PanicInfo) -> ! {
         a += 2;
     }
 }
-

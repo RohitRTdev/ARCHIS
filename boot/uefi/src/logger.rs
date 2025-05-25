@@ -1,4 +1,4 @@
-use log::{self, info};
+pub use log::{self, info, debug};
 use uefi::Identify;
 use uefi::boot::{self, ScopedProtocol};
 use uefi::proto::console::serial::Serial;

@@ -1,0 +1,19 @@
+[package]
+name = "blr"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/boot.rs"
+crate-type = ["rlib"]
+
+
+[dependencies]
+common.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+tests = {path = "../../lib/tests"}
+ctor = "*"
+env_logger = "*"
+

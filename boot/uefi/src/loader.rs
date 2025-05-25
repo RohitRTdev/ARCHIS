@@ -41,4 +41,5 @@ pub fn list_fs() {
         info!("Could not find root partition...");
     }
 
+    blr::boot_main();
 }

@@ -11,3 +11,10 @@ crate-type = ["cdylib"]
 [dependencies]
 common.workspace = true
 log.workspace = true
+
+
+# Used for testing
+[dev-dependencies]
+tests = {path = "../lib/tests"}
+ctor = "*"
+env_logger = "*"

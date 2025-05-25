@@ -1,2 +1,2 @@
-pub mod list;
-use list::*;
+mod list;
+pub use list::*;
