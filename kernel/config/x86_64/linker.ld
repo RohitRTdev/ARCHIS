@@ -2,46 +2,46 @@ OUTPUT_FORMAT("elf64-x86-64")
 ENTRY(kern_start)
 
 SECTIONS {
-    .text : {
+    .text ALIGN(0x1000): {
         KEEP(*(.text*))
     }
 
-    .rodata : {
+    .rodata ALIGN(0x1000): {
         *(.rodata*)
     }
 
-    .data : {
+    .data ALIGN(0x1000): {
         *(.data*)
     }
 
-    .bss : {
+    .bss ALIGN(0x1000): {
         *(.bss*)
         *(COMMON)
     }
     
-    .dynamic : {
+    .dynamic ALIGN(0x1000): {
         *(.dynamic)
     } 
     
-    .got : {
+    .got ALIGN(0x1000): {
         *(.got.plt) 
         *(.got) 
     }
     
-    .dynsym : {
+    .dynsym ALIGN(0x1000): {
         *(.dynsym) 
     }
     
-    .dynstr : {
+    .dynstr ALIGN(0x1000): {
         *(.dynstr) 
     }
     
-    .rela.dyn : {
+    .rela.dyn ALIGN(0x1000): {
         *(.rela.dyn) 
         *(.rela*) 
     }
     
-    .plt : {
+    .plt ALIGN(0x1000): {
         *(.plt) 
     }
     

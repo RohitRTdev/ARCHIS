@@ -2,7 +2,7 @@ use core::alloc::Layout;
 use core::marker::PhantomData;
 use core::mem;
 use core::ptr::NonNull;
-use common::ceil_div;
+use common::{ceil_div, test_log};
 use crate::lock::Spinlock;
 
 #[repr(usize)]
@@ -21,20 +21,35 @@ const TOTAL_BOOT_MEMORY: usize = BOOT_REGION_SIZE * Regions::NumRegions as usize
 // 8 is chosen to represent an average DS size
 const MIN_SLOT_SIZE: usize = 8;
 const BITMAP_SIZE: usize = (TOTAL_BOOT_MEMORY / MIN_SLOT_SIZE) >> 3;
+const TOTAL_BITMAP_SIZE: usize = BITMAP_SIZE * Regions::NumRegions as usize;
 
 // Wrapper required to force alignment constraint
 #[repr(align(4096))]
 struct HeapWrapper {
     heap: [u8; TOTAL_BOOT_MEMORY],
-    bitmap: [u8; BITMAP_SIZE],
+    bitmap: [u8; TOTAL_BITMAP_SIZE],
     lock: Spinlock<core::marker::PhantomData<bool>>
 }
 
 static HEAP: HeapWrapper = HeapWrapper { 
     heap: [0; TOTAL_BOOT_MEMORY],
-    bitmap: [0; BITMAP_SIZE],
+    bitmap: [0; TOTAL_BITMAP_SIZE],
     lock: Spinlock::new(core::marker::PhantomData)
 };
+
+#[cfg(test)]
+pub fn get_heap() -> (*const u8, *const u8) {
+
+    unsafe {
+        (&HEAP.bitmap as *const u8 as *mut u8).write_bytes(0, TOTAL_BITMAP_SIZE);
+    }
+
+    let heap = HEAP.heap.as_ptr();  
+    let r0_bm = HEAP.bitmap.as_ptr();
+
+    (heap, r0_bm)
+}
+
 
 // Forces FixedAllocator monomorphization only when slot size (size of the contained data) is >= MIN_SLOT_SIZE
 pub struct FixedAllocator<T, const REGION: usize> 
@@ -80,11 +95,14 @@ where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
             let slot_group = unsafe {
                 *hdr_base.add(slot_idx)
             };
+            test_log!("slot_group={:#x}", slot_group);
             for bit in 0..8 {
                 if slot_group & (1 << bit) == 0 {
                     if num_slots_found == 0 {
                         start_slot = slot_offset;
                     }
+                    test_log!("bit={}", bit);
+                    
                     num_slots_found += 1;
 
                     if num_slots_found == slots_required {
@@ -102,6 +120,7 @@ where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
             }
         }
 
+        let sel_slot = start_slot;
         if slot_offset >= num_slots {
             panic!("Fixed allocator region:{} ran out of space, num_slots:{}, slots_required:{}, num_slots_found:{}!", 
             REGION, num_slots, slots_required, num_slots_found);
@@ -125,7 +144,7 @@ where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
         }
 
         unsafe {
-            NonNull::new(base.add(slot_offset * slot_size) as *mut T).unwrap()
+            NonNull::new(base.add(sel_slot * slot_size) as *mut T).unwrap()
         }
     }
 

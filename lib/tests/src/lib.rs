@@ -9,7 +9,7 @@ macro_rules! init_test_logger {
         #[ctor::ctor]
         fn init_test_logging() {
             let _ = env_logger::Builder::from_env(
-                env_logger::Env::default().default_filter_or("info")
+                env_logger::Env::default().default_filter_or("debug")
             )
             .is_test(true)
             .try_init();

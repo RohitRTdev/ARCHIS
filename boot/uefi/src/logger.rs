@@ -27,12 +27,13 @@ struct UefiLogger;
 
 impl log::Log for UefiLogger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.level() <= log::Level::Info 
+        metadata.level() <= log::max_level() 
     }
 
     fn log(&self, record: &log::Record) {
         if self.enabled(record.metadata()) {
-            #[allow(static_mut_refs)]
+
+#[allow(static_mut_refs)]
             let _ = write!(unsafe {&mut SERIAL}, "[{}]: {}\r\n", record.level(), record.args());
         }
     }
@@ -42,6 +43,16 @@ impl log::Log for UefiLogger {
 
 static LOGGER: UefiLogger = UefiLogger{};
 static mut SERIAL: SerialLogger = SerialLogger(None);
+
+
+#[no_mangle]
+extern "Rust" fn standard_logger() -> &'static mut dyn ::core::fmt::Write {
+    unsafe {
+#[allow(static_mut_refs)]
+        &mut SERIAL
+    }
+}
+
 
 pub fn init_logger() {
     system::with_stdout(|output| {
@@ -62,6 +73,11 @@ pub fn init_logger() {
     }
     
     log::set_logger(&LOGGER).unwrap();
+
+#[cfg(debug_assertions)]
+    log::set_max_level(log::LevelFilter::Debug);
+
+#[cfg(not(debug_assertions))]
     log::set_max_level(log::LevelFilter::Info);
 
     info!("Starting bootloader...");

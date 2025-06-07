@@ -15,7 +15,7 @@ struct KernelLogger;
 
 impl log::Log for Spinlock<KernelLogger> {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.level() <= log::Level::Info 
+        metadata.level() <= log::max_level() 
     }
 
     fn log(&self, record: &log::Record) {
@@ -32,5 +32,10 @@ static LOGGER: Spinlock<KernelLogger> = Spinlock::new(KernelLogger{});
 pub fn init() {
     serial_logger::init();
     log::set_logger(&LOGGER).unwrap();
+
+#[cfg(debug_assertions)]
+    log::set_max_level(log::LevelFilter::Debug);
+
+#[cfg(not(debug_assertions))]
     log::set_max_level(log::LevelFilter::Info);
 }
