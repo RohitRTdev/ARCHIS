@@ -1,5 +1,6 @@
 use crate::mem::Allocator;
 use core::alloc::Layout;
+use core::mem;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::marker::PhantomData;
@@ -16,7 +17,7 @@ pub struct ListIterMut<'a, T> {
 }
 
 pub struct ListNode<T> {
-    pub data: T,
+    data: T,
     prev: NonNull<ListNode<T>>,
     next: NonNull<ListNode<T>>
 }
@@ -24,6 +25,15 @@ pub struct ListNode<T> {
 pub struct ListNodeGuard<T, A: Allocator<ListNode<T>>> {
     guard: NonNull<ListNode<T>>,
     _marker: PhantomData<A>
+}
+
+
+
+impl<T, A: Allocator<ListNode<T>>> ListNodeGuard<T, A> {
+    pub fn into_inner(guard_node: Self) -> NonNull<ListNode<T>> {
+        let guard_node = mem::ManuallyDrop::new(guard_node);
+        guard_node.guard
+    }
 }
 
 pub struct List<T, A: Allocator<ListNode<T>>> {
@@ -37,7 +47,7 @@ impl<T, A: Allocator<ListNode<T>>> Deref for ListNodeGuard<T, A> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         unsafe {
-            &self.guard.as_ref().data
+            self.guard.as_ref()
         }
     }
 }
@@ -45,8 +55,21 @@ impl<T, A: Allocator<ListNode<T>>> Deref for ListNodeGuard<T, A> {
 impl<T, A: Allocator<ListNode<T>>> DerefMut for ListNodeGuard<T, A> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe {
-            &mut self.guard.as_mut().data
+            self.guard.as_mut()
         }
+    }
+}
+
+impl<T> Deref for ListNode<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl<T> DerefMut for ListNode<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.data
     }
 }
 
@@ -58,7 +81,6 @@ impl<T, A: Allocator<ListNode<T>>> Drop for ListNodeGuard<T, A> {
     }
 }
 
-
 impl<T, A: Allocator<ListNode<T>>> List<T, A> {
     pub fn new() -> Self {
         List {
@@ -66,6 +88,17 @@ impl<T, A: Allocator<ListNode<T>>> List<T, A> {
             tail: None,
             num_nodes: 0,
             _marker: PhantomData
+        }
+    }
+
+    pub fn first(&self) -> Option<&ListNode<T>> {
+        if self.head.is_none() {
+            None
+        }
+        else {
+            unsafe {
+                Some(&*self.head.unwrap())
+            }
         }
     }
 

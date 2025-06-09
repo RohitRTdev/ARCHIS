@@ -1,7 +1,7 @@
 use core::ptr::NonNull;
 use std::{sync::{Arc, Mutex, OnceLock}};
 
-use crate::{ds, mem};
+use crate::{ds::*, mem};
 
 tests::init_test_logger!(aris);
 
@@ -56,9 +56,9 @@ fn fixed_allocator_test() {
 
 #[test]
 fn list_alloc_test() {
-    use ds::*;
     let _guard = get_test_lock().lock().unwrap();
     let mut structure: List<Sample, mem::FixedAllocator<ListNode<Sample>, {mem::Regions::Region0 as usize}>> = List::new();
+    mem::clear_heap();
     let (_, r0_bm) = mem::get_heap();
     
     structure.add_node(Sample{_a:52, _b: 12});
@@ -69,9 +69,9 @@ fn list_alloc_test() {
     println!("Traversing linked list");
     let mut tmp_node = Vec::new();
     for node in structure.iter() {
-        println!("{:?}", node.data);
-        if node.data._a == -12035 || node.data._a == 52 {
-            tmp_node.push(NonNull::new(node as *const ds::ListNode<_> as *mut ds::ListNode<_>).unwrap());
+        println!("{:?}", **node);
+        if node._a == -12035 || node._a == 52 {
+            tmp_node.push(NonNull::from(node));
         }
     }
     assert_eq!(structure.get_nodes(), 4);
@@ -81,22 +81,44 @@ fn list_alloc_test() {
         }
     }
     
-    println!("Traversing list after removing node._a = -12035 and 52");    
-    for node in structure.iter() {
-        println!("{:?}", node.data);
-    }
+    println!("Traversing list after removing node._a = -12035 and 52 and adding -1232");    
     assert_eq!(structure.get_nodes(), 2);
     
     structure.add_node(Sample{_a:-1232, _b: 34});
     for node in structure.iter_mut() {
-        node.data._a += 2;
-        println!("{:?}", node.data);
+        node._a += 2;
+        println!("{:?}", **node);
     }
     assert_eq!(structure.get_nodes(), 3);
     
-    for node in structure.iter() {
-        println!("{:?}", node.data);
-    }
-    
     assert_eq!(unsafe {*r0_bm}, 0x7);
+}
+
+#[test]
+fn queue_alloc_test() {
+    let mut structure: Queue<Sample, mem::FixedAllocator<ListNode<Sample>, {mem::Regions::Region0 as usize}>> = Queue::new();
+    let _guard = get_test_lock().lock().unwrap();
+    mem::clear_heap();
+    let (_, r0_bm) = mem::get_heap();
+
+    structure.push(Sample{_a:14, _b: 23});
+    structure.push(Sample{_a:214, _b: 223});
+    structure.push(Sample{_a:-1024, _b: 90});
+ 
+    assert_eq!(unsafe {*r0_bm}, 0x7);
+
+    let mut val = structure.pop_node();
+    while val.is_some() {
+        println!("{:?}", *val.unwrap());
+        val = structure.pop_node();
+    }
+    assert_eq!(unsafe {*r0_bm}, 0x0);
+
+    structure.push(Sample{_a:55, _b:11});
+    let data = structure.pop_node().unwrap();
+    assert_eq!(unsafe {*r0_bm}, 0x1); 
+    structure.push_node(ListNodeGuard::into_inner(data));
+    assert_eq!(unsafe {*r0_bm}, 0x1);
+    println!("{:?}", *structure.pop_node().unwrap());
+    assert_eq!(unsafe {*r0_bm}, 0x0);
 }
