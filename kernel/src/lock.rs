@@ -29,10 +29,9 @@ impl<T> DerefMut for SpinlockGuard<'_, T> {
     }
 }
 
-
+#[cfg(not(test))]
 impl<T> Drop for SpinlockGuard<'_, T> {
     fn drop(&mut self) {
-#[cfg(not(test))]
         self.lock.unlock();
         hal::enable_interrupts(self.int_status);
     }

@@ -2,7 +2,7 @@ use core::alloc::Layout;
 use core::marker::PhantomData;
 use core::mem;
 use core::ptr::NonNull;
-use common::{ceil_div, test_log};
+use common::ceil_div;
 use crate::lock::Spinlock;
 
 #[repr(usize)]
@@ -39,15 +39,19 @@ static HEAP: HeapWrapper = HeapWrapper {
 
 #[cfg(test)]
 pub fn get_heap() -> (*const u8, *const u8) {
-
-    unsafe {
-        (&HEAP.bitmap as *const u8 as *mut u8).write_bytes(0, TOTAL_BITMAP_SIZE);
-    }
-
+    let _guard = HEAP.lock.lock();
     let heap = HEAP.heap.as_ptr();  
     let r0_bm = HEAP.bitmap.as_ptr();
 
     (heap, r0_bm)
+}
+
+#[cfg(test)]
+pub fn clear_heap() {
+    let _guard = HEAP.lock.lock();
+    unsafe {
+        (&HEAP.bitmap as *const u8 as *mut u8).write_bytes(0, TOTAL_BITMAP_SIZE);
+    }
 }
 
 
@@ -95,13 +99,11 @@ where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
             let slot_group = unsafe {
                 *hdr_base.add(slot_idx)
             };
-            test_log!("slot_group={:#x}", slot_group);
             for bit in 0..8 {
                 if slot_group & (1 << bit) == 0 {
                     if num_slots_found == 0 {
                         start_slot = slot_offset;
                     }
-                    test_log!("bit={}", bit);
                     
                     num_slots_found += 1;
 
