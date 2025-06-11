@@ -282,20 +282,18 @@ pub fn load_kernel_arch(kernel_base: *const u8, hdr: &Elf64Ehdr) -> KernelInfo {
     };
 
     let mut current_load_ptr = load_base;
-    let mut last_load_addr = map_regions_list[0].dest_addr;
     test_log!("Loading kernel regions at load_base: {:#X}", load_base as usize);
     //Now, map all loadable regions to appropriate locations
     for (idx, entry) in map_regions_list.iter().enumerate() {
         unsafe {
-            current_load_ptr = current_load_ptr.add(entry.dest_addr - last_load_addr);
+            current_load_ptr = load_base.add(entry.dest_addr);
 
             // First, zero fill the memory region (Some regions have dest_size > src_size, so remaining part (dest_size - src_size) must be zeroed)
             current_load_ptr.write_bytes(0, entry.dest_size);
             
             copy_nonoverlapping(entry.src_addr as *const u8, current_load_ptr, entry.src_size);
-            test_log!("Loaded location:{} from {:#X} to {:#X}", idx, entry.src_addr, current_load_ptr as usize);
+            test_log!("Loaded location:{} from {:#X} of va:{:#X} to {:#X}", idx, entry.src_addr, entry.dest_addr, current_load_ptr as usize);
         }
-        last_load_addr = entry.dest_addr;
     }
     
     // Since we're going to apply same operations to both symtab and reloc sections, we're adding symtab into reloc array

@@ -14,7 +14,7 @@ use uefi::proto::{device_path::{DevicePath, media::{self,HardDrive}}, media::{fi
 const ROOT_GUID: &str = "9ffd2959-915c-479f-8787-1f9f701e1034";  
 
 pub struct FileTable {
-    filetable: BTreeMap<String, Vec<u8>>
+    pub filetable: BTreeMap<String, Vec<u8>>
 }
 
 impl FileTable {

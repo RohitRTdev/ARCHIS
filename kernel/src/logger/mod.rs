@@ -4,6 +4,8 @@ use core::fmt::Write;
 use serial_logger::SERIAL;
 use crate::lock::Spinlock;
 
+pub use log::{debug, info};
+
 impl core::fmt::Write for KernelLogger {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         SERIAL.lock().write(s);

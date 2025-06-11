@@ -1,8 +1,14 @@
 #![no_std]
 
+//extern crate alloc;
 mod utils;
 pub use utils::*;
 pub mod elf;
+//use alloc::{collections::BTreeMap, string::String, vec::Vec};
+
+#[cfg(target_arch="x86_64")]
+pub const PAGE_SIZE: usize = 4096;
+pub const MAX_DESCRIPTORS: usize = 50;
 
 #[repr(C)]
 #[derive(Debug)]
@@ -26,6 +32,18 @@ pub struct KernelInfo {
     pub dyn_shn: Option<ArrayTable>
 }
 
+#[repr(C)]
+pub enum MemType {
+    Free,
+    Allocated,
+    Runtime
+}
+
+#[repr(C)]
+pub struct MemoryDesc {
+    pub val: MemoryRegion,
+    pub mem_type: MemType
+}
 
 #[repr(C)]
 #[derive(Debug)]
@@ -36,9 +54,30 @@ pub struct MemoryRegion {
 
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct BootInfo {
     pub kernel_desc: KernelInfo,
-    pub device_tree_desc: MemoryRegion,
-    pub framebuffer_desc: MemoryRegion,
-    pub memory_map_desc: MemoryRegion,
+    pub framebuffer_desc: FBInfo,
+    pub memory_map_desc: ArrayTable,
+ //   pub init_fs: BTreeMap<String, Vec<u8>>
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct PixelMask {
+    pub red_mask: u32,
+    pub blue_mask: u32,
+    pub green_mask: u32,
+    pub alpha_mask: u32
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct FBInfo {
+    pub fb: MemoryRegion,
+    pub height: usize,
+    pub width: usize,
+    pub stride: usize,
+    pub pixel_mask: PixelMask
+
 }

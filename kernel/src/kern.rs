@@ -1,7 +1,6 @@
 #![cfg_attr(not(test), no_std)]
 #![feature(generic_const_exprs)]
 
-
 mod infra;
 mod hal;
 mod lock;
@@ -9,6 +8,7 @@ mod mem;
 mod ds;
 mod logger;
 use common::*;
+use logger::*;
 
 #[cfg(test)]
 mod tests;
@@ -22,8 +22,11 @@ extern "C" fn exported_function() {
 }
 
 #[no_mangle]
-extern "C" fn kern_start(_boot_info: &BootInfo) -> ! {
-    logger::init();  
+unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
+    logger::init(); 
+
+    info!("Welcome to aris!!"); 
+    debug!("{:?}", *boot_info);
     loop {}
 }
 

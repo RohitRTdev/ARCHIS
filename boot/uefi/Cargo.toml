@@ -7,5 +7,4 @@ edition = "2021"
 common.workspace = true
 log.workspace = true
 uefi = { version = "*", features = [ "alloc", "global_allocator" ] }
-uefi-services = "*"
 blr = {path = "../blr"}
