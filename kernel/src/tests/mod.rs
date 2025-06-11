@@ -117,7 +117,7 @@ fn queue_alloc_test() {
     structure.push(Sample{_a:55, _b:11});
     let data = structure.pop_node().unwrap();
     assert_eq!(unsafe {*r0_bm}, 0x1); 
-    structure.push_node(ListNodeGuard::into_inner(data));
+    structure.push_node(ListNode::into_inner(data));
     assert_eq!(unsafe {*r0_bm}, 0x1);
     println!("{:?}", *structure.pop_node().unwrap());
     assert_eq!(unsafe {*r0_bm}, 0x0);

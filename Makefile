@@ -88,7 +88,7 @@ build_drivers: build_kernel
 		fi \
 	done
 
-run_unit_test:
+run_unit_test: build_kernel
 	@echo -e $(GEN_MSG) > $(KERN_PLACEHOLDER) 
 	@cargo test --manifest-path=boot/blr/Cargo.toml -- --nocapture
 	@cargo test --manifest-path=kernel/Cargo.toml -- --nocapture

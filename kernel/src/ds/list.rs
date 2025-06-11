@@ -29,8 +29,8 @@ pub struct ListNodeGuard<T, A: Allocator<ListNode<T>>> {
 
 
 
-impl<T, A: Allocator<ListNode<T>>> ListNodeGuard<T, A> {
-    pub fn into_inner(guard_node: Self) -> NonNull<ListNode<T>> {
+impl<T> ListNode<T> {
+    pub fn into_inner<A: Allocator<ListNode<T>>>(guard_node: ListNodeGuard<T, A>) -> NonNull<ListNode<T>> {
         let guard_node = mem::ManuallyDrop::new(guard_node);
         guard_node.guard
     }

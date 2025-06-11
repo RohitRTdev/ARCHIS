@@ -6,12 +6,11 @@ pub mod elf;
 
 #[repr(C)]
 #[derive(Debug)]
-pub struct SymTable {
+pub struct ArrayTable {
     pub start: usize,
     pub size: usize,
     pub entry_size: usize
 }
-
 
 #[repr(C)]
 #[derive(Debug)]
@@ -19,13 +18,17 @@ pub struct KernelInfo {
     pub entry: usize,
     pub base: usize,
     pub size: usize,
-    pub sym_tab: Option<SymTable>,
-    pub reloc_section: Option<SymTable>,
-    pub dynamic_section: Option<SymTable>
+    pub sym_tab: Option<ArrayTable>,
+    pub sym_str: Option<MemoryRegion>,
+    pub dyn_tab: Option<ArrayTable>,
+    pub dyn_str: Option<MemoryRegion>,
+    pub rlc_shn: Option<ArrayTable>,
+    pub dyn_shn: Option<ArrayTable>
 }
 
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct MemoryRegion {
     pub base_address: usize,
     pub size: usize

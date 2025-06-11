@@ -16,11 +16,32 @@ struct MapRegion {
     dest_size: usize
 }
 
+impl MapRegion {
+    pub fn create_array_rgn(base: *const u8, offset: u64, size: u64, entry_size: u64) -> Self {
+        Self {
+            src_addr: unsafe {
+                base.add(offset as usize) as usize
+            },
+            dest_addr: 0, src_size: size as usize, dest_size: entry_size as usize
+        }
+    }
+    
+    pub fn create_map_rgn(base: *const u8, offset: u64, size: u64) -> Self {
+        Self {
+            src_addr: unsafe {
+                base.add(offset as usize) as usize
+            },
+            dest_addr: 0, src_size: size as usize, dest_size: size as usize
+        }
+    }
+}
+
+
 extern "Rust" {
     fn loader_alloc(layout: Layout) -> *mut u8;
 }
 
-fn load_aux_tables(reloc_sections: &mut Vec<MapRegion>, symtab: &mut Option<MapRegion>, aux_alignment: usize) {
+fn load_aux_tables(reloc_sections: &mut Vec<MapRegion>, symtab: &mut Option<MapRegion>, symstr: &mut Option<MapRegion>, dynsymtab: &mut Option<MapRegion>, dynstr: &mut Option<MapRegion>, aux_alignment: usize) {
     // Next, we will calculate the size required to store these auxiliary tables
     let mut aux_size = 0;
     for shn in reloc_sections.iter() {
@@ -38,25 +59,26 @@ fn load_aux_tables(reloc_sections: &mut Vec<MapRegion>, symtab: &mut Option<MapR
     // Now map the symbol table and relocation sections
     test_log!("Loading reloc sections and symbol table");
     let mut current_load_ptr = aux_base;
-    for shn in reloc_sections.iter_mut().enumerate() {
+    for (idx, shn) in reloc_sections.iter_mut().enumerate() {
         unsafe {
-            copy_nonoverlapping(shn.1.src_addr as *const u8, current_load_ptr, shn.1.src_size);
-            shn.1.dest_addr = current_load_ptr as usize;
-            test_log!("Loaded location:{} from {:#X} to {:#X} of size: {}", shn.0, shn.1.src_addr, current_load_ptr as usize, shn.1.src_size);
+            copy_nonoverlapping(shn.src_addr as *const u8, current_load_ptr, shn.src_size);
+            shn.dest_addr = current_load_ptr as usize;
+            test_log!("Loaded location:{} from {:#X} to {:#X} of size: {}", idx, shn.src_addr, current_load_ptr as usize, shn.src_size);
             
-            current_load_ptr = current_load_ptr.add(shn.1.src_size);
+            current_load_ptr = current_load_ptr.add(shn.src_size);
             current_load_ptr = current_load_ptr.add(current_load_ptr.align_offset(aux_alignment));
         }
     }
 
-    if let Some(sym) = symtab {
-        sym.dest_addr = reloc_sections.last().unwrap().dest_addr;
-        reloc_sections.pop();
+    for region in [dynstr, dynsymtab, symtab, symstr] {
+        if let Some(sym) = region {
+            sym.dest_addr = reloc_sections.last().unwrap().dest_addr;
+            reloc_sections.pop();
+        }
     }
-
 }
 
-fn apply_relocation(load_base: usize, reloc_sections: &Vec<MapRegion>) {
+fn apply_relocation(load_base: usize, kernel_size: usize, reloc_sections: &Vec<MapRegion>) {
     // Necessary, since it could be zero after removing symbol table from list
     if reloc_sections.len() == 0 {
         return;
@@ -83,10 +105,11 @@ fn apply_relocation(load_base: usize, reloc_sections: &Vec<MapRegion>) {
                 R_X86_64_RELATIVE => {
                     let address = load_base + entry.r_offset as usize;
                     let value = load_base as i64 + entry.r_addend;
-                    rel_relocations += 1;
+                    assert!(address < load_base + kernel_size);
                     unsafe {
                         *(address as *mut u64) = value as u64;
                     }
+                    rel_relocations += 1;
                 },
                 R_X86_64_64 => {
                     abs_relocations += 1;
@@ -105,6 +128,40 @@ fn apply_relocation(load_base: usize, reloc_sections: &Vec<MapRegion>) {
     debug!("Relative relocations = {}, absolute relocations = {}, dynamic relocations = {}, global relocations = {}", rel_relocations, abs_relocations, jmp_relocations, glob_relocations);
 }
 
+#[cfg(debug_assertions)]
+pub fn print_exported_symbols(dynsym: &Option<ArrayTable>, dynstr: &Option<MemoryRegion>) {
+    if dynsym.is_none() {
+        return;
+    }
+
+    let tab = dynsym.as_ref().unwrap();
+    let str_tab = dynstr.as_ref().unwrap();
+
+    let stringizer = |str_idx: usize| {
+        use core::ffi::CStr;
+
+        let str_base = unsafe {
+            (str_tab.base_address as *const u8).add(str_idx)
+        };
+
+        unsafe {
+            CStr::from_ptr(str_base as *const i8).to_str().unwrap()
+        }
+    };
+
+    let entries = unsafe {
+        core::slice::from_raw_parts(tab.start as *const Elf64Sym, tab.size / tab.entry_size)
+    };
+
+    debug!("====Printing kernel exported symbols====");
+    for entry in entries {
+        let name = stringizer(entry.st_name as usize);
+        if !name.trim().is_empty() {
+            debug!("Address={:#X}->{}", entry.st_value, name);
+        }
+    }
+}  
+
 
 #[cfg(target_arch="x86_64")]
 pub fn load_kernel_arch(kernel_base: *const u8, hdr: &Elf64Ehdr) -> KernelInfo {
@@ -113,19 +170,6 @@ pub fn load_kernel_arch(kernel_base: *const u8, hdr: &Elf64Ehdr) -> KernelInfo {
 
     assert_eq!(hdr.e_phentsize, size_of::<Elf64Phdr>() as u16);
     assert_eq!(hdr.e_shentsize, size_of::<Elf64Shdr>() as u16);
-
-    let stringizer = |hdr: &Elf64Ehdr, shn_hdrs: &[Elf64Shdr], str_idx: usize| {
-        use core::ffi::CStr;
-
-        let str_base = unsafe {
-            kernel_base.add(shn_hdrs[hdr.e_shstrndx as usize].sh_offset as usize).add(str_idx)
-        };
-
-        unsafe {
-            CStr::from_ptr(str_base as *const i8)
-        }
-    };
-
 
     let prog_base = unsafe {
         kernel_base.add(hdr.e_phoff as usize)
@@ -182,39 +226,46 @@ pub fn load_kernel_arch(kernel_base: *const u8, hdr: &Elf64Ehdr) -> KernelInfo {
 
     // For symbol table and reloc section, dest_size is reinterpreted as per-entry size
     let mut symtab = None;
+    let mut symstr = None;
+    let mut reloc_sections = Vec::new();
+    let mut dynsymtab = None;
+    let mut dynstr = None;
     let mut aux_alignment: usize = 0;
     
-    // Check if symbol table is present and load it to memory
+    // Check if symbol and relocation tables are present and load it to memory
     shn_hdrs.iter().filter(|entry| {
-        entry.sh_type == SHT_SYMTAB
+        entry.sh_type == SHT_SYMTAB || entry.sh_type == SHT_RELA || entry.sh_type == SHT_DYNSYM
     }).for_each(|entry| {
-        symtab = Some(MapRegion {src_addr: unsafe {
-            kernel_base.add(entry.sh_offset as usize) as usize
-        },
-        dest_addr: 0, src_size: entry.sh_size as usize, dest_size: entry.sh_entsize as usize 
-        });
+            let reg = MapRegion::create_array_rgn(kernel_base, entry.sh_offset, entry.sh_size, entry.sh_entsize);
+            let str_shn = &shn_hdrs[entry.sh_link as usize];
+            
+            match entry.sh_type {
+                SHT_SYMTAB => {
+                    assert_eq!(str_shn.sh_type, SHT_STRTAB);
+                    symtab = Some(reg);
+                    symstr = Some(MapRegion::create_map_rgn(kernel_base, str_shn.sh_offset, str_shn.sh_size));
+                },
+                SHT_RELA => {
+                    reloc_sections.push(reg);
+                },
+                SHT_DYNSYM => {
+                    assert_eq!(str_shn.sh_type, SHT_STRTAB);
+                    dynsymtab = Some(reg);
+                    dynstr = Some(MapRegion::create_map_rgn(kernel_base, str_shn.sh_offset, str_shn.sh_size));
+                },
+                SHT_DYNAMIC => {
+                    assert_eq!(str_shn.sh_type, SHT_STRTAB);
+                    dynstr = Some(MapRegion::create_map_rgn(kernel_base, str_shn.sh_offset, str_shn.sh_size));
+                },
+                _ => {}
+            }
 
-        if entry.sh_addralign != 0 && entry.sh_addralign != 1 {
-            aux_alignment = entry.sh_addralign as usize;
-        }
+            if entry.sh_addralign != 0 && entry.sh_addralign != 1 {
+                aux_alignment = aux_alignment.max(entry.sh_addralign as usize);
+            }
     });
     
-    // Fetch information on all relocation sections
-    let mut reloc_sections = Vec::new();
-    shn_hdrs.iter().filter(|entry| {
-        entry.sh_type == SHT_RELA
-    }).for_each(|entry| {
-        reloc_sections.push(MapRegion {
-            src_addr: unsafe {
-                kernel_base.add(entry.sh_offset as usize) as usize
-            },
-        dest_addr: 0, src_size: entry.sh_size as usize, dest_size: entry.sh_entsize as usize 
-        });
-        
-        if entry.sh_addralign != 0 && entry.sh_addralign != 1 {
-            aux_alignment = aux_alignment.max(entry.sh_addralign as usize);
-        }
-    });
+    assert!(!(dynsymtab.is_some() ^ (reloc_sections.len() > 0)));
 
     debug!("Loadable segments: {}, Dynamic segment present: {}, Symbol table present: {}, max_alignment: {}, reloc sections:{}, aux_alignment: {}", loadable_segments, 
     dyn_shn.is_some(), symtab.is_some(), max_alignment, reloc_sections.len(), aux_alignment);
@@ -225,7 +276,7 @@ pub fn load_kernel_arch(kernel_base: *const u8, hdr: &Elf64Ehdr) -> KernelInfo {
     });
 
     let last_entry =  map_regions_list.last().unwrap();
-    let layout = Layout::from_size_align(last_entry.dest_addr + last_entry.dest_size, max_alignment).unwrap();
+    let mut layout = Layout::from_size_align(last_entry.dest_addr + last_entry.dest_size, max_alignment).unwrap();
     let load_base = unsafe {
         loader_alloc(layout)
     };
@@ -234,58 +285,87 @@ pub fn load_kernel_arch(kernel_base: *const u8, hdr: &Elf64Ehdr) -> KernelInfo {
     let mut last_load_addr = map_regions_list[0].dest_addr;
     test_log!("Loading kernel regions at load_base: {:#X}", load_base as usize);
     //Now, map all loadable regions to appropriate locations
-    for entry in map_regions_list.iter().enumerate() {
+    for (idx, entry) in map_regions_list.iter().enumerate() {
         unsafe {
-            current_load_ptr = current_load_ptr.add(entry.1.dest_addr - last_load_addr);
+            current_load_ptr = current_load_ptr.add(entry.dest_addr - last_load_addr);
 
             // First, zero fill the memory region (Some regions have dest_size > src_size, so remaining part (dest_size - src_size) must be zeroed)
-            current_load_ptr.write_bytes(0, entry.1.dest_size);
+            current_load_ptr.write_bytes(0, entry.dest_size);
             
-            copy_nonoverlapping(entry.1.src_addr as *const u8, current_load_ptr, entry.1.src_size);
-            test_log!("Loaded location:{} from {:#X} to {:#X}", entry.0, entry.1.src_addr, current_load_ptr as usize);
+            copy_nonoverlapping(entry.src_addr as *const u8, current_load_ptr, entry.src_size);
+            test_log!("Loaded location:{} from {:#X} to {:#X}", idx, entry.src_addr, current_load_ptr as usize);
         }
-        last_load_addr = entry.1.dest_addr;
+        last_load_addr = entry.dest_addr;
     }
     
     // Since we're going to apply same operations to both symtab and reloc sections, we're adding symtab into reloc array
     // to reduce code repetition
     if let Some(sym) = &symtab {
         reloc_sections.push(sym.clone());
+        reloc_sections.push(symstr.as_ref().unwrap().clone());
     }
-
+    
     if reloc_sections.len() > 0 {
-        load_aux_tables(&mut reloc_sections, &mut symtab, aux_alignment);
-        apply_relocation(load_base as usize, &reloc_sections);
+        reloc_sections.push(dynsymtab.as_ref().unwrap().clone());
+        reloc_sections.push(dynstr.as_ref().unwrap().clone());
+        load_aux_tables(&mut reloc_sections, &mut symtab, &mut symstr, &mut dynsymtab, &mut dynstr, aux_alignment);
+        apply_relocation(load_base as usize, layout.size(), &reloc_sections);
     }
 
-    let sym_tab_out = if let Some(sym) = &symtab {
-        Some(SymTable {start: sym.dest_addr, size: sym.src_size, entry_size: sym.dest_size})
+    let (sym_tab_out, sym_tab_str) = if let Some(sym) = symtab {
+        (Some(ArrayTable {start: sym.dest_addr, size: sym.src_size, entry_size: sym.dest_size}), Some(MemoryRegion{base_address: symstr.as_ref().unwrap().dest_addr, size: symstr.as_ref().unwrap().src_size}))
     }
     else {
-        None
+        (None, None)
     };
+    
+    let dyn_sym_tab_out = dynsymtab.map(|sym| 
+        ArrayTable {start: sym.dest_addr, size: sym.src_size, entry_size: sym.dest_size}
+    );
+    
+    let dyn_str_out = dynstr.map(|sym| 
+        MemoryRegion {base_address: sym.dest_addr, size: sym.src_size}
+    );
 
-    let dyn_shn_out = if let Some(dyn_tab) = &dyn_shn {
-        Some(SymTable {start: load_base as usize + dyn_tab.dest_addr, size: dyn_tab.src_size, entry_size: size_of::<ElfDyn>()})
-    }
-    else {
-        None
-    };
+    let dyn_shn_out = dyn_shn.map(|sym| 
+        ArrayTable {start: load_base as usize + sym.dest_addr, size: sym.src_size, entry_size: size_of::<ElfDyn>()}
+    );
 
     let reloc_shn_out = if reloc_sections.len() > 0 {
-        Some(SymTable {start: reloc_sections[0].dest_addr, size: reloc_sections[0].src_size, entry_size: reloc_sections[0].dest_size})
+        layout = Layout::array::<MemoryRegion>(reloc_sections.len()).unwrap();
+        let reloc_base = unsafe {
+            loader_alloc(layout)
+        };
+        let reloc_shns = unsafe {
+            core::slice::from_raw_parts_mut(reloc_base as *mut MemoryRegion, reloc_sections.len())
+        };
+
+        for (idx, shn) in reloc_sections.iter().enumerate() {
+            reloc_shns[idx] = MemoryRegion {
+                base_address: shn.dest_addr,
+                size: shn.src_size
+            }
+        }
+
+        Some(ArrayTable {start: reloc_base as usize, size: layout.size(), entry_size: size_of::<MemoryRegion>()})
     }
     else {
         None
     };
+
+#[cfg(debug_assertions)]
+    print_exported_symbols(&dyn_sym_tab_out, &dyn_str_out);
 
     KernelInfo {
         entry: hdr.e_entry as usize + load_base as usize,
         base: load_base as usize,
         size: last_entry.dest_addr + last_entry.dest_size,
         sym_tab: sym_tab_out,
-        reloc_section: reloc_shn_out,
-        dynamic_section: dyn_shn_out
+        sym_str: sym_tab_str,
+        dyn_tab: dyn_sym_tab_out,
+        dyn_str: dyn_str_out,
+        rlc_shn: reloc_shn_out,
+        dyn_shn: dyn_shn_out
     }
 
 }

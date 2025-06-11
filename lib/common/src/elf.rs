@@ -56,6 +56,16 @@ pub struct ElfDyn {
     pub val: u64
 }
 
+#[repr(C)]
+pub struct Elf64Sym {
+    pub st_name: u32,    
+    pub st_info: u8,     
+    pub st_other: u8,    
+    pub st_shndx: u16,   
+    pub st_value: u64,   
+    pub st_size: u64,    
+}
+
 pub const ELFCLASS64: u8 = 2;
 pub const PT_LOAD: u32 = 1;
 pub const PT_DYNAMIC: u32 = 2;
@@ -63,6 +73,8 @@ pub const PT_DYNAMIC: u32 = 2;
 pub const SHT_SYMTAB: u32 = 2;
 pub const SHT_STRTAB: u32 = 3;
 pub const SHT_RELA: u32 = 4;
+pub const SHT_DYNAMIC: u32 = 6;
+pub const  SHT_DYNSYM: u32 = 11;
 
 pub const R_X86_64_64: u32 = 1; 
 pub const R_X86_64_RELATIVE: u32 = 8;  

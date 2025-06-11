@@ -7,6 +7,14 @@ mod arch;
 use common::{elf::*, *};
 use arch::*;
 
+pub const KERNEL_FILE: &str = "sys/aris.elf";
+
+pub const ROOT_FILES: [&str; 3] = [
+    KERNEL_FILE,
+    "sys/drivers/libtest1.so",
+    "sys/drivers/libtest2.so"
+];
+
 pub fn load_kernel(kernel_file: *const u8) -> KernelInfo {
     let signature = unsafe {
         *(kernel_file as *const u32)

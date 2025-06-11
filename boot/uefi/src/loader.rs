@@ -1,16 +1,30 @@
 extern crate alloc;
 
-use common::println;
+use alloc::format;
+use alloc::collections::BTreeMap;
 use log::{info, debug};
 use alloc::vec;
 use alloc::{string::String, vec::Vec};
 use uefi::proto::device_path::text::{AllowShortcuts, DisplayOnly};
 use uefi::proto::media::file::{File, FileAttribute, RegularFile};
-use uefi::{Handle, boot, CString16};
+use uefi::{boot, CString16, Char16, Handle};
 use uefi::boot::{ScopedProtocol, HandleBuffer};
 use uefi::proto::{device_path::{DevicePath, media::{self,HardDrive}}, media::{file::FileMode, fs::SimpleFileSystem}};
 
 const ROOT_GUID: &str = "9ffd2959-915c-479f-8787-1f9f701e1034";  
+
+pub struct FileTable {
+    filetable: BTreeMap<String, Vec<u8>>
+}
+
+impl FileTable {
+    pub fn fetch_file_data(&self, filename: String) -> &[u8] {
+        let val = self.filetable.get(&filename);
+        assert!(val.is_some());
+        val.unwrap()
+    }
+}
+
 
 pub fn list_fs(supported_handles: &HandleBuffer) -> &Handle {
     let mut root_partition = None;
@@ -44,24 +58,30 @@ pub fn list_fs(supported_handles: &HandleBuffer) -> &Handle {
     root_partition.unwrap()
 }
 
-pub fn load_init_fs(root: &Handle) {
+pub fn load_init_fs(root: &Handle, files: &[&str]) -> FileTable {
     // Load all boot start drivers, font file, kernel elf etc
     let mut boot_fs: ScopedProtocol<SimpleFileSystem> = boot::open_protocol_exclusive(*root).expect("Could not open file protocol on root partition"); 
 
     let mut dir = boot_fs.open_volume().expect("Could not open root partition");
+    let mut map = BTreeMap::new();
+    for filename in files {
+        let mut filename_dos = CString16::try_from(*filename).unwrap();
+        filename_dos.replace_char(Char16::try_from('/').unwrap(), Char16::try_from('\\').unwrap());
 
-    let file = dir.open(&CString16::try_from("sys\\aris.elf").unwrap(), FileMode::Read, FileAttribute::READ_ONLY).expect("Could not kernel file");
+        let file = dir.open(&filename_dos, FileMode::Read, FileAttribute::READ_ONLY).
+        expect(format!("Could not open file={}", filename).as_str());
+        
+        let mut reg_file = file.into_regular_file().unwrap();
+        reg_file.set_position(RegularFile::END_OF_FILE).unwrap();
+        let file_size = reg_file.get_position().unwrap();
+        reg_file.set_position(0).unwrap();
 
-    let mut reg_file = file.into_regular_file().unwrap();
-    reg_file.set_position(RegularFile::END_OF_FILE).unwrap();
-    let file_size = reg_file.get_position().unwrap();
-    reg_file.set_position(0).unwrap();
+        let mut buf: Vec<u8> = vec![0; file_size as usize];
+        reg_file.read(buf.as_mut_slice()).unwrap();
 
-    let mut buf: Vec<u8> = vec![0; file_size as usize];
+        info!("Loaded file={} of size={} at location={:#X}", filename, file_size, buf.as_ptr() as usize);
+        map.insert(String::from(*filename), buf);
+    }
 
-    reg_file.read(buf.as_mut_slice()).unwrap();
-
-    let kinfo = blr::load_kernel(buf.as_ptr());
-    debug!("{:?}", kinfo);
-
+    FileTable {filetable: map}
 }
