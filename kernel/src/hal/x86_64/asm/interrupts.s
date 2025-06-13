@@ -11,3 +11,9 @@ FUNC sti
     sti
     ret
 ENDF sti
+
+
+FUNC halt
+    cli
+    hlt
+ENDF halt

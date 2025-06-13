@@ -35,7 +35,7 @@ Download qemu for your platform and simply invoke
 We also have provision to run unit tests, this is primarily for development purposes.
 >make run_unit_test
 
-Thess tests are run on host OS, which means they are designed to only test logical functionality (Like allocator/loader working) and not meant for hardware testing,
+These tests are run on host OS, which means they are designed to only test logical functionality (Like allocator/loader working) and not meant for hardware testing,
 which still requires simulation
 
 

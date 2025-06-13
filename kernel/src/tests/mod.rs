@@ -23,12 +23,13 @@ fn fixed_allocator_test() {
     // Certain tests such as this needs to be run in isolation
     let _guard = get_test_lock().lock().unwrap();
     type Allocator = mem::FixedAllocator<Sample, {mem::Regions::Region0 as usize}>;
+    type Allocator1 = mem::FixedAllocator<Sample, {mem::Regions::Region2 as usize}>;
     
     use core::alloc::Layout;
     let mut layout = Layout::array::<Sample>(3).unwrap();   
     
     mem::clear_heap();
-    let (heap, r0_bm) = mem::get_heap();
+    let (heap, r0_bm) = mem::get_heap(mem::Regions::Region0);
 
     // This should allocate first 3 slots in heap from region 0
     let ptr1 = <Allocator as mem::Allocator<Sample>>::alloc(layout);
@@ -49,6 +50,12 @@ fn fixed_allocator_test() {
     assert_eq!(ptr3.as_ptr() as *const u8, unsafe {heap.add(size_of::<Sample>() * 6)});
     assert_eq!(unsafe {*r0_bm}, 0xf8);
     assert_eq!(unsafe {*r0_bm.add(1)}, 0x03);
+    
+    // Check allocation on different region
+    let ptr1 = <Allocator1 as mem::Allocator<Sample>>::alloc(layout);
+    let (heap1, r2_bm) = mem::get_heap(mem::Regions::Region2);
+    assert_eq!(ptr1.as_ptr() as *const u8, heap1);
+    assert_eq!(unsafe {*r2_bm}, 0x0f);
 
     mem::clear_heap();
 }
@@ -59,7 +66,7 @@ fn list_alloc_test() {
     let _guard = get_test_lock().lock().unwrap();
     let mut structure: List<Sample, mem::FixedAllocator<ListNode<Sample>, {mem::Regions::Region0 as usize}>> = List::new();
     mem::clear_heap();
-    let (_, r0_bm) = mem::get_heap();
+    let (_, r0_bm) = mem::get_heap(mem::Regions::Region0);
     
     structure.add_node(Sample{_a:52, _b: 12});
     structure.add_node(Sample{_a:32, _b: 13});
@@ -99,7 +106,7 @@ fn queue_alloc_test() {
     let mut structure: Queue<Sample, mem::FixedAllocator<ListNode<Sample>, {mem::Regions::Region0 as usize}>> = Queue::new();
     let _guard = get_test_lock().lock().unwrap();
     mem::clear_heap();
-    let (_, r0_bm) = mem::get_heap();
+    let (_, r0_bm) = mem::get_heap(mem::Regions::Region0);
 
     structure.push(Sample{_a:14, _b: 23});
     structure.push(Sample{_a:214, _b: 223});

@@ -45,7 +45,6 @@ pub struct Spinlock<T> {
     data: RefCell<T>
 }
 
-unsafe impl<T> Send for Spinlock<T>{}
 unsafe impl<T> Sync for Spinlock<T>{}
 
 
@@ -69,7 +68,7 @@ impl<T> Spinlock<T> {
     }
 
 #[cfg(test)]
-    pub fn lock(&self) -> SpinlockGuard<'_, T> {
+    pub fn lock(&self) -> SpinlockGuard<'_, T> {        
         let guard = self.lock.lock().unwrap();
         SpinlockGuard { _lock: guard, int_status: false, data: self.data.borrow_mut()}
     }

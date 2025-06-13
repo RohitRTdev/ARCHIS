@@ -76,6 +76,9 @@ pub const SHT_RELA: u32 = 4;
 pub const SHT_DYNAMIC: u32 = 6;
 pub const  SHT_DYNSYM: u32 = 11;
 
+pub const STT_OBJECT: u8 = 1;
+pub const STT_FUNC: u8 = 2;
+
 pub const R_X86_64_64: u32 = 1; 
 pub const R_X86_64_RELATIVE: u32 = 8;  
 pub const R_GLOB_DAT: u32 = 6;

@@ -3,7 +3,7 @@ use core::marker::PhantomData;
 use core::mem;
 use core::ptr::NonNull;
 use common::ceil_div;
-use crate::lock::Spinlock;
+use crate::sync::Spinlock;
 
 #[repr(usize)]
 pub enum Regions {
@@ -38,10 +38,15 @@ static HEAP: HeapWrapper = HeapWrapper {
 };
 
 #[cfg(test)]
-pub fn get_heap() -> (*const u8, *const u8) {
+pub fn get_heap(reg: Regions) -> (*const u8, *const u8) {
     let _guard = HEAP.lock.lock();
-    let heap = HEAP.heap.as_ptr();  
-    let r0_bm = HEAP.bitmap.as_ptr();
+    let region = reg as usize;
+    let heap = unsafe {
+        HEAP.heap.as_ptr().add(region * BOOT_REGION_SIZE)
+    };  
+    let r0_bm = unsafe {
+        HEAP.bitmap.as_ptr().add(region * BITMAP_SIZE)
+    };
 
     (heap, r0_bm)
 }

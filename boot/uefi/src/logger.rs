@@ -6,7 +6,36 @@ use uefi::CString16;
 use uefi::system;
 use core::fmt::Write;
 
-struct SerialLogger(Option<ScopedProtocol<Serial>>);
+#[macro_export]
+macro_rules! println {
+    () => {
+        #[cfg(test)]
+        {
+            ::std::println!();
+        }
+        #[cfg(not(test))]
+        {
+            #[allow(static_mut_refs)]
+            unsafe {&mut SERIAL}.write_fmt(::core::format_args!("\n")).unwrap();
+        }
+    };
+    ($($arg:tt)*) => {
+        #[cfg(test)]
+        {
+            ::std::println!($($arg)*);
+        }
+        #[cfg(not(test))]
+        { 
+            use core::fmt::Write;
+            #[allow(static_mut_refs)]
+            unsafe {&mut crate::logger::SERIAL}.write_fmt(::core::format_args!($($arg)*))
+            .and_then(|_| unsafe {&mut crate::logger::SERIAL}.write_str("\n"))
+            .unwrap();
+        }
+    };
+}
+
+pub struct SerialLogger(Option<ScopedProtocol<Serial>>);
 
 impl core::fmt::Write for SerialLogger {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
@@ -42,17 +71,7 @@ impl log::Log for UefiLogger {
 }
 
 static LOGGER: UefiLogger = UefiLogger{};
-static mut SERIAL: SerialLogger = SerialLogger(None);
-
-
-#[no_mangle]
-extern "Rust" fn standard_logger() -> &'static mut dyn ::core::fmt::Write {
-    unsafe {
-#[allow(static_mut_refs)]
-        &mut SERIAL
-    }
-}
-
+pub static mut SERIAL: SerialLogger = SerialLogger(None);
 
 pub fn init_logger() {
     system::with_stdout(|output| {

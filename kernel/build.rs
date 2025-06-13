@@ -19,8 +19,11 @@ fn generate_stubs(arch: &String) {
             let without_semicolon = line.trim_end_matches(';');
             writeln!(output, "{without_semicolon} {{").unwrap();
 
-            if line.contains("->") {
-                writeln!(output, "    0").unwrap();
+            if line.contains("!") {
+                writeln!(output, "  loop{{}}").unwrap();
+            }
+            else if line.contains("->") {
+                writeln!(output, "  0").unwrap();
             }
 
             writeln!(output, "}}\n").unwrap();

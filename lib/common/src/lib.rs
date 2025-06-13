@@ -11,7 +11,7 @@ pub const PAGE_SIZE: usize = 4096;
 pub const MAX_DESCRIPTORS: usize = 50;
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct ArrayTable {
     pub start: usize,
     pub size: usize,
@@ -19,8 +19,8 @@ pub struct ArrayTable {
 }
 
 #[repr(C)]
-#[derive(Debug)]
-pub struct KernelInfo {
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleInfo {
     pub entry: usize,
     pub base: usize,
     pub size: usize,
@@ -46,7 +46,7 @@ pub struct MemoryDesc {
 }
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct MemoryRegion {
     pub base_address: usize,
     pub size: usize
@@ -54,16 +54,16 @@ pub struct MemoryRegion {
 
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct BootInfo {
-    pub kernel_desc: KernelInfo,
+    pub kernel_desc: ModuleInfo,
     pub framebuffer_desc: FBInfo,
     pub memory_map_desc: ArrayTable,
  //   pub init_fs: BTreeMap<String, Vec<u8>>
 }
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct PixelMask {
     pub red_mask: u32,
     pub blue_mask: u32,
@@ -72,7 +72,7 @@ pub struct PixelMask {
 }
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct FBInfo {
     pub fb: MemoryRegion,
     pub height: usize,

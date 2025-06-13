@@ -1,8 +1,6 @@
 #![no_std]
 #![no_main]
 
-
-
 mod loader;
 mod logger;
 mod display;
@@ -102,19 +100,22 @@ fn main() -> Status {
     let kern_info  = load_kernel(kernel_data.as_ptr());
 
     debug!("{:?}", kern_info);
+    
     info!("Fetching GPU and memmap info before transferring control to aris");
     let fb_info = display::get_primary_gpu_framebuffer();
     let mem_info = setup_memory_map();
     
     let boot_info = BootInfo {kernel_desc: kern_info, framebuffer_desc: fb_info, memory_map_desc: mem_info};
 
-    jump_to_kernel(&boot_info);
+    unsafe {
+        jump_to_kernel(&boot_info);
+    }
 }
 
 
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    common::println!("[PANIC!!!]: {}\r", info.message());
+    println!("[PANIC!!!]: {}\r", info.message());
     loop{}
 }

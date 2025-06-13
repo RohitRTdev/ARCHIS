@@ -14,6 +14,8 @@ OUTPUT_DIR = output
 IMAGE_NAME = disk-tools
 GEN_MSG = "Automatically generated file..\nDo not remove manually.."
 DRIVER_DIRS := $(wildcard kernel/src/drivers/*)
+KERNEL_FLAGS := -C link-arg=-T$(LINKER_SCRIPT) 
+DRIVER_FLAGS := -C link-arg=-T$(LINKER_SCRIPT) -C link-arg=-Ltarget/$(KERNEL_ARCH)/$(CONFIG)
 
 ifeq ($(OS),Windows_NT)
     RUN_DOCKER_SCRIPT = @./scripts/docker.bat
@@ -29,6 +31,10 @@ else
 $(error Config flag must be either 'debug' or 'release')
 endif
 
+ifeq ($(CONFIG),debug)
+	KERNEL_FLAGS += -C force-frame-pointers=yes
+	DRIVER_FLAGS += -C force-frame-pointers=yes
+endif
 
 .PHONY: all clean build_blr build_kernel build_image
 
@@ -63,13 +69,13 @@ build_blr: $(OUTPUT_DIR)
 build_kernel: $(OUTPUT_DIR)
 	@echo "Building kernel..."
 	@rm -f $(KERN_PLACEHOLDER)
-	@(cd kernel && RUSTFLAGS="-C link-arg=-T$(LINKER_SCRIPT)" \
+	@(cd kernel && RUSTFLAGS="$(KERNEL_FLAGS)" \
 		cargo build $(BUILD_OPTIONS) \
     	-Z build-std=core,compiler_builtins \
     	-Z build-std-features=compiler-builtins-mem \
     	--target $(KERNEL_TARGET) \
 	) 
-	@cp $(KERNEL_EXE) $(OUTPUT_DIR)/aris.elf
+	@cp $(KERNEL_EXE) $(OUTPUT_DIR)/aris
 
 build_drivers: build_kernel
 	@echo "Building drivers..."
@@ -79,7 +85,7 @@ build_drivers: build_kernel
 			driver_name=$$(basename $$dir); \
 			echo "Building driver $$dir"; \
 			(cd $$dir && \
-				RUSTFLAGS="-C link-arg=-T$(LINKER_SCRIPT) -C link-arg=-Ltarget/$(KERNEL_ARCH)/$(CONFIG)" \
+				RUSTFLAGS="$(DRIVER_FLAGS)" \
 				cargo build $(BUILD_OPTIONS) \
 				-Z build-std=core,compiler_builtins \
 				-Z build-std-features=compiler-builtins-mem \

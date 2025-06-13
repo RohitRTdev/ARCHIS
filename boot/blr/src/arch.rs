@@ -70,7 +70,7 @@ fn load_aux_tables(reloc_sections: &mut Vec<MapRegion>, symtab: &mut Option<MapR
         }
     }
 
-    for region in [dynstr, dynsymtab, symtab, symstr] {
+    for region in [dynstr, dynsymtab, symstr, symtab] {
         if let Some(sym) = region {
             sym.dest_addr = reloc_sections.last().unwrap().dest_addr;
             reloc_sections.pop();
@@ -164,7 +164,7 @@ pub fn print_exported_symbols(dynsym: &Option<ArrayTable>, dynstr: &Option<Memor
 
 
 #[cfg(target_arch="x86_64")]
-pub fn load_kernel_arch(kernel_base: *const u8, hdr: &Elf64Ehdr) -> KernelInfo {
+pub fn load_kernel_arch(kernel_base: *const u8, hdr: &Elf64Ehdr) -> ModuleInfo {
     assert_eq!(hdr.e_ident[4], ELFCLASS64, "x86_64 arch requires kernel elf file to be of 64 bit type!");
     debug!("Found 64 bit kernel elf header");
 
@@ -281,12 +281,11 @@ pub fn load_kernel_arch(kernel_base: *const u8, hdr: &Elf64Ehdr) -> KernelInfo {
         loader_alloc(layout)
     };
 
-    let mut current_load_ptr = load_base;
     test_log!("Loading kernel regions at load_base: {:#X}", load_base as usize);
     //Now, map all loadable regions to appropriate locations
     for (idx, entry) in map_regions_list.iter().enumerate() {
         unsafe {
-            current_load_ptr = load_base.add(entry.dest_addr);
+            let current_load_ptr = load_base.add(entry.dest_addr);
 
             // First, zero fill the memory region (Some regions have dest_size > src_size, so remaining part (dest_size - src_size) must be zeroed)
             current_load_ptr.write_bytes(0, entry.dest_size);
@@ -354,7 +353,7 @@ pub fn load_kernel_arch(kernel_base: *const u8, hdr: &Elf64Ehdr) -> KernelInfo {
 #[cfg(debug_assertions)]
     print_exported_symbols(&dyn_sym_tab_out, &dyn_str_out);
 
-    KernelInfo {
+    ModuleInfo {
         entry: hdr.e_entry as usize + load_base as usize,
         base: load_base as usize,
         size: last_entry.dest_addr + last_entry.dest_size,

@@ -82,7 +82,7 @@ impl<T, A: Allocator<ListNode<T>>> Drop for ListNodeGuard<T, A> {
 }
 
 impl<T, A: Allocator<ListNode<T>>> List<T, A> {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         List {
             head: None,
             tail: None,

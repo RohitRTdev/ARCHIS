@@ -1,4 +1,4 @@
-use crate::lock::Spinlock;
+use crate::sync::Spinlock;
 use crate::hal;
 pub static SERIAL: Spinlock<SerialLogger> = Spinlock::new(SerialLogger(false));
 

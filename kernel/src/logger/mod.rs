@@ -2,9 +2,37 @@ mod serial_logger;
 
 use core::fmt::Write;
 use serial_logger::SERIAL;
-use crate::lock::Spinlock;
+use crate::sync::Spinlock;
 
 pub use log::{debug, info};
+
+#[macro_export]
+macro_rules! println {
+    () => {
+        #[cfg(test)]
+        {
+            ::std::println!();
+        }
+        #[cfg(not(test))]
+        {
+            LOGGER.lock().write_fmt(::core::format_args!("\n")).unwrap();
+        }
+    };
+    ($($arg:tt)*) => {
+        #[cfg(test)]
+        {
+            ::std::println!($($arg)*);
+        }
+        #[cfg(not(test))]
+        {
+            use core::fmt::Write;
+            let mut logger = crate::logger::LOGGER.lock();
+            logger.write_fmt(::core::format_args!($($arg)*))
+            .and_then(|_| logger.write_str("\n"))
+            .unwrap();
+        }
+    };
+}
 
 impl core::fmt::Write for KernelLogger {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
@@ -13,7 +41,7 @@ impl core::fmt::Write for KernelLogger {
     }
 } 
 
-struct KernelLogger;
+pub struct KernelLogger;
 
 impl log::Log for Spinlock<KernelLogger> {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
@@ -29,7 +57,7 @@ impl log::Log for Spinlock<KernelLogger> {
     fn flush(&self) {}
 }
 
-static LOGGER: Spinlock<KernelLogger> = Spinlock::new(KernelLogger{});
+pub static LOGGER: Spinlock<KernelLogger> = Spinlock::new(KernelLogger{});
 
 pub fn init() {
     serial_logger::init();
