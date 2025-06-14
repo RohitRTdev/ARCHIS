@@ -5,7 +5,6 @@ mod loader;
 mod logger;
 mod display;
 
-
 use common::{ArrayTable, BootInfo, MemType, MemoryDesc, MemoryRegion, MAX_DESCRIPTORS, PAGE_SIZE};
 use alloc::borrow::ToOwned;
 use uefi::{mem::memory_map::MemoryMap, prelude::*};
@@ -100,7 +99,7 @@ fn main() -> Status {
     let kern_info  = load_kernel(kernel_data.as_ptr());
 
     debug!("{:?}", kern_info);
-    
+
     info!("Fetching GPU and memmap info before transferring control to aris");
     let fb_info = display::get_primary_gpu_framebuffer();
     let mem_info = setup_memory_map();
@@ -116,6 +115,6 @@ fn main() -> Status {
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    println!("[PANIC!!!]: {}\r", info.message());
+    println!("[PANIC!!!]: {}", info.message());
     loop{}
 }

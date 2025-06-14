@@ -16,7 +16,7 @@ macro_rules! println {
         #[cfg(not(test))]
         {
             #[allow(static_mut_refs)]
-            unsafe {&mut SERIAL}.write_fmt(::core::format_args!("\n")).unwrap();
+            unsafe {&mut SERIAL}.write_fmt(::core::format_args!("\r\n")).unwrap();
         }
     };
     ($($arg:tt)*) => {
@@ -29,7 +29,7 @@ macro_rules! println {
             use core::fmt::Write;
             #[allow(static_mut_refs)]
             unsafe {&mut crate::logger::SERIAL}.write_fmt(::core::format_args!($($arg)*))
-            .and_then(|_| unsafe {&mut crate::logger::SERIAL}.write_str("\n"))
+            .and_then(|_| unsafe {&mut crate::logger::SERIAL}.write_str("\r\n"))
             .unwrap();
         }
     };

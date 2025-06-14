@@ -11,7 +11,6 @@ mod logger;
 
 use common::*;
 use logger::*;
-use core::ptr::NonNull;
 
 #[cfg(test)]
 mod tests;

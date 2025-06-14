@@ -56,8 +56,10 @@ fn main() {
             
             let status = Command::new("clang")
                 .args(&[
-                    "-c",                        
-                    "-target", &target,          
+                    "-c",
+                    "-fPIC",                   
+                    "-target", &target,
+                    "-I", asm_dir.to_str().unwrap(),
                     "-o", output_obj.to_str().unwrap(),
                     &input_path,
                 ])
