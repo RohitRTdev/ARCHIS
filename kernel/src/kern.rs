@@ -19,21 +19,28 @@ use sync::{Once, Spinlock};
 
 static BOOT_INFO: Once<Spinlock<BootInfo>> = Once::new();
 
-static KERN_STACK: [u8; PAGE_SIZE * 2] = [0; PAGE_SIZE * 2];
+
+const KERN_INIT_STACK_SIZE: usize  = PAGE_SIZE * 2;
+
+#[repr(align(4096))]
+struct Stack {
+    stack: [u8; KERN_INIT_STACK_SIZE],
+    _guard_page: [u8; PAGE_SIZE]
+}
+
+static KERN_INIT_STACK: Stack = Stack {
+    stack: [0; KERN_INIT_STACK_SIZE],
+    _guard_page: [0; PAGE_SIZE]
+};
+
 
 static CUR_STACK_BASE: Spinlock<usize> = Spinlock::new(0);
 
 
-pub fn another_fn() {
-    if *CUR_STACK_BASE.lock() != 25 {
-        panic!("Sample testing");
-    }
+extern "C" fn kern_main() {
+    info!("Starting main kernel init");
 
-    *CUR_STACK_BASE.lock() = 75; 
-}
-
-pub fn kern_main() {
-    another_fn();
+    hal::halt();
 }
 
 #[no_mangle]
@@ -51,8 +58,8 @@ unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
 
     module::early_init();
 
-    info!("{:?}", *BOOT_INFO.get().unwrap().lock());
-    kern_main();
-    hal::halt();
+    debug!("{:?}", *BOOT_INFO.get().unwrap().lock());
+
+    hal::init();
 }
 

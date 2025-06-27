@@ -41,6 +41,19 @@ extern "Rust" {
     fn loader_alloc(layout: Layout) -> *mut u8;
 }
 
+#[cfg(target_arch="x86_64")]
+pub fn canonicalize(address: usize) -> u64 {
+    let mut addr = address as u64;
+    if addr & (1 << 47) != 0 {
+        addr |= (0xffff as u64) << 48;
+    }
+    else {
+        addr &= !((0xffff as u64) << 48);
+    }
+
+    addr
+}
+
 fn load_aux_tables(reloc_sections: &mut Vec<MapRegion>, symtab: &mut Option<MapRegion>, symstr: &mut Option<MapRegion>, dynsymtab: &mut Option<MapRegion>, dynstr: &mut Option<MapRegion>, aux_alignment: usize) {
     // Next, we will calculate the size required to store these auxiliary tables
     let mut aux_size = 0;

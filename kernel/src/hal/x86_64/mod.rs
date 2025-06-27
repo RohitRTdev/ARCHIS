@@ -1,5 +1,7 @@
 use core::cell::UnsafeCell;
 mod asm;
+mod utils;
+pub use utils::*;
 
 pub fn disable_interrupts() -> bool {
     // RFLAGS register bit 9 is IF -> 1 is enabled
@@ -19,6 +21,8 @@ pub fn enable_interrupts(int_status: bool) {
 
 pub use asm::read_port_u8;
 pub use asm::write_port_u8;
+
+use crate::KERN_INIT_STACK;
 
 pub struct Spinlock(UnsafeCell<u64>);
 
@@ -73,6 +77,7 @@ pub fn get_current_stack_base() -> usize {
     }
 }
 
+#[cfg(debug_assertions)]
 pub fn unwind_stack(max_depth: usize, stack_base: usize, address: &mut [usize]) -> usize {
     let mut base = get_current_stack_base();
     let mut depth = 0;
@@ -88,7 +93,15 @@ pub fn unwind_stack(max_depth: usize, stack_base: usize, address: &mut [usize]) 
     depth
 }
 
+fn get_stack_base(stack_top: usize, stack_size: usize) -> usize {
+    stack_top + stack_size
+}
 
-pub fn init() {
 
+pub fn init() -> ! {
+    let stack_top = &KERN_INIT_STACK.stack as *const _ as usize;
+    let stack_base = get_stack_base(stack_top, crate::KERN_INIT_STACK_SIZE); 
+    *crate::CUR_STACK_BASE.lock() = stack_base; 
+    
+    switch_stack_and_jump(VirtAddr::new(stack_base), VirtAddr::new(crate::kern_main as extern "C" fn() as usize));
 }

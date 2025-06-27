@@ -10,4 +10,6 @@ extern "C" {
     pub fn fetch_rbp() -> u64;
     pub fn fetch_rsp() -> u64;
     pub fn halt() -> !;
+
+    pub fn switch_stack_and_jump(stack_addr: u64, branch_addr: u64);
 }

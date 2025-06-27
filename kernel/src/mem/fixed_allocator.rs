@@ -8,54 +8,58 @@ use crate::sync::Spinlock;
 #[repr(usize)]
 pub enum Regions {
     Region0,
-    Region1,
-    Region2,
-    Region3,
-    NumRegions 
+    Region1
 }
 
-const BOOT_REGION_SIZE: usize = 4096;
-const TOTAL_BOOT_MEMORY: usize = BOOT_REGION_SIZE * Regions::NumRegions as usize;
+const BOOT_REGION_SIZE0: usize = 10 * 4096;
+const BOOT_REGION_SIZE1: usize = 4096;
+const TOTAL_BOOT_MEMORY: usize = (BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1);
 
 // Here we simply divide given memory into slots each of size 8 bytes
 // 8 is chosen to represent an average DS size
 const MIN_SLOT_SIZE: usize = 8;
 const BITMAP_SIZE: usize = (TOTAL_BOOT_MEMORY / MIN_SLOT_SIZE) >> 3;
-const TOTAL_BITMAP_SIZE: usize = BITMAP_SIZE * Regions::NumRegions as usize;
 
 // Wrapper required to force alignment constraint
 #[repr(align(4096))]
 struct HeapWrapper {
-    heap: [u8; TOTAL_BOOT_MEMORY],
-    bitmap: [u8; TOTAL_BITMAP_SIZE],
+    heap0: [u8; BOOT_REGION_SIZE0],
+    heap1: [u8; BOOT_REGION_SIZE1],
+    bitmap: [u8; BITMAP_SIZE],
     lock: Spinlock<core::marker::PhantomData<bool>>
 }
 
 static HEAP: HeapWrapper = HeapWrapper { 
-    heap: [0; TOTAL_BOOT_MEMORY],
-    bitmap: [0; TOTAL_BITMAP_SIZE],
+    heap0: [0; BOOT_REGION_SIZE0],
+    heap1: [0; BOOT_REGION_SIZE1],
+    bitmap: [0; BITMAP_SIZE],
     lock: Spinlock::new(core::marker::PhantomData)
 };
 
 #[cfg(test)]
 pub fn get_heap(reg: Regions) -> (*const u8, *const u8) {
     let _guard = HEAP.lock.lock();
-    let region = reg as usize;
-    let heap = unsafe {
-        HEAP.heap.as_ptr().add(region * BOOT_REGION_SIZE)
-    };  
-    let r0_bm = unsafe {
-        HEAP.bitmap.as_ptr().add(region * BITMAP_SIZE)
+    let (heap, bitmap_offset) = match reg {
+        Regions::Region0 => {
+            (HEAP.heap0.as_ptr() as *mut u8, 0)
+        }
+        Regions::Region1 => {
+            (HEAP.heap1.as_ptr() as *mut u8, BOOT_REGION_SIZE0 >> 3)
+        }
+    };
+    
+    let bm = unsafe {
+        HEAP.bitmap.as_ptr().add(bitmap_offset)
     };
 
-    (heap, r0_bm)
+    (heap, bm)
 }
 
 #[cfg(test)]
 pub fn clear_heap() {
     let _guard = HEAP.lock.lock();
     unsafe {
-        (&HEAP.bitmap as *const u8 as *mut u8).write_bytes(0, TOTAL_BITMAP_SIZE);
+        (&HEAP.bitmap as *const u8 as *mut u8).write_bytes(0, BITMAP_SIZE);
     }
 }
 
@@ -69,18 +73,40 @@ where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
 impl<T, const REGION: usize> FixedAllocator<T, REGION> 
 where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
     fn fetch_hdr_and_base() -> (*mut u8, *mut u8) {
-        let base = unsafe {
-            HEAP.heap.as_ptr().add(REGION * BOOT_REGION_SIZE)
-            as *mut u8
+        // We can safely borrow heap as mutable, since we're ensuring synchronization with lock
+        let (heap_base, bitmap_offset) = match REGION {
+            0 => {
+                (HEAP.heap0.as_ptr() as *mut u8, 0)
+            }
+            1 => {
+                (HEAP.heap1.as_ptr() as *mut u8, BOOT_REGION_SIZE0 >> 3)
+            }
+
+            // This will never happen
+            _ => {(core::ptr::null_mut(),0)}
         };
         
-        let hdr_base = unsafe {
-            HEAP.bitmap.as_ptr().add(REGION * BITMAP_SIZE)
+        let bitmap_base = unsafe {
+            HEAP.bitmap.as_ptr().add(bitmap_offset)
             as *mut u8
         };
 
-        (base, hdr_base)
+        (heap_base, bitmap_base)
     }
+
+    fn calculate_total_slots() -> usize {
+        match REGION {
+            0 => {
+                BOOT_REGION_SIZE0 >> 3
+            }
+            1 => {
+                BOOT_REGION_SIZE1 >> 3
+            }
+            _ => {
+                0
+            }
+        }
+     }
 }
 
 
@@ -93,7 +119,7 @@ where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
         
         let (base, hdr_base) = Self::fetch_hdr_and_base();
         let slot_size = mem::size_of::<T>();
-        let num_slots = BOOT_REGION_SIZE / slot_size;
+        let num_slots = Self::calculate_total_slots(); 
         let mut slots_required = ceil_div(layout.size(), slot_size);
         let mut slot_offset= 0;
         let mut start_slot = 0;
@@ -164,7 +190,7 @@ where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
         let slot_size = mem::size_of::<T>();
         let mut slots = ceil_div(total_size, slot_size);
         let mut slot_offset = (address.as_ptr() as usize - base as usize) / slot_size;
-        let num_slots = BOOT_REGION_SIZE / slot_size;
+        let num_slots = Self::calculate_total_slots(); 
 
         debug_assert!(slot_offset < num_slots, 
             "Wrong address given to dealloc function for fixed allocator => slot_offset:{}, num_slots:{} for Fixed allocator Region:{}!", 

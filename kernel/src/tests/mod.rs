@@ -23,7 +23,7 @@ fn fixed_allocator_test() {
     // Certain tests such as this needs to be run in isolation
     let _guard = get_test_lock().lock().unwrap();
     type Allocator = mem::FixedAllocator<Sample, {mem::Regions::Region0 as usize}>;
-    type Allocator1 = mem::FixedAllocator<Sample, {mem::Regions::Region2 as usize}>;
+    type Allocator1 = mem::FixedAllocator<Sample, {mem::Regions::Region1 as usize}>;
     
     use core::alloc::Layout;
     let mut layout = Layout::array::<Sample>(3).unwrap();   
@@ -53,9 +53,9 @@ fn fixed_allocator_test() {
     
     // Check allocation on different region
     let ptr1 = <Allocator1 as mem::Allocator<Sample>>::alloc(layout);
-    let (heap1, r2_bm) = mem::get_heap(mem::Regions::Region2);
+    let (heap1, r1_bm) = mem::get_heap(mem::Regions::Region1);
     assert_eq!(ptr1.as_ptr() as *const u8, heap1);
-    assert_eq!(unsafe {*r2_bm}, 0x0f);
+    assert_eq!(unsafe {*r1_bm}, 0x0f);
 
     mem::clear_heap();
 }

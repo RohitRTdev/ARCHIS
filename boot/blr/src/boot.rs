@@ -15,10 +15,12 @@ pub const ROOT_FILES: [&str; 3] = [
     "sys/drivers/libtest2.so"
 ];
 
-pub unsafe fn jump_to_kernel(boot_info: &BootInfo) -> ! {
-    let kern_entry = &boot_info.kernel_desc.entry as *const _  as *const extern "sysv64" fn(*const BootInfo) -> !;
 
-    (*kern_entry)(boot_info as *const BootInfo)
+pub unsafe fn jump_to_kernel(boot_info: &BootInfo) -> ! {
+    let kern_addr = canonicalize(boot_info.kernel_desc.entry);
+    let kern_fn: extern "sysv64" fn(*const BootInfo) -> ! = core::mem::transmute(kern_addr); 
+
+    kern_fn(boot_info as *const BootInfo)
 }
 
 
