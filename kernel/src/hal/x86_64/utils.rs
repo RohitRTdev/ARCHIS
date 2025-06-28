@@ -9,7 +9,7 @@ impl VirtAddr {
         Self (Self::canonicalize(addr as u64))
     }
 
-    // Virtual address is AMD/Intel on 64 bit mode is 48 bits. All upper bits must match 48th bit
+    // Virtual address in AMD/Intel for 64 bit mode is 48 bits. All upper bits must match 47th bit
     fn canonicalize(mut addr: u64) -> u64 {
         if addr & (1 << 47) != 0 {
             addr |= (0xffff as u64) << 48;

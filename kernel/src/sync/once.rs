@@ -25,11 +25,9 @@ impl<T> Once<T> {
     {
         self.guard.lock();
         unsafe {
-            log::info!("Initializing");
             *self.value.get() = Some(init());
             *self.is_init.get() = true;
         }
-        log::info!("Unlocking");
         self.guard.unlock();
     }
 

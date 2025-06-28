@@ -45,6 +45,7 @@ extern "C" fn kern_main() {
 
 #[no_mangle]
 unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
+    hal::disable_interrupts();
     *CUR_STACK_BASE.lock() = hal::get_current_stack_base();
     
     BOOT_INFO.call_once(|| {

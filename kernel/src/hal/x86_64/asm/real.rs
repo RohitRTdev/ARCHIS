@@ -12,4 +12,12 @@ extern "C" {
     pub fn halt() -> !;
 
     pub fn switch_stack_and_jump(stack_addr: u64, branch_addr: u64);
+
+    pub fn cpuid(fn_number: u32, opt_fn_number: u32, result: *mut u8);
+    pub fn write_cr0(val: u64);
+    pub fn write_cr4(val: u64);
+    pub fn write_rflags(val: u64);
+    pub fn read_rflags() -> u64;
+    pub fn read_cr0() -> u64;
+    pub fn read_cr4() -> u64;
 }
