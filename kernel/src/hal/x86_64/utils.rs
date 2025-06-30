@@ -30,8 +30,8 @@ impl VirtAddr {
 
 pub fn switch_stack_and_jump(stack_address: VirtAddr, kernel_address: VirtAddr) -> ! {
     
-    debug!("Init Stack address:{:#X}", stack_address.get());
-    debug!("Kern_main:{:#X}", kernel_address.get());
+    debug!("Init stack address:{:#X}", stack_address.get());
+    debug!("kern_main:{:#X}", kernel_address.get());
 
     unsafe {
         asm::switch_stack_and_jump(stack_address.get() as u64,  kernel_address.get() as u64);

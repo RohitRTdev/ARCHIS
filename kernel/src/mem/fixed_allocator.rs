@@ -13,7 +13,7 @@ pub enum Regions {
 
 const BOOT_REGION_SIZE0: usize = 10 * 4096;
 const BOOT_REGION_SIZE1: usize = 4096;
-const TOTAL_BOOT_MEMORY: usize = (BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1);
+const TOTAL_BOOT_MEMORY: usize = BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1;
 
 // Here we simply divide given memory into slots each of size 8 bytes
 // 8 is chosen to represent an average DS size

@@ -103,12 +103,13 @@ fn get_stack_base(stack_top: usize, stack_size: usize) -> usize {
 
 pub fn init() -> ! {
     info!("Starting platform initialization");
-    let stack_top = &KERN_INIT_STACK.stack as *const _ as usize;
-    let stack_base = get_stack_base(stack_top, crate::KERN_INIT_STACK_SIZE); 
-    *crate::CUR_STACK_BASE.lock() = stack_base; 
 
     features::init();
     cpu_regs::init();
     
-    switch_stack_and_jump(VirtAddr::new(stack_base), VirtAddr::new(crate::kern_main as extern "C" fn() as usize));
+    let stack_top = KERN_INIT_STACK.stack.as_ptr() as usize;
+    let stack_base = get_stack_base(stack_top, crate::KERN_INIT_STACK_SIZE); 
+    *crate::CUR_STACK_BASE.lock() = stack_base; 
+    
+    switch_stack_and_jump(VirtAddr::new(stack_base), VirtAddr::new(crate::kern_main as usize));
 }

@@ -6,6 +6,7 @@ use crate::logger::debug;
 pub struct CR0;
 pub struct CR4;
 pub struct RFLAGS;
+pub struct EFER;
 
 struct CPUReg<T: Reg> {
     _mark: PhantomData<T>
@@ -70,7 +71,17 @@ impl Reg for RFLAGS {
             asm::read_rflags()
         }
     }
+}
 
+impl Reg for EFER {
+    unsafe fn write(data: u64) {
+        asm::wrmsr(EFER::ADDRESS, data);
+    }
+    fn read() -> u64 {
+        unsafe {
+            asm::rdmsr(EFER::ADDRESS)
+        }
+    }
 }
 
 impl CR0 {
@@ -96,6 +107,13 @@ impl RFLAGS {
     pub const AC: u64 = 1 << 18;
 }
 
+impl EFER {
+    pub const ADDRESS: u32 = 0xC0000080;
+    pub const SCE: u64 = 1 << 0;
+    pub const LME: u64 = 1 << 8;
+    pub const LMA: u64 = 1 << 10;
+}
+
 fn en_flag(flag: u64, feature: bool) -> u64 {
     if feature {
         flag
@@ -108,7 +126,7 @@ fn en_flag(flag: u64, feature: bool) -> u64 {
 #[cfg(debug_assertions)]
 fn log_registers() {
     unsafe {
-        debug!("CR0={:#X}, CR4={:#X}, RFLAGS={:#X}", asm::read_cr0(), asm::read_cr4(), asm::read_rflags());
+        debug!("CR0={:#X}, CR4={:#X}, EFER={:#X}, RFLAGS={:#X}", asm::read_cr0(), asm::read_cr4(), asm::rdmsr(EFER::ADDRESS), asm::read_rflags());
     }
 }
 
@@ -120,6 +138,7 @@ pub fn init() {
         CPUReg::<CR4>::init(CR4::PAE | CR4::PGE | CR4::PCE | CR4::OSXMMEXCPT | en_flag(CR4::UMIP, features.umip) 
         | en_flag(CR4::SMEP, features.smep) | en_flag(CR4::SMAP, features.smap));
 
+        CPUReg::<EFER>::init(EFER::SCE | EFER::LME | EFER::LMA);
         CPUReg::<RFLAGS>::clear(RFLAGS::IOPL | RFLAGS::AC);
     }
 

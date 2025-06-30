@@ -40,7 +40,7 @@ fn setup_memory_map() -> ArrayTable {
 
     info!("Exiting boot services!");
     let memmap = unsafe {
-        boot::exit_boot_services(MemoryType::LOADER_DATA)
+        boot::exit_boot_services(Some(MemoryType::LOADER_DATA))
     };
     
     let total_entries = memmap.len();

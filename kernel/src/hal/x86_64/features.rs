@@ -2,12 +2,71 @@ use crate::sync::{Once, Spinlock};
 use crate::logger::debug;
 use super::asm;
 
-#[derive(Debug, Clone, Copy)]
+enum FeatureState {
+    Required(&'static str),
+    NotRequired(fn(&mut CPUFeatures))
+}
+
+
+struct FeatureDescriptor {
+    fn_num: u32,
+    ext_fn_num: u32,
+    reg_idx: u8,
+    bit_idx: u8,
+    is_required: FeatureState,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
 pub struct CPUFeatures {
     pub umip: bool,
     pub smep: bool,
     pub smap: bool
 }
+
+const FEATURE_MAP: [FeatureDescriptor; 5] = [
+    FeatureDescriptor {
+        fn_num: 0x80000001,
+        ext_fn_num: 0,
+        reg_idx: 3,
+        bit_idx: 11,
+        is_required: FeatureState::Required("Syscall/Sysret")
+    },
+    FeatureDescriptor {
+        fn_num: 0x1,
+        ext_fn_num: 0,
+        reg_idx: 3,
+        bit_idx: 5,
+        is_required: FeatureState::Required("MSR")
+    },
+    FeatureDescriptor {
+        fn_num: 7,
+        ext_fn_num: 0,
+        reg_idx: 1,
+        bit_idx: 7,
+        is_required: FeatureState::NotRequired(|val| {
+            val.smep = true;
+        })
+    },
+    FeatureDescriptor {
+        fn_num: 7,
+        ext_fn_num: 0,
+        reg_idx: 1,
+        bit_idx: 20,
+        is_required: FeatureState::NotRequired(|val| {
+            val.smap = true;
+        })
+    },
+    FeatureDescriptor {
+        fn_num: 7,
+        ext_fn_num: 0,
+        reg_idx: 2,
+        bit_idx: 2,
+        is_required: FeatureState::NotRequired(|val| {
+            val.umip = true;
+        })
+    }
+];
+
 
 pub static CPU_FEATURES: Once<Spinlock<CPUFeatures>> = Once::new();
 
@@ -26,14 +85,28 @@ fn cpuid(fn_number: u32, opt_fn_number: u32) -> [u32; 4] {
 
 
 pub fn init() {
-    let fn_7_res = cpuid(7, 0);
-    let is_umip = check_bit(2, fn_7_res[2]);
-    let is_smep = check_bit(7, fn_7_res[1]);
-    let is_smap = check_bit(20, fn_7_res[1]);
-
     CPU_FEATURES.call_once(|| {
+        let mut inst = CPUFeatures::default();
+
+        for desc in &FEATURE_MAP {
+            let val = check_bit(desc.bit_idx as u32, cpuid(desc.fn_num, desc.ext_fn_num)[desc.reg_idx as usize]);
+            match desc.is_required {
+                FeatureState::Required(err_str) => {
+                    if !val {
+                        panic!("Aris requires {} feature for intel/amd cpus", err_str);
+                    }
+                },
+                FeatureState::NotRequired(f) => {
+                    if val {
+                        f(&mut inst);
+                    }
+                }
+            }
+        }
+
+
         Spinlock::new(
-            CPUFeatures { umip: is_umip, smep: is_smep, smap: is_smap }
+            inst
         )
     });
 

@@ -6,5 +6,5 @@ edition = "2021"
 [dependencies]
 common.workspace = true
 log.workspace = true
-uefi = { version = "*", features = [ "alloc", "global_allocator" ] }
+uefi = { version = "0.35.0", features = [ "alloc", "global_allocator" ] }
 blr = {path = "../blr"}

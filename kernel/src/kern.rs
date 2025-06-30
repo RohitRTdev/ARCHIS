@@ -36,10 +36,8 @@ static KERN_INIT_STACK: Stack = Stack {
 
 static CUR_STACK_BASE: Spinlock<usize> = Spinlock::new(0);
 
-
 extern "C" fn kern_main() {
     info!("Starting main kernel init");
-
     hal::halt();
 }
 
@@ -55,7 +53,7 @@ unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
     
     logger::init(); 
     info!("Starting aris");
-    info!("Early boot stack base:{}", *CUR_STACK_BASE.lock()); 
+    info!("Early boot stack base:{:#X}", *CUR_STACK_BASE.lock()); 
 
     module::early_init();
 

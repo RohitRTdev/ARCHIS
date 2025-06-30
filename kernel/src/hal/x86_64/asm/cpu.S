@@ -17,6 +17,15 @@ FUNC cpuid
     ret 
 ENDF cpuid
 
+FUNC rdmsr
+    movl %edi, %ecx
+    rdmsr
+    shlq $32, %rdi
+    movl %eax, %eax
+    orq %rdi, %rax
+    ret
+ENDF rdmsr
+
 FUNC read_rflags
     pushfq
     popq %rax
@@ -32,6 +41,15 @@ FUNC read_cr4
     movq %cr4, %rax
     ret
 ENDF read_cr4
+
+FUNC wrmsr
+    movl %esi, %eax
+    shrq $32, %rsi
+    movl %esi, %edx
+    movl %edi, %ecx
+    wrmsr
+    ret
+ENDF wrmsr
 
 FUNC write_rflags
     pushfq
