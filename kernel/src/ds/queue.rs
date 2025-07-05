@@ -1,5 +1,5 @@
 use super::*;
-use crate::mem::Allocator;
+use crate::{error::KError, mem::Allocator};
 use core::ptr::NonNull;
 
 pub struct Queue<T, A: Allocator<ListNode<T>>> {       
@@ -13,8 +13,8 @@ impl<T, A: Allocator<ListNode<T>>> Queue<T, A> {
         }
     }
 
-    pub fn push(&mut self, item: T) {
-        self.data.add_node(item);
+    pub fn push(&mut self, item: T) -> Result<(), KError>{
+        self.data.add_node(item)
     }
 
     pub fn push_node(&mut self, item: NonNull<ListNode<T>>) {

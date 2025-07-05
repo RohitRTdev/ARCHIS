@@ -15,6 +15,6 @@ pub fn early_init() {
     let mut mod_cb = MODULE_LIST.lock();
     let info = BOOT_INFO.get().unwrap().lock();
     
-    mod_cb.add_node(ModuleDescriptor { name: env!("CARGO_PKG_NAME"), info: info.kernel_desc});
+    mod_cb.add_node(ModuleDescriptor { name: env!("CARGO_PKG_NAME"), info: info.kernel_desc}).unwrap();
 }
 

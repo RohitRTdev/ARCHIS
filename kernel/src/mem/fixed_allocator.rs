@@ -2,8 +2,10 @@ use core::alloc::Layout;
 use core::marker::PhantomData;
 use core::mem;
 use core::ptr::NonNull;
-use common::ceil_div;
+use common::{ceil_div, PAGE_SIZE};
+use crate::error::KError;
 use crate::sync::Spinlock;
+use crate::logger::info;
 
 #[repr(usize)]
 pub enum Regions {
@@ -11,8 +13,9 @@ pub enum Regions {
     Region1
 }
 
-const BOOT_REGION_SIZE0: usize = 10 * 4096;
-const BOOT_REGION_SIZE1: usize = 4096;
+// It's important that regions are declared in descending order of their size (in order to avoid padding while laying out heap)
+const BOOT_REGION_SIZE0: usize = 10 * PAGE_SIZE;
+const BOOT_REGION_SIZE1: usize = PAGE_SIZE;
 const TOTAL_BOOT_MEMORY: usize = BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1;
 
 // Here we simply divide given memory into slots each of size 8 bytes
@@ -114,7 +117,7 @@ impl<T, const REGION: usize> super::Allocator<T>
 for FixedAllocator<T, REGION> 
 where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
 
-    fn alloc(layout: Layout) -> NonNull<T> {
+    fn alloc(layout: Layout) -> Result<NonNull<T>, KError> {
         let _sync = HEAP.lock.lock();
         
         let (base, hdr_base) = Self::fetch_hdr_and_base();
@@ -155,8 +158,10 @@ where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
 
         let sel_slot = start_slot;
         if slot_offset >= num_slots {
-            panic!("Fixed allocator region:{} ran out of space, num_slots:{}, slots_required:{}, num_slots_found:{}!", 
+            info!("Fixed allocator region:{} ran out of space, num_slots:{}, slots_required:{}, num_slots_found:{}!", 
             REGION, num_slots, slots_required, num_slots_found);
+            
+            return Err(KError::OutOfMemory);
         }
 
         // Set all those n bits to '1'
@@ -177,7 +182,7 @@ where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
         }
 
         unsafe {
-            NonNull::new(base.add(sel_slot * slot_size) as *mut T).unwrap()
+            Ok(NonNull::new(base.add(sel_slot * slot_size) as *mut T).unwrap())
         }
     }
 

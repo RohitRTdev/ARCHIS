@@ -96,7 +96,6 @@ impl CR4 {
     pub const PAE: u64 = 1 << 5;
     pub const PGE: u64 = 1 << 7;
     pub const PCE: u64 = 1 << 8;
-    pub const OSXMMEXCPT: u64 = 1 << 10;
     pub const UMIP: u64 = 1 << 11;
     pub const SMEP: u64 = 1 << 20;
     pub const SMAP: u64 = 1 << 21;
@@ -135,7 +134,7 @@ pub fn init() {
     let features = *features::CPU_FEATURES.get().unwrap().lock();
     unsafe {
         CPUReg::<CR0>::init(CR0::PE | CR0::ET | CR0::NE | CR0::PG | CR0::WP);
-        CPUReg::<CR4>::init(CR4::PAE | CR4::PGE | CR4::PCE | CR4::OSXMMEXCPT | en_flag(CR4::UMIP, features.umip) 
+        CPUReg::<CR4>::init(CR4::PAE | en_flag(CR4::PGE, features.pge) | CR4::PCE | en_flag(CR4::UMIP, features.umip) 
         | en_flag(CR4::SMEP, features.smep) | en_flag(CR4::SMAP, features.smap));
 
         CPUReg::<EFER>::init(EFER::SCE | EFER::LME | EFER::LMA);

@@ -20,10 +20,18 @@ struct FeatureDescriptor {
 pub struct CPUFeatures {
     pub umip: bool,
     pub smep: bool,
-    pub smap: bool
+    pub smap: bool,
+    pub pge: bool
 }
 
-const FEATURE_MAP: [FeatureDescriptor; 5] = [
+const FEATURE_MAP: [FeatureDescriptor; 8] = [
+    FeatureDescriptor {
+        fn_num: 0x1,
+        ext_fn_num: 0,
+        reg_idx: 3,
+        bit_idx: 6,
+        is_required: FeatureState::Required("PAE")
+    },
     FeatureDescriptor {
         fn_num: 0x80000001,
         ext_fn_num: 0,
@@ -39,7 +47,14 @@ const FEATURE_MAP: [FeatureDescriptor; 5] = [
         is_required: FeatureState::Required("MSR")
     },
     FeatureDescriptor {
-        fn_num: 7,
+        fn_num: 0x1,
+        ext_fn_num: 0,
+        reg_idx: 3,
+        bit_idx: 9,
+        is_required: FeatureState::Required("APIC")
+    },
+    FeatureDescriptor {
+        fn_num: 0x7,
         ext_fn_num: 0,
         reg_idx: 1,
         bit_idx: 7,
@@ -48,7 +63,7 @@ const FEATURE_MAP: [FeatureDescriptor; 5] = [
         })
     },
     FeatureDescriptor {
-        fn_num: 7,
+        fn_num: 0x7,
         ext_fn_num: 0,
         reg_idx: 1,
         bit_idx: 20,
@@ -57,12 +72,21 @@ const FEATURE_MAP: [FeatureDescriptor; 5] = [
         })
     },
     FeatureDescriptor {
-        fn_num: 7,
+        fn_num: 0x7,
         ext_fn_num: 0,
         reg_idx: 2,
         bit_idx: 2,
         is_required: FeatureState::NotRequired(|val| {
             val.umip = true;
+        })
+    },
+    FeatureDescriptor {
+        fn_num: 0x1,
+        ext_fn_num: 0,
+        reg_idx: 3,
+        bit_idx: 13,
+        is_required: FeatureState::NotRequired(|val| {
+            val.pge = true;
         })
     }
 ];

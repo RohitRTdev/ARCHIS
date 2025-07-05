@@ -8,6 +8,7 @@ mod mem;
 mod ds;
 mod module;
 mod logger;
+mod error;
 
 use common::*;
 use logger::*;

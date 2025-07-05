@@ -1,9 +1,11 @@
+use crate::error::KError;
 use crate::mem::Allocator;
 use core::alloc::Layout;
 use core::mem;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::marker::PhantomData;
+use core::fmt::{self, Debug};
 
 pub struct ListIter<'a, T> {
     current: Option<&'a ListNode<T>>,
@@ -102,9 +104,9 @@ impl<T, A: Allocator<ListNode<T>>> List<T, A> {
         }
     }
 
-    pub fn add_node(&mut self, data: T) {
+    pub fn add_node(&mut self, data: T) -> Result<(), KError> {
         let layout = Layout::from_size_align(size_of::<ListNode<T>>(), align_of::<ListNode<T>>()).unwrap();
-        let addr = A::alloc(layout).as_ptr();
+        let addr = A::alloc(layout)?.as_ptr();
         let addr_non = NonNull::new(addr).unwrap();
         unsafe {
             (*addr).next = addr_non;
@@ -113,6 +115,7 @@ impl<T, A: Allocator<ListNode<T>>> List<T, A> {
         }
 
         self.insert_node_at_tail(addr_non);
+        Ok(())
     }
 
 
@@ -164,6 +167,8 @@ impl<T, A: Allocator<ListNode<T>>> List<T, A> {
         self.insert_node(this, false);
     }
 
+    // This is unsafe, since it is caller's responsibility to ensure that the given ListNode is a valid node that is 
+    // part of this list
     pub unsafe fn remove_node(&mut self, this: NonNull<ListNode<T>>) -> ListNodeGuard<T, A> {
         let this_node = unsafe {
             &mut *this.as_ptr()
@@ -265,7 +270,7 @@ impl<'a, T> Iterator for ListIterMut<'a, T> {
             };
 
             // Since it's circular list, we have reached end if we are at head node. So stop iterating.
-            if next.as_ptr() == self.head.unwrap() as *const ListNode<T> as *mut ListNode<T> {
+            if next.as_ptr() == self.head.unwrap() as *mut ListNode<T> {
                 self.current = None;
             }
             else {
@@ -282,3 +287,15 @@ impl<'a, T> Iterator for ListIterMut<'a, T> {
     }
 }
 
+impl<T: Debug, A: Allocator<ListNode<T>>> Debug for List<T, A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut dbg = f.debug_struct("List");
+        for desc in self.iter() {
+            dbg.field("value", &desc.data);
+        }
+
+        dbg.finish().unwrap();
+
+        Ok(())
+    }
+}

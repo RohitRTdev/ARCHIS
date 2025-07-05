@@ -101,7 +101,7 @@ run_unit_test: build_kernel
 
 test:
 	@echo "Starting simulator..."
-	@qemu-system-x86_64 -cpu Skylake-Client,+smap,+smep,+umip -bios scripts/OVMF.fd\
+	@qemu-system-x86_64 -cpu Skylake-Client,+smap,+smep,+umip,+pge -bios scripts/OVMF.fd\
  -drive file=$(OUTPUT_DIR)/archis_os.iso,format=raw,if=ide -serial mon:stdio | tee >(sed 's/\x1b\[[0-9;=]*[A-Za-z]//g' > $(OUTPUT_DIR)/con_log.txt)
 
 clean:

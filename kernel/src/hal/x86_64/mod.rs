@@ -1,4 +1,3 @@
-use core::cell::UnsafeCell;
 use crate::logger::info;
 mod asm;
 mod utils;
@@ -27,22 +26,22 @@ pub use asm::write_port_u8;
 
 use crate::KERN_INIT_STACK;
 
-pub struct Spinlock(UnsafeCell<u64>);
+pub struct Spinlock(u64);
 
 impl Spinlock {
     pub const fn new() -> Self {
-        Self(UnsafeCell::new(0))
+        Self(0)
     }
 
     pub fn lock(&self) {
         unsafe {
-            asm::acquire_lock(self.0.get());
+            asm::acquire_lock(&self.0 as *const _ as *mut _);
         }
     }
     
     pub fn unlock(&self) {
         unsafe {
-            *self.0.get() = 0;
+            (&self.0 as *const u64 as *mut u64).write(0);
         }
     }
 
@@ -50,7 +49,7 @@ impl Spinlock {
     // This is useful when you want to acquire the lock but not busy-wait
     pub fn try_lock(&self) -> bool {
         unsafe {
-            asm::try_acquire_lock(self.0.get()) != 0
+            asm::try_acquire_lock(&self.0 as *const _ as *mut _) != 0
         }
     }
 } 
@@ -106,7 +105,9 @@ pub fn init() -> ! {
 
     features::init();
     cpu_regs::init();
-    
+
+    crate::mem::init();
+
     let stack_top = KERN_INIT_STACK.stack.as_ptr() as usize;
     let stack_base = get_stack_base(stack_top, crate::KERN_INIT_STACK_SIZE); 
     *crate::CUR_STACK_BASE.lock() = stack_base; 
