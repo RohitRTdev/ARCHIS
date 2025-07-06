@@ -52,7 +52,7 @@ unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
     });   
 
     
-    logger::init(); 
+    logger::init();
     info!("Starting aris");
     info!("Early boot stack base:{:#X}", *CUR_STACK_BASE.lock()); 
 

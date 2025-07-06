@@ -1,9 +1,7 @@
 use core::alloc::Layout;
 use core::ptr::NonNull;
 
-use common::MemoryDesc;
-use common::MemType;
-use common::PAGE_SIZE;
+use common::{MemoryDesc, MemType, PAGE_SIZE};
 use crate::{ds::*, BOOT_INFO};
 use crate::sync::{Once, Spinlock};
 use crate::error::KError;
@@ -48,7 +46,7 @@ impl PhysMemConBlk {
         if let Some(node) = smallest_blk {
             node.num_pages -= pages;
             let start_address = node.start_phy_address as *mut u8;
-            node.start_phy_address += pages * common::PAGE_SIZE;
+            node.start_phy_address += pages * PAGE_SIZE;
             if node.num_pages == 0 {
                 let list_node = NonNull::from(node);
                 unsafe {
@@ -76,11 +74,11 @@ pub fn allocate_memory(layout: Layout, flags: u8) -> Result<*mut u8, KError> {
         return Err(KError::OutOfMemory);
     }
 
-    if layout.align() > common::PAGE_SIZE {
+    if layout.align() > PAGE_SIZE {
         return Err(KError::InvalidArgument);
     }
 
-    let num_pages = common::ceil_div(layout.size(), common::PAGE_SIZE);
+    let num_pages = common::ceil_div(layout.size(), PAGE_SIZE);
     let addr = allocator.find_best_fit(num_pages)?;    
 
     Ok(addr)
@@ -90,12 +88,12 @@ pub fn allocate_memory(layout: Layout, flags: u8) -> Result<*mut u8, KError> {
 pub fn deallocate_memory(addr: *mut u8, layout: Layout, flags: u8) -> Result<(), KError> {
     let mut allocator = PHY_MEM_CB.get().unwrap().lock();
 
-    if layout.align() > common::PAGE_SIZE {
+    if layout.align() > PAGE_SIZE {
         return Err(KError::InvalidArgument);
     }
 
-    let num_pages = common::ceil_div(layout.size(), common::PAGE_SIZE);
-    let num_size = num_pages * common::PAGE_SIZE;
+    let num_pages = common::ceil_div(layout.size(), PAGE_SIZE);
+    let num_size = num_pages * PAGE_SIZE;
     let mut found_blk = false;
 
     // Remove node from alloc_block_list
@@ -119,7 +117,7 @@ pub fn deallocate_memory(addr: *mut u8, layout: Layout, flags: u8) -> Result<(),
     
     // Check if this block can be coaleasced with an existing block
     for blk in allocator.free_block_list.iter_mut() {
-        if blk.start_phy_address + blk.num_pages * common::PAGE_SIZE == addr as usize {
+        if blk.start_phy_address + blk.num_pages * PAGE_SIZE == addr as usize {
             blk.num_pages += num_pages;
             found_blk = true;
             break;
@@ -213,8 +211,8 @@ pub fn test_init_allocator() {
         free_block_list.add_node(desc3).unwrap();
 
         let cb = PhysMemConBlk {
-            total_memory: 17 * common::PAGE_SIZE,
-            avl_memory: 17 * common::PAGE_SIZE,
+            total_memory: 17 * PAGE_SIZE,
+            avl_memory: 17 * PAGE_SIZE,
             free_block_list,
             alloc_block_list: List::new()
         };

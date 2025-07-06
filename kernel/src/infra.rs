@@ -2,6 +2,7 @@ use core::panic::PanicInfo;
 use core::ffi::CStr;
 use common::elf::*;
 use rustc_demangle::demangle;
+use crate::logger;
 use crate::println;
 use crate::sync::Spinlock;
 use crate::{hal, CUR_STACK_BASE};
@@ -11,6 +12,7 @@ static GLOBAL_PANIC_LOCK: Spinlock<bool> = Spinlock::new(false);
 
 fn common_panic_handler(mod_name: &str, info: &PanicInfo) -> ! {
     let _sync = GLOBAL_PANIC_LOCK.lock();
+    logger::set_panic_mode();
     let stack_base = *CUR_STACK_BASE.lock();
     let mut unwind_list: [usize; 8] = [0; 8];
 
