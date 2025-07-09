@@ -1,6 +1,6 @@
 use crate::sync::Spinlock;
-use crate::BOOT_INFO;
-use common::ceil_div;
+use crate::{RemapEntry, BOOT_INFO, REMAP_LIST};
+use common::{ceil_div, MemoryRegion};
 
 const PSF_MAGIC: u32 = 0x864AB572;
 
@@ -132,10 +132,8 @@ impl FramebufferLogger {
     }
     
     pub fn clear_screen(&mut self) {
-        for y in 0..self.height {
-            for x in 0..self.width {
-                self.set_pixel(x, y, 0x000000); // Black background
-            }
+        unsafe {
+            self.fb_base.write_bytes(0, self.height * self.stride * 4);
         }
         
         self.current_x = 0;
@@ -270,5 +268,13 @@ impl core::fmt::Write for FramebufferLogger {
 
 pub fn init() {
     let mut logger = FRAMEBUFFER_LOGGER.lock();
-    logger.init()
+    logger.init();
+    
+    REMAP_LIST.lock().add_node(RemapEntry {
+        value: MemoryRegion {
+            base_address: logger.fb_base as usize,
+            size: logger.height * logger.stride * 4
+        },
+        is_identity_mapped: false
+    }).unwrap();
 }

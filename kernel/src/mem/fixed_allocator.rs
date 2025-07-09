@@ -2,21 +2,26 @@ use core::alloc::Layout;
 use core::marker::PhantomData;
 use core::mem;
 use core::ptr::NonNull;
-use common::{ceil_div, PAGE_SIZE};
+use common::{ceil_div, ptr_to_usize, MemoryRegion, PAGE_SIZE};
 use crate::error::KError;
 use crate::sync::Spinlock;
 use crate::logger::info;
+use crate::{RemapEntry, REMAP_LIST};
 
 #[repr(usize)]
 pub enum Regions {
     Region0,
-    Region1
+    Region1,
+    Region2,
+    Region3
 }
 
 // It's important that regions are declared in descending order of their size (in order to avoid padding while laying out heap)
 const BOOT_REGION_SIZE0: usize = 10 * PAGE_SIZE;
-const BOOT_REGION_SIZE1: usize = PAGE_SIZE;
-const TOTAL_BOOT_MEMORY: usize = BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1;
+const BOOT_REGION_SIZE1: usize = 4 * PAGE_SIZE;
+const BOOT_REGION_SIZE2: usize = PAGE_SIZE;
+const BOOT_REGION_SIZE3: usize = PAGE_SIZE;
+const TOTAL_BOOT_MEMORY: usize = BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2 + BOOT_REGION_SIZE3;
 
 // Here we simply divide given memory into slots each of size 8 bytes
 // 8 is chosen to represent an average DS size
@@ -24,10 +29,12 @@ const MIN_SLOT_SIZE: usize = 8;
 const BITMAP_SIZE: usize = (TOTAL_BOOT_MEMORY / MIN_SLOT_SIZE) >> 3;
 
 // Wrapper required to force alignment constraint
-#[repr(align(4096))]
+#[cfg_attr(target_arch="x86_64", repr(align(4096)))]
 struct HeapWrapper {
     heap0: [u8; BOOT_REGION_SIZE0],
     heap1: [u8; BOOT_REGION_SIZE1],
+    heap2: [u8; BOOT_REGION_SIZE2],
+    heap3: [u8; BOOT_REGION_SIZE3],
     bitmap: [u8; BITMAP_SIZE],
     lock: Spinlock<core::marker::PhantomData<bool>>
 }
@@ -35,6 +42,8 @@ struct HeapWrapper {
 static HEAP: HeapWrapper = HeapWrapper { 
     heap0: [0; BOOT_REGION_SIZE0],
     heap1: [0; BOOT_REGION_SIZE1],
+    heap2: [0; BOOT_REGION_SIZE2],
+    heap3: [0; BOOT_REGION_SIZE3],
     bitmap: [0; BITMAP_SIZE],
     lock: Spinlock::new(core::marker::PhantomData)
 };
@@ -48,6 +57,12 @@ pub fn get_heap(reg: Regions) -> (*const u8, *const u8) {
         }
         Regions::Region1 => {
             (HEAP.heap1.as_ptr() as *mut u8, BOOT_REGION_SIZE0 >> 3)
+        }
+        Regions::Region2 => {
+            (HEAP.heap2.as_ptr() as *mut u8, (BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1) >> 3)
+        }
+        Regions::Region3 => {
+            (HEAP.heap3.as_ptr() as *mut u8, (BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2) >> 3)
         }
     };
     
@@ -84,6 +99,12 @@ where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
             1 => {
                 (HEAP.heap1.as_ptr() as *mut u8, BOOT_REGION_SIZE0 >> 3)
             }
+            2 => {
+                (HEAP.heap2.as_ptr() as *mut u8, (BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1) >> 3)
+            }
+            3 => {
+                (HEAP.heap3.as_ptr() as *mut u8, (BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2) >> 3)
+            }
 
             // This will never happen
             _ => {(core::ptr::null_mut(),0)}
@@ -104,6 +125,12 @@ where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
             }
             1 => {
                 BOOT_REGION_SIZE1 >> 3
+            }
+            2 => {
+                BOOT_REGION_SIZE2 >> 3
+            }
+            3 => {
+                BOOT_REGION_SIZE3 >> 3
             }
             _ => {
                 0
@@ -216,4 +243,14 @@ where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
         }
 
     }
+}
+
+pub fn fixed_allocator_init() {
+    REMAP_LIST.lock().add_node(RemapEntry {
+        value: MemoryRegion {
+            base_address: ptr_to_usize(&HEAP),
+            size: mem::size_of::<HeapWrapper>() 
+        },
+        is_identity_mapped: true
+    }).unwrap();
 }

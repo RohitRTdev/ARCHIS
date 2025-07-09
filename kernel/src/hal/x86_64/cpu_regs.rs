@@ -2,6 +2,7 @@ use core::marker::PhantomData;
 
 use super::{asm, features};
 use crate::logger::debug;
+use common::en_flag;
 
 pub struct CR0;
 pub struct CR4;
@@ -113,14 +114,6 @@ impl EFER {
     pub const LMA: u64 = 1 << 10;
 }
 
-fn en_flag(flag: u64, feature: bool) -> u64 {
-    if feature {
-        flag
-    }
-    else {
-        0
-    }
-}
 
 #[cfg(debug_assertions)]
 fn log_registers() {
@@ -134,8 +127,8 @@ pub fn init() {
     let features = *features::CPU_FEATURES.get().unwrap().lock();
     unsafe {
         CPUReg::<CR0>::init(CR0::PE | CR0::ET | CR0::NE | CR0::PG | CR0::WP);
-        CPUReg::<CR4>::init(CR4::PAE | en_flag(CR4::PGE, features.pge) | CR4::PCE | en_flag(CR4::UMIP, features.umip) 
-        | en_flag(CR4::SMEP, features.smep) | en_flag(CR4::SMAP, features.smap));
+        CPUReg::<CR4>::init(CR4::PAE | en_flag!(features.pge, CR4::PGE) | CR4::PCE | en_flag!(features.umip, CR4::UMIP) 
+        | en_flag!(features.smep, CR4::SMEP) | en_flag!(features.smap, CR4::SMAP));
 
         CPUReg::<EFER>::init(EFER::SCE | EFER::LME | EFER::LMA);
         CPUReg::<RFLAGS>::clear(RFLAGS::IOPL | RFLAGS::AC);

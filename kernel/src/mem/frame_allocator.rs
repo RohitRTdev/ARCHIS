@@ -1,31 +1,24 @@
-use core::alloc::Layout;
-use core::ptr::NonNull;
-
-use common::{MemoryDesc, MemType, PAGE_SIZE};
-use crate::{ds::*, BOOT_INFO};
+use common::{MemType, MemoryDesc, PAGE_SIZE};
+use crate::{ds::*, RemapEntry, BOOT_INFO, REMAP_LIST};
 use crate::sync::{Once, Spinlock};
 use crate::error::KError;
 use crate::logger::{info, debug};
 use super::{FixedAllocator, Regions::*};
+use super::PageDescriptor;
+use core::alloc::Layout;
+use core::ptr::NonNull;
 
-#[derive(Debug)]
-struct PageDescriptor {
-    num_pages: usize,
-    start_phy_address: usize,
-    start_virt_address: usize,
-    flags: u8
-}
 
-struct PhysMemConBlk {
+pub struct PhyMemConBlk {
     total_memory: usize,
     avl_memory: usize,
     free_block_list: List<PageDescriptor, FixedAllocator<ListNode<PageDescriptor>, {Region0 as usize}>>,
     alloc_block_list: List<PageDescriptor, FixedAllocator<ListNode<PageDescriptor>, {Region0 as usize}>>, 
 }
 
-static PHY_MEM_CB: Once<Spinlock<PhysMemConBlk>> = Once::new();
+pub static PHY_MEM_CB: Once<Spinlock<PhyMemConBlk>> = Once::new();
 
-impl PhysMemConBlk {
+impl PhyMemConBlk {
     fn find_best_fit(&mut self, pages: usize) -> Result<*mut u8, KError> {
         let mut smallest_blk: Option<&mut ListNode<PageDescriptor>> = None;
 
@@ -64,83 +57,79 @@ impl PhysMemConBlk {
         }
     }
 
+    pub fn allocate(&mut self, layout: Layout) -> Result<*mut u8, KError> {
+        if layout.size() >= self.avl_memory {
+            return Err(KError::OutOfMemory);
+        }
+
+        if layout.align() > PAGE_SIZE {
+            return Err(KError::InvalidArgument);
+        }
+
+        let num_pages = common::ceil_div(layout.size(), PAGE_SIZE);
+        let addr = self.find_best_fit(num_pages)?;    
+
+        Ok(addr)
+    }
+
+    pub fn deallocate(&mut self, addr: *mut u8, layout: Layout) -> Result<(), KError> {
+        if layout.align() > PAGE_SIZE {
+            return Err(KError::InvalidArgument);
+        }
+
+        let num_pages = common::ceil_div(layout.size(), PAGE_SIZE);
+        let num_size = num_pages * PAGE_SIZE;
+        let mut found_blk = false;
+
+        // Remove node from alloc_block_list
+        let mut alloc_blk = None;
+        for blk in self.alloc_block_list.iter() {
+            if blk.start_phy_address == addr as usize && blk.num_pages == num_pages {
+                alloc_blk = Some(NonNull::from(blk));
+                break;
+            }
+        }
+        
+        if let Some(blk) = alloc_blk {
+            unsafe {
+                self.alloc_block_list.remove_node(blk);
+            }
+        }
+        else {
+            // In case caller tries to free memory which has not been allocated, then we return here
+            return Err(KError::InvalidArgument);
+        } 
+        
+        // Check if this block can be coaleasced with an existing block
+        for blk in self.free_block_list.iter_mut() {
+            if blk.start_phy_address + blk.num_pages * PAGE_SIZE == addr as usize {
+                blk.num_pages += num_pages;
+                found_blk = true;
+                break;
+            }
+            else if unsafe {addr.add(num_size)} as usize == blk.start_phy_address {
+                blk.start_phy_address -= num_size;
+                blk.num_pages += num_pages;
+                found_blk = true;
+                break;
+            }
+        }
+
+
+        if !found_blk {
+            self.free_block_list.add_node(PageDescriptor { num_pages, start_phy_address: addr as usize, start_virt_address: 0, flags: 0 })
+            .expect("System in bad state. Critical memory failure");
+        }
+
+        Ok(())
+    }
+
 }
 
 
-pub fn allocate_memory(layout: Layout, flags: u8) -> Result<*mut u8, KError> {
-    let mut allocator = PHY_MEM_CB.get().unwrap().lock();
-
-    if layout.size() >= allocator.avl_memory {
-        return Err(KError::OutOfMemory);
-    }
-
-    if layout.align() > PAGE_SIZE {
-        return Err(KError::InvalidArgument);
-    }
-
-    let num_pages = common::ceil_div(layout.size(), PAGE_SIZE);
-    let addr = allocator.find_best_fit(num_pages)?;    
-
-    Ok(addr)
-}
-
-
-pub fn deallocate_memory(addr: *mut u8, layout: Layout, flags: u8) -> Result<(), KError> {
-    let mut allocator = PHY_MEM_CB.get().unwrap().lock();
-
-    if layout.align() > PAGE_SIZE {
-        return Err(KError::InvalidArgument);
-    }
-
-    let num_pages = common::ceil_div(layout.size(), PAGE_SIZE);
-    let num_size = num_pages * PAGE_SIZE;
-    let mut found_blk = false;
-
-    // Remove node from alloc_block_list
-    let mut alloc_blk = None;
-    for blk in allocator.alloc_block_list.iter() {
-        if blk.start_phy_address == addr as usize && blk.num_pages == num_pages {
-            alloc_blk = Some(NonNull::from(blk));
-            break;
-        }
-    }
-    
-    if let Some(blk) = alloc_blk {
-        unsafe {
-            allocator.alloc_block_list.remove_node(blk);
-        }
-    }
-    else {
-        // In case caller tries to free memory which has not been allocated, then we return here
-        return Err(KError::InvalidArgument);
-    } 
-    
-    // Check if this block can be coaleasced with an existing block
-    for blk in allocator.free_block_list.iter_mut() {
-        if blk.start_phy_address + blk.num_pages * PAGE_SIZE == addr as usize {
-            blk.num_pages += num_pages;
-            found_blk = true;
-            break;
-        }
-        else if unsafe {addr.add(num_size)} as usize == blk.start_phy_address {
-            blk.start_phy_address -= num_size;
-            blk.num_pages += num_pages;
-            found_blk = true;
-            break;
-        }
-    }
-
-
-    if !found_blk {
-        allocator.free_block_list.add_node(PageDescriptor { num_pages, start_phy_address: addr as usize, start_virt_address: 0, flags: 0 })?;
-    }
-
-    Ok(())
-}
-
-pub fn init() {
+pub fn frame_allocator_init() {
     let boot_info = BOOT_INFO.get().unwrap().lock();
-    let mut init_mem_cb = PhysMemConBlk {
+    let mut init_mem_cb = PhyMemConBlk {
         total_memory: 0,
         avl_memory: 0,
         free_block_list: List::new(),
@@ -148,10 +137,22 @@ pub fn init() {
     };
 
     let mem_descriptors  = unsafe {
-        core::slice::from_raw_parts(boot_info.memory_map_desc.start as *const MemoryDesc, boot_info.memory_map_desc.size / boot_info.memory_map_desc.entry_size)
+        core::slice::from_raw_parts_mut(boot_info.memory_map_desc.start as *mut MemoryDesc, boot_info.memory_map_desc.size / boot_info.memory_map_desc.entry_size)
     };
 
     for desc in mem_descriptors {
+        // Remove page 0 from frame allocation. Since various systems consider 0 as null value,
+        // we will not include it
+        if desc.val.base_address == 0 {
+            desc.val.base_address += PAGE_SIZE;
+            if desc.val.size > PAGE_SIZE {
+                desc.val.size -= PAGE_SIZE;
+            }
+            else {
+                continue;
+            }
+        }
+
         match &desc.mem_type {
             MemType::Free => {
                 init_mem_cb.free_block_list.add_node(PageDescriptor { num_pages: common::ceil_div(desc.val.size, PAGE_SIZE), 
@@ -162,19 +163,19 @@ pub fn init() {
             MemType::Allocated | MemType::Runtime => {
                 init_mem_cb.alloc_block_list.add_node(PageDescriptor { num_pages: common::ceil_div(desc.val.size, PAGE_SIZE), 
                     start_phy_address: desc.val.base_address, start_virt_address: 0, flags: 0 }).unwrap();
+            
+                    if desc.mem_type == MemType::Runtime {
+                        REMAP_LIST.lock().add_node(RemapEntry { 
+                            value: desc.val,
+                            is_identity_mapped: true }).unwrap();
+                    }
             }
         }
         init_mem_cb.total_memory += desc.val.size;
     }
 
     info!("Initialized Memory control block -> Total memory: {}, Available memory: {}", init_mem_cb.total_memory, init_mem_cb.avl_memory);
-    
-    debug!("Printing free block list..");
-    debug!("{:?}", init_mem_cb.free_block_list);
-    
-    debug!("Printing alloc block list..");
-    debug!("{:?}", init_mem_cb.alloc_block_list);
-    
+
     PHY_MEM_CB.call_once(|| {
         Spinlock::new(init_mem_cb)
     });
@@ -205,12 +206,12 @@ pub fn test_init_allocator() {
             flags: 0x0
         };
         
-        let mut free_block_list: List<_, FixedAllocator<_, {Region0 as usize}>> = List::new();
+        let mut free_block_list= List::new();
         free_block_list.add_node(desc1).unwrap();
         free_block_list.add_node(desc2).unwrap();
         free_block_list.add_node(desc3).unwrap();
 
-        let cb = PhysMemConBlk {
+        let cb = PhyMemConBlk {
             total_memory: 17 * PAGE_SIZE,
             avl_memory: 17 * PAGE_SIZE,
             free_block_list,

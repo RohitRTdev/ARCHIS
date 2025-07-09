@@ -8,7 +8,7 @@ pub mod elf;
 
 #[cfg(target_arch="x86_64")]
 pub const PAGE_SIZE: usize = 4096;
-pub const MAX_DESCRIPTORS: usize = 50;
+pub const MAX_DESCRIPTORS: usize = 200;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -24,6 +24,7 @@ pub struct ModuleInfo {
     pub entry: usize,
     pub base: usize,
     pub size: usize,
+    pub total_size: usize,
     pub sym_tab: Option<ArrayTable>,
     pub sym_str: Option<MemoryRegion>,
     pub dyn_tab: Option<ArrayTable>,
@@ -33,6 +34,7 @@ pub struct ModuleInfo {
 }
 
 #[repr(C)]
+#[derive(PartialEq)]
 pub enum MemType {
     Free,
     Allocated,

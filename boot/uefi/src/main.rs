@@ -43,7 +43,7 @@ fn setup_memory_map() -> ArrayTable {
         boot::exit_boot_services(Some(MemoryType::LOADER_DATA))
     };
     
-    let total_entries = memmap.len();
+    let total_entries = memmap.len().min(MAX_DESCRIPTORS);
 
     // Classify memory as free, allocated or runtime
     // runtime means this memory location is used by firmware and it needs to be identity mapped by aris later
@@ -52,20 +52,10 @@ fn setup_memory_map() -> ArrayTable {
             break;
         }
 
-        base[idx] =  MemoryDesc {
-            val: MemoryRegion {
-                base_address: desc.phys_start as usize,
-                size: desc.page_count as usize * PAGE_SIZE as usize
-            },
-            mem_type: match desc.ty {
+        let mem_type = match desc.ty {
                 MemoryType::BOOT_SERVICES_CODE | MemoryType::BOOT_SERVICES_DATA |
                 MemoryType::CONVENTIONAL | MemoryType::PERSISTENT_MEMORY => {
-                    if desc.att == MemoryAttribute::RUNTIME {
-                        MemType::Runtime
-                    }
-                    else {
-                        MemType::Free
-                    }
+                    MemType::Free
                 },   
                 MemoryType::RUNTIME_SERVICES_CODE | MemoryType::RUNTIME_SERVICES_DATA => {
                     MemType::Runtime
@@ -73,8 +63,20 @@ fn setup_memory_map() -> ArrayTable {
                 _ => {
                     MemType::Allocated
                 }
-            }
-        };
+            };
+
+        base[idx] = MemoryDesc {
+            val: MemoryRegion {
+                base_address: desc.phys_start as usize,
+                size: desc.page_count as usize * PAGE_SIZE as usize
+            },
+            mem_type: if desc.att == MemoryAttribute::RUNTIME {
+                    MemType::Runtime
+                }
+                else {
+                    mem_type
+                }
+            };
     }
 
     // If memmap gets dropped, it will call UEFI allocator to free memory which would crash system

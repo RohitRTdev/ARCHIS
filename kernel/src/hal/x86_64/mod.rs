@@ -3,7 +3,10 @@ mod asm;
 mod utils;
 mod features;
 mod cpu_regs;
+mod page_mapper;
+use common::ptr_to_ref_mut;
 pub use utils::*;
+pub use page_mapper::*;
 
 pub fn disable_interrupts() -> bool {
     // RFLAGS register bit 9 is IF -> 1 is enabled
@@ -35,13 +38,13 @@ impl Spinlock {
 
     pub fn lock(&self) {
         unsafe {
-            asm::acquire_lock(&self.0 as *const _ as *mut _);
+            asm::acquire_lock(ptr_to_ref_mut(&self.0));
         }
     }
     
     pub fn unlock(&self) {
         unsafe {
-            (&self.0 as *const u64 as *mut u64).write(0);
+            ptr_to_ref_mut::<_, u64>(&self.0).write(0);
         }
     }
 
@@ -49,7 +52,7 @@ impl Spinlock {
     // This is useful when you want to acquire the lock but not busy-wait
     pub fn try_lock(&self) -> bool {
         unsafe {
-            asm::try_acquire_lock(&self.0 as *const _ as *mut _) != 0
+            asm::try_acquire_lock(ptr_to_ref_mut::<_, u64>(&self.0)) != 0
         }
     }
 } 

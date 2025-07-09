@@ -1,5 +1,5 @@
 use crate::sync::{Once, Spinlock};
-use crate::logger::debug;
+use crate::logger::{debug, info};
 use super::asm;
 
 enum FeatureState {
@@ -21,7 +21,9 @@ pub struct CPUFeatures {
     pub umip: bool,
     pub smep: bool,
     pub smap: bool,
-    pub pge: bool
+    pub pge: bool,
+
+    pub phy_addr_width: u8
 }
 
 const FEATURE_MAP: [FeatureDescriptor; 8] = [
@@ -128,7 +130,8 @@ pub fn init() {
             }
         }
 
-
+        inst.phy_addr_width = (cpuid(0x80000008,0)[0] & 0xff) as u8;
+        info!("CPU max physical address width = {}", inst.phy_addr_width);
         Spinlock::new(
             inst
         )

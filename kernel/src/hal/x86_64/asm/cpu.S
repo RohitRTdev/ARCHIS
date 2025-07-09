@@ -67,3 +67,8 @@ FUNC write_cr4
     movq %rdi, %cr4
     ret
 ENDF write_cr4
+
+FUNC invlpg
+    invlpg (%rdi)
+    ret
+ENDF invlpg

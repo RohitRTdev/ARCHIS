@@ -17,16 +17,23 @@ use logger::*;
 mod tests;
 
 use sync::{Once, Spinlock};
+use crate::mem::{FixedAllocator, Regions::*};
+use crate::ds::*;
 
 static BOOT_INFO: Once<Spinlock<BootInfo>> = Once::new();
 
-
 const KERN_INIT_STACK_SIZE: usize  = PAGE_SIZE * 2;
 
-#[repr(align(4096))]
+#[cfg_attr(target_arch="x86_64", repr(align(4096)))]
 struct Stack {
     stack: [u8; KERN_INIT_STACK_SIZE],
     _guard_page: [u8; PAGE_SIZE]
+}
+
+#[derive(Debug)]
+struct RemapEntry {
+    value: MemoryRegion,
+    is_identity_mapped: bool
 }
 
 static KERN_INIT_STACK: Stack = Stack {
@@ -35,6 +42,7 @@ static KERN_INIT_STACK: Stack = Stack {
 };
 
 
+static REMAP_LIST: Spinlock<List<RemapEntry, FixedAllocator<ListNode<RemapEntry>, {Region3 as usize}>>> = Spinlock::new(List::new());
 static CUR_STACK_BASE: Spinlock<usize> = Spinlock::new(0);
 
 extern "C" fn kern_main() {

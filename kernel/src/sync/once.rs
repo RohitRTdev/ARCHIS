@@ -18,6 +18,10 @@ impl<T> Once<T> {
         }
     }
 
+    pub fn is_init(&self) -> bool {
+        unsafe {*self.is_init.get()}
+    }
+
     // Should not call from interrupt handler
     pub fn call_once<F>(&self, init: F)
     where

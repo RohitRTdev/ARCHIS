@@ -54,24 +54,10 @@ pub fn canonicalize(address: usize) -> u64 {
     addr
 }
 
-fn load_aux_tables(reloc_sections: &mut Vec<MapRegion>, symtab: &mut Option<MapRegion>, symstr: &mut Option<MapRegion>, dynsymtab: &mut Option<MapRegion>, dynstr: &mut Option<MapRegion>, aux_alignment: usize) {
-    // Next, we will calculate the size required to store these auxiliary tables
-    let mut aux_size = 0;
-    for shn in reloc_sections.iter() {
-        aux_size += shn.src_size;
-
-        // Add padding to ensure alignment
-        aux_size += (aux_size as *const u8).align_offset(aux_alignment);
-    }
-
-    let layout = Layout::from_size_align(aux_size, aux_alignment).unwrap();
-    let aux_base = unsafe {
-        loader_alloc(layout)
-    };
-
+fn load_aux_tables(reloc_sections: &mut Vec<MapRegion>, symtab: &mut Option<MapRegion>, symstr: &mut Option<MapRegion>, dynsymtab: &mut Option<MapRegion>, dynstr: &mut Option<MapRegion>, aux_base: usize, aux_alignment: usize) {
     // Now map the symbol table and relocation sections
     test_log!("Loading reloc sections and symbol table");
-    let mut current_load_ptr = aux_base;
+    let mut current_load_ptr = aux_base as *mut u8;
     for (idx, shn) in reloc_sections.iter_mut().enumerate() {
         unsafe {
             copy_nonoverlapping(shn.src_addr as *const u8, current_load_ptr, shn.src_size);
@@ -83,6 +69,8 @@ fn load_aux_tables(reloc_sections: &mut Vec<MapRegion>, symtab: &mut Option<MapR
         }
     }
 
+    // Remove the symtab and dynsymtab from the reloc list once we're done with the common load logic
+    // The order of the tables mentioned in this list matter
     for region in [dynstr, dynsymtab, symstr, symtab] {
         if let Some(sym) = region {
             sym.dest_addr = reloc_sections.last().unwrap().dest_addr;
@@ -283,13 +271,46 @@ pub fn load_kernel_arch(kernel_base: *const u8, hdr: &Elf64Ehdr) -> ModuleInfo {
     debug!("Loadable segments: {}, Dynamic segment present: {}, Symbol table present: {}, max_alignment: {}, reloc sections:{}, aux_alignment: {}", loadable_segments, 
     dyn_shn.is_some(), symtab.is_some(), max_alignment, reloc_sections.len(), aux_alignment);
 
-    // This is not really needed, but it's here just to make sure
+    // Need the kernel code + data regions to be in sorted order of their dest addr as upcoming logic depends on it
     map_regions_list.sort_by(|a, b| {
         a.dest_addr.cmp(&b.dest_addr)
     });
 
+    let num_reloc_shns = reloc_sections.len();
+    // Push the symbol and dynamic symbol tables onto the relocation list 
+    // Since we're going to apply same operations to both symtab and reloc sections, we're adding symtab into reloc array
+    // to reduce code repetition    
+    if let Some(sym) = &symtab {
+        reloc_sections.push(sym.clone());
+        reloc_sections.push(symstr.as_ref().unwrap().clone());
+    }
+    if let Some(dyntab) = &dynsymtab {
+        reloc_sections.push(dyntab.clone());
+        reloc_sections.push(dynstr.as_ref().unwrap().clone());
+    }
+    
+    // Next, we will calculate the size required to store these auxiliary tables
+    let mut aux_size = 0;
+    for shn in reloc_sections.iter() {
+        aux_size += shn.src_size;
+
+        // Add padding to ensure alignment
+        aux_size += (aux_size as *const u8).align_offset(aux_alignment);
+    }
+
+    // Layout info
+    // 1st we load all the binary code + data regions
+    // 2nd we load the auxiliary tables (reloc shn, symtab, dynsymtab, string shn etc)
+    // 3rd we load an array of descriptors which mentions the locations of the reloc sections within the loaded address space
+
     let last_entry =  map_regions_list.last().unwrap();
-    let mut layout = Layout::from_size_align(last_entry.dest_addr + last_entry.dest_size, max_alignment).unwrap();
+    let main_shn_size = last_entry.dest_addr + last_entry.dest_size;
+    let aux_padding = (main_shn_size as *const u8).align_offset(aux_alignment);
+    let reloc_desc_padding = core::mem::align_of::<MemoryRegion>();
+    let aux_shn_end = aux_padding + main_shn_size + aux_size; 
+    let total_module_size = aux_shn_end + reloc_desc_padding + num_reloc_shns * core::mem::size_of::<MemoryRegion>(); 
+    
+    let mut layout = Layout::from_size_align(total_module_size, max_alignment.max(aux_alignment).max(reloc_desc_padding)).unwrap();
     let load_base = unsafe {
         loader_alloc(layout)
     };
@@ -308,20 +329,12 @@ pub fn load_kernel_arch(kernel_base: *const u8, hdr: &Elf64Ehdr) -> ModuleInfo {
         }
     }
     
-    // Since we're going to apply same operations to both symtab and reloc sections, we're adding symtab into reloc array
-    // to reduce code repetition
-    if let Some(sym) = &symtab {
-        reloc_sections.push(sym.clone());
-        reloc_sections.push(symstr.as_ref().unwrap().clone());
-    }
-    
     if reloc_sections.len() > 0 {
-        reloc_sections.push(dynsymtab.as_ref().unwrap().clone());
-        reloc_sections.push(dynstr.as_ref().unwrap().clone());
-        load_aux_tables(&mut reloc_sections, &mut symtab, &mut symstr, &mut dynsymtab, &mut dynstr, aux_alignment);
+        load_aux_tables(&mut reloc_sections, &mut symtab, &mut symstr, &mut dynsymtab, &mut dynstr, load_base as usize + main_shn_size + aux_padding, aux_alignment);
         apply_relocation(load_base as usize, layout.size(), &reloc_sections);
     }
 
+    // Fill up all output information
     let (sym_tab_out, sym_tab_str) = if let Some(sym) = symtab {
         (Some(ArrayTable {start: sym.dest_addr, size: sym.src_size, entry_size: sym.dest_size}), Some(MemoryRegion{base_address: symstr.as_ref().unwrap().dest_addr, size: symstr.as_ref().unwrap().src_size}))
     }
@@ -343,9 +356,7 @@ pub fn load_kernel_arch(kernel_base: *const u8, hdr: &Elf64Ehdr) -> ModuleInfo {
 
     let reloc_shn_out = if reloc_sections.len() > 0 {
         layout = Layout::array::<MemoryRegion>(reloc_sections.len()).unwrap();
-        let reloc_base = unsafe {
-            loader_alloc(layout)
-        };
+        let reloc_base = load_base as usize + aux_shn_end + reloc_desc_padding;
         let reloc_shns = unsafe {
             core::slice::from_raw_parts_mut(reloc_base as *mut MemoryRegion, reloc_sections.len())
         };
@@ -369,7 +380,8 @@ pub fn load_kernel_arch(kernel_base: *const u8, hdr: &Elf64Ehdr) -> ModuleInfo {
     ModuleInfo {
         entry: hdr.e_entry as usize + load_base as usize,
         base: load_base as usize,
-        size: last_entry.dest_addr + last_entry.dest_size,
+        size: main_shn_size,
+        total_size: total_module_size, 
         sym_tab: sym_tab_out,
         sym_str: sym_tab_str,
         dyn_tab: dyn_sym_tab_out,
