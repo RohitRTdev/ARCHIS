@@ -62,7 +62,8 @@ impl VirtMemConBlk {
         // Track the block with the smallest number of pages that can satisfy above request
         // For kernel pages, make sure that allocated address is above KERNEL_HALF_OFFSET
         for block in self.free_block_list.iter_mut() {
-            if block.num_pages >= pages && (is_user || block.start_virt_address >= KERNEL_HALF_OFFSET) {
+            if block.num_pages >= pages && 
+            ((is_user && block.start_virt_address < KERNEL_HALF_OFFSET) || (!is_user && block.start_virt_address >= KERNEL_HALF_OFFSET)) {
                 if let Some(val) = &smallest_blk {
                     if block.num_pages < val.num_pages {
                         smallest_blk = Some(block);
@@ -94,27 +95,46 @@ impl VirtMemConBlk {
     }
 
     fn coalesce_block(&mut self, addr: usize, num_pages: usize) {
-        let mut found_blk = false; 
+        let mut found_blk = None; 
         let num_size = num_pages * PAGE_SIZE;
         
         // Check if this block can be merged with an existing block
         for blk in self.free_block_list.iter_mut() {
-            // Keep ernel and user blocks separate
+            // Keep kernel and user blocks separate
             if blk.start_virt_address + blk.num_pages * PAGE_SIZE == addr && addr != KERNEL_HALF_OFFSET {
                 blk.num_pages += num_pages;
-                found_blk = true;
+                found_blk = Some(NonNull::from(&*blk));
                 break;
             }
             else if addr + num_size == blk.start_virt_address && blk.start_virt_address != KERNEL_HALF_OFFSET {
                 blk.start_virt_address -= num_size;
                 blk.num_pages += num_pages;
-                found_blk = true;
+                found_blk = Some(NonNull::from(&*blk));
                 break;
             }
         }
-        
-        if !found_blk {
-            // Since if it fails at this point, it's hard to recover
+
+        // Now run same algorithm once more (There could be atmost 2 blocks to which a fragmented block could be merged)        
+        if let Some(blk) = found_blk {
+            let blk_desc = unsafe {blk.as_ref()};
+            let merge_blk = self.free_block_list.iter_mut().find(|item| {
+                (item.start_virt_address + item.num_pages * PAGE_SIZE == blk_desc.start_virt_address && blk_desc.start_virt_address != KERNEL_HALF_OFFSET) || 
+                (blk_desc.start_virt_address + blk_desc.num_pages * PAGE_SIZE == item.start_virt_address && item.start_virt_address != KERNEL_HALF_OFFSET) 
+            });
+
+            // We found one more block to which the new block can be merged
+            // In this case all three blocks are merged as one
+            if let Some(merge_blk_desc) = merge_blk {
+                merge_blk_desc.num_pages += blk_desc.num_pages;
+                merge_blk_desc.start_virt_address = blk_desc.start_virt_address.min(merge_blk_desc.start_virt_address);
+                unsafe {
+                    self.free_block_list.remove_node(blk);
+                }
+            }
+        } 
+        else {
+            // If no block to which the fragmented region can be merged, just create a new block to describe the free region
+            // If it fails at this point, it's hard to recover
             self.free_block_list.add_node(PageDescriptor { num_pages, start_phy_address: 0, start_virt_address: addr as usize, flags: 0 })
             .expect(ERROR_MESSAGE);
         }
@@ -135,16 +155,18 @@ impl VirtMemConBlk {
         // The user only wants to allocate new address in virtual space
         // This is useful when the user already has some physical memory, but needs to map it to some virtual location
         if flags & PageDescriptor::NO_ALLOC != 0 {
+            // Mark block as NO_ALLOC, this tells allocator that user has allocated but it's yet to map this region
+            // Required so that phy-virt and virt-phy translation functions continue to work properly
             self.alloc_block_list.add_node(PageDescriptor { num_pages, start_phy_address: 0, 
-                start_virt_address: virt_addr as usize, flags})
+                start_virt_address: virt_addr as usize, flags: PageDescriptor::NO_ALLOC})
                 .expect(ERROR_MESSAGE);
             
             return Ok(virt_addr);
         }
         // Now we have got virtual address, get physical memory
         let phys_addr = PHY_MEM_CB.get().unwrap().lock().allocate(layout)?;
-
         // Current design choice is such that page_mapper should not fail (Kernel panics if it does)
+        #[cfg(not(test))]
         self.page_mapper.map_memory(virt_addr as usize, phys_addr as usize, num_pages * PAGE_SIZE, flags);
 
         self.alloc_block_list.add_node(PageDescriptor { num_pages, start_phy_address: phys_addr as usize, 
@@ -167,10 +189,12 @@ impl VirtMemConBlk {
         for blk in self.alloc_block_list.iter() {
             if blk.start_virt_address == addr as usize && blk.num_pages == num_pages {
                 alloc_blk = Some(NonNull::from(blk));
+
+                // It is required for the memory being deallocated to have been mapped to physical memory
+                debug_assert!(blk.flags & PageDescriptor::VIRTUAL != 0);
                 break;
             }
         }
-        
         if let Some(blk) = alloc_blk {
             unsafe {
                 self.alloc_block_list.remove_node(blk);
@@ -181,6 +205,7 @@ impl VirtMemConBlk {
             return Err(KError::InvalidArgument);
         } 
 
+        #[cfg(not(test))]
         self.page_mapper.unmap_memory(addr as usize, num_size);
         
         self.coalesce_block(addr as usize, num_pages);
@@ -433,4 +458,78 @@ pub fn virtual_allocator_init() {
     ACTIVE_VIRTUAL_CON_BLK.call_once(|| {
         Spinlock::new(NonNull::from(ADDRESS_SPACES.get().unwrap().lock().first().unwrap()))
     });    
+}
+
+
+#[cfg(test)]
+pub fn virtual_allocator_test() {
+    let mut allocator = VirtMemConBlk::new();
+
+    // Check allocating from user memory
+    let layout = Layout::from_size_align(10 * PAGE_SIZE, 4096).unwrap();
+    let ptr = allocator.allocate(layout, PageDescriptor::VIRTUAL | PageDescriptor::USER).unwrap();
+
+    assert_eq!(ptr as usize, 4096);
+    assert!(allocator.free_block_list.get_nodes() == 2 && allocator.free_block_list.first().unwrap().start_virt_address == 11 * PAGE_SIZE);
+
+    let ptr1 = allocator.allocate(layout, PageDescriptor::VIRTUAL | PageDescriptor::USER).unwrap();
+    assert_eq!(ptr1 as usize, 11 * PAGE_SIZE);
+
+    let ptr2 = allocator.allocate(layout, PageDescriptor::VIRTUAL | PageDescriptor::USER).unwrap();
+    assert_eq!(ptr2 as usize, 21 * PAGE_SIZE);
+
+    allocator.deallocate(ptr1, layout).unwrap();
+    assert_eq!(allocator.free_block_list.get_nodes(), 3);    
+    let nodes = [31 * PAGE_SIZE, KERNEL_HALF_OFFSET, 11 * common::PAGE_SIZE];
+    allocator.free_block_list.iter().zip(nodes).for_each(|(blk, address)| {
+        assert_eq!(blk.start_virt_address, address);
+    });
+
+    // Check coalescing
+    allocator.deallocate(ptr, layout).unwrap();
+    assert_eq!(allocator.free_block_list.get_nodes(), 3);
+    let nodes = [31 * PAGE_SIZE, KERNEL_HALF_OFFSET, common::PAGE_SIZE];
+    allocator.free_block_list.iter().zip(nodes).for_each(|(blk, address)| {
+        assert_eq!(blk.start_virt_address, address);
+    });
+
+    assert!(allocator.deallocate(ptr1, layout).is_err_and(|e| {
+        e == KError::InvalidArgument
+    }));
+
+    allocator.deallocate(ptr2, layout).unwrap();
+    assert_eq!(allocator.free_block_list.get_nodes(), 2);
+    
+    let nodes = [KERNEL_HALF_OFFSET, PAGE_SIZE];
+    allocator.free_block_list.iter().zip(nodes).for_each(|(blk, address)| {
+        assert_eq!(blk.start_virt_address, address);
+    });
+
+    // Try allocating from kernel memory and checking
+    let ptr = allocator.allocate(layout, PageDescriptor::VIRTUAL).unwrap();
+    assert_eq!(ptr as usize, KERNEL_HALF_OFFSET);
+
+    let ptr1 = allocator.allocate(layout, PageDescriptor::VIRTUAL).unwrap();
+    assert_eq!(ptr1 as usize, KERNEL_HALF_OFFSET + 10 * PAGE_SIZE);
+    assert_eq!(allocator.free_block_list.get_nodes(), 2);
+    
+    let nodes = [KERNEL_HALF_OFFSET + 20 * PAGE_SIZE, common::PAGE_SIZE];
+    allocator.free_block_list.iter().zip(nodes).for_each(|(blk, address)| {
+        assert_eq!(blk.start_virt_address, address);
+    });
+
+    allocator.deallocate(ptr, layout).unwrap();
+    assert_eq!(allocator.free_block_list.get_nodes(), 3);
+    let nodes = [KERNEL_HALF_OFFSET + 20 * PAGE_SIZE, common::PAGE_SIZE, KERNEL_HALF_OFFSET];
+    allocator.free_block_list.iter().zip(nodes).for_each(|(blk, address)| {
+        assert_eq!(blk.start_virt_address, address);
+    });
+
+    // Back to square 1
+    allocator.deallocate(ptr1, layout).unwrap();
+    assert_eq!(allocator.free_block_list.get_nodes(), 2);
+    let nodes = [PAGE_SIZE, KERNEL_HALF_OFFSET];
+    allocator.free_block_list.iter().zip(nodes).for_each(|(blk, address)| {
+        assert_eq!(blk.start_virt_address, address);
+    });
 }

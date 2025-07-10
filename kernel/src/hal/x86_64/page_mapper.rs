@@ -32,6 +32,7 @@ const RECURSIVE_SLOT: u64 = 511;
 const TOTAL_ENTRIES: usize = 512;
 
 impl PageMapper {
+    #[cfg(not(test))]
     pub fn new() -> Self {
         let layout = Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap();
         let pml4 = mem::allocate_memory(layout, mem::PageDescriptor::VIRTUAL)
@@ -53,7 +54,14 @@ impl PageMapper {
             is_current: false
         }
     }
-    
+
+    #[cfg(test)]
+    pub fn new() -> Self {
+        Self {
+            pml4_phys: 0,
+            is_current: false
+        }
+    }
     
     pub fn map_memory(&mut self, virt_addr: usize, phys_addr: usize, size: usize, flags: u8) {
         let num_pages = ceil_div(size, PAGE_SIZE);

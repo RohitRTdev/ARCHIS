@@ -9,12 +9,13 @@ use crate::{hal, CUR_STACK_BASE};
 use crate::module::*;
 
 static GLOBAL_PANIC_LOCK: Spinlock<bool> = Spinlock::new(false);
+const STACK_UNWIND_DEPTH: usize = 16;
 
 fn common_panic_handler(mod_name: &str, info: &PanicInfo) -> ! {
     let _sync = GLOBAL_PANIC_LOCK.lock();
     logger::set_panic_mode();
     let stack_base = *CUR_STACK_BASE.lock();
-    let mut unwind_list: [usize; 8] = [0; 8];
+    let mut unwind_list: [usize; STACK_UNWIND_DEPTH] = [0; STACK_UNWIND_DEPTH];
 
     println!("Kernel panic!!");
     println!("Message: {}", info.message());
@@ -24,7 +25,7 @@ fn common_panic_handler(mod_name: &str, info: &PanicInfo) -> ! {
     {
         println!("Callstack:");
 
-        let actual_depth = hal::unwind_stack(8, stack_base, unwind_list.as_mut_slice());
+        let actual_depth = hal::unwind_stack(STACK_UNWIND_DEPTH, stack_base, unwind_list.as_mut_slice());
         let start_depth = if mod_name == env!("CARGO_PKG_NAME") { 3 } else { 4 };
         for addr in start_depth..actual_depth {
             if unwind_list[addr] != 0 {

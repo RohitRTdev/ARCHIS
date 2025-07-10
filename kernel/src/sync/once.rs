@@ -29,8 +29,11 @@ impl<T> Once<T> {
     {
         self.guard.lock();
         unsafe {
-            *self.value.get() = Some(init());
-            *self.is_init.get() = true;
+            // Don't do anything if value is already initialized
+            if !*self.is_init.get() {
+                *self.value.get() = Some(init());
+                *self.is_init.get() = true;
+            } 
         }
         self.guard.unlock();
     }

@@ -21,9 +21,15 @@ pub struct VirtAddr(u64);
 pub struct PhysAddr(u64);
 
 impl VirtAddr {
+    #[cfg(not(test))]
     pub fn new(addr: usize) -> Self {
         // Virtual address in AMD/Intel for 64 bit mode is 48 bits. All upper bits must match 47th bit
         Self (canonicalize(addr as u64, 47))
+    }
+    
+    #[cfg(test)]
+    pub fn new(addr: usize) -> Self {
+        Self(addr as u64)
     }
 
     pub fn get(&self) -> usize {
@@ -32,8 +38,14 @@ impl VirtAddr {
 }
 
 impl PhysAddr {
+    #[cfg(not(test))]
     pub fn new(addr: usize) -> Self {
         Self (canonicalize(addr as u64, CPU_FEATURES.get().unwrap().lock().phy_addr_width - 1))
+    }
+    
+    #[cfg(test)]
+    pub fn new(addr: usize) -> Self {
+        Self(addr as u64)
     }
 
     pub fn get(&self) -> usize {

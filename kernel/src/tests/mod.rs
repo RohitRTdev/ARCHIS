@@ -1,6 +1,8 @@
 use core::{alloc::Layout, ptr::NonNull};
 use std::{sync::{Arc, Mutex, OnceLock}};
 
+use common::{test_log, PAGE_SIZE};
+
 use crate::{ds::*, error::KError, mem};
 
 tests::init_test_logger!(aris);
@@ -137,27 +139,27 @@ fn phy_alloc_test() {
 
     mem::test_init_allocator();
 
-    //Initially we have (10 + 2 + 5) - ()
-    let layout = Layout::from_size_align(8192, 4096).unwrap();
+    // Initially we have (10 + 2 + 6) - ()
+    let layout = Layout::from_size_align(2 * common::PAGE_SIZE, 4096).unwrap();
     let addr = mem::allocate_memory(layout, 0).unwrap();
 
-    // Now we should have (10 + 5) - (2)
-    assert_eq!(addr as usize, 0x10);
+    // Now we should have (10 + 6) - (2)
+    assert_eq!(addr as usize, 20 * common::PAGE_SIZE);
     
     let layout = Layout::from_size_align(5 * common::PAGE_SIZE + 32, 4096).unwrap();
     let addr = mem::allocate_memory(layout, 0).unwrap();
 
-    // Now we should have (4 + 5) - (6 + 2)
-    assert_eq!(addr as usize, 0x0);
+    // Now we should have (10) - (6 + 2)
+    assert_eq!(addr as usize, 40 * common::PAGE_SIZE);
 
     let layout = Layout::from_size_align(common::PAGE_SIZE + 32, 4096).unwrap();
     let addr = mem::allocate_memory(layout, 0).unwrap();
 
-    // Now we should have (2 + 5) - (2 + 6 + 2)
-    assert_eq!(addr as usize, 6 * common::PAGE_SIZE);
+    // Now we should have (8) - (2 + 6 + 2)
+    assert_eq!(addr as usize, 0);
     
     
-    let layout = Layout::from_size_align(5 * common::PAGE_SIZE + 16, 4096).unwrap();
+    let layout = Layout::from_size_align(8 * common::PAGE_SIZE + 16, 4096).unwrap();
     let addr = mem::allocate_memory(layout, 0);
 
     assert!(addr.is_err_and(|e| {
@@ -174,9 +176,16 @@ fn phy_alloc_test() {
     let layout_dealloc = Layout::from_size_align(4 * common::PAGE_SIZE, 4096).unwrap();
     let addr = mem::allocate_memory(layout_dealloc, 0).unwrap();
 
-    // Now we should have (2 + 1) - (2 + 6 + 2 + 4)
-    assert_eq!(addr as usize, 0x20);
-
+    // Now we should have (4) - (2 + 6 + 2 + 4)
+    assert_eq!(addr as usize, 2 * common::PAGE_SIZE);
     mem::deallocate_memory(addr, layout_dealloc, 0).unwrap();
     mem::check_mem_nodes();
+}
+
+#[test]
+fn virt_alloc_test() {
+    let _guard = get_test_lock().lock().unwrap();
+    mem::clear_heap();
+    mem::test_init_allocator_for_virtual();
+    mem::virtual_allocator_test();
 }

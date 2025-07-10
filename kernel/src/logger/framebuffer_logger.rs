@@ -210,7 +210,7 @@ impl FramebufferLogger {
                         let is_set = (glyph_byte & (1 << bit_index)) != 0;
                         
                         if is_set {
-                            self.set_pixel(pixel_x, pixel_y, 0xFFFFFF); // White
+                            self.set_pixel(pixel_x, pixel_y, 0xAAAAAA); // Grey
                         } else {
                             self.set_pixel(pixel_x, pixel_y, 0x000000); // Black
                         }

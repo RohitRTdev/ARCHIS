@@ -78,8 +78,6 @@ impl PhyMemConBlk {
         }
 
         let num_pages = common::ceil_div(layout.size(), PAGE_SIZE);
-        let num_size = num_pages * PAGE_SIZE;
-        let mut found_blk = false;
 
         // Remove node from alloc_block_list
         let mut alloc_blk = None;
@@ -100,30 +98,51 @@ impl PhyMemConBlk {
             return Err(KError::InvalidArgument);
         } 
         
-        // Check if this block can be coaleasced with an existing block
+        let mut found_blk = None; 
+        let num_size = num_pages * PAGE_SIZE;
+        let addr = addr as usize;
+        
+        // Check if this block can be merged with an existing block
         for blk in self.free_block_list.iter_mut() {
-            if blk.start_phy_address + blk.num_pages * PAGE_SIZE == addr as usize {
+            if blk.start_phy_address + blk.num_pages * PAGE_SIZE == addr {
                 blk.num_pages += num_pages;
-                found_blk = true;
+                found_blk = Some(NonNull::from(&*blk));
                 break;
             }
-            else if unsafe {addr.add(num_size)} as usize == blk.start_phy_address {
+            else if addr + num_size == blk.start_phy_address {
                 blk.start_phy_address -= num_size;
                 blk.num_pages += num_pages;
-                found_blk = true;
+                found_blk = Some(NonNull::from(&*blk));
                 break;
             }
         }
 
+        // Now run same algorithm once more (There could be atmost 2 blocks to which a fragmented block could be merged)        
+        if let Some(blk) = found_blk {
+            let blk_desc = unsafe {blk.as_ref()};
+            let merge_blk = self.free_block_list.iter_mut().find(|item| {
+                (item.start_phy_address + item.num_pages * PAGE_SIZE == blk_desc.start_phy_address) || 
+                (blk_desc.start_phy_address + blk_desc.num_pages * PAGE_SIZE == item.start_phy_address) 
+            });
 
-        if !found_blk {
-            self.free_block_list.add_node(PageDescriptor { num_pages, start_phy_address: addr as usize, start_virt_address: 0, flags: 0 })
-            .expect("System in bad state. Critical memory failure");
+            // We found one more block to which the new block can be merged
+            // In this case all three blocks are merged as one
+            if let Some(merge_blk_desc) = merge_blk {
+                merge_blk_desc.num_pages += blk_desc.num_pages;
+                merge_blk_desc.start_phy_address = blk_desc.start_phy_address.min(merge_blk_desc.start_phy_address);
+                unsafe {
+                    self.free_block_list.remove_node(blk);
+                }
+            }
+        } 
+        else {
+            // If no block to which the fragmented region can be merged, just create a new block to describe the free region
+            // If it fails at this point, it's hard to recover
+            self.free_block_list.add_node(PageDescriptor { num_pages, start_phy_address: addr, start_virt_address: 0, flags: 0 })
+            .expect("System in bad state. Critical memory failure!");
         }
-
         Ok(())
     }
-
 }
 
 
@@ -184,54 +203,88 @@ pub fn frame_allocator_init() {
 
 #[cfg(test)] 
 pub fn test_init_allocator() {
-    PHY_MEM_CB.call_once(|| {
-        let desc1 = PageDescriptor {
-            num_pages: 10,
-            start_phy_address: 0x0,
-            start_virt_address: 0x0,
-            flags: 0x0
-        };
+    let desc1 = PageDescriptor {
+        num_pages: 10,
+        start_phy_address: 0x0,
+        start_virt_address: 0x0,
+        flags: 0x0
+    };
 
-        let desc2 = PageDescriptor {
-            num_pages: 2,
-            start_phy_address: 0x10,
-            start_virt_address: 0x0,
-            flags: 0x0
-        };
+    let desc2 = PageDescriptor {
+        num_pages: 2,
+        start_phy_address: 20 * PAGE_SIZE,
+        start_virt_address: 0x0,
+        flags: 0x0
+    };
 
-        let desc3 = PageDescriptor {
-            num_pages: 5,
-            start_phy_address: 0x20,
-            start_virt_address: 0x0,
-            flags: 0x0
-        };
-        
-        let mut free_block_list= List::new();
-        free_block_list.add_node(desc1).unwrap();
-        free_block_list.add_node(desc2).unwrap();
-        free_block_list.add_node(desc3).unwrap();
+    let desc3 = PageDescriptor {
+        num_pages: 6,
+        start_phy_address: 40 * PAGE_SIZE,
+        start_virt_address: 0x0,
+        flags: 0x0
+    };
+    
+    let mut free_block_list= List::new();
+    free_block_list.add_node(desc1).unwrap();
+    free_block_list.add_node(desc2).unwrap();
+    free_block_list.add_node(desc3).unwrap();
 
-        let cb = PhyMemConBlk {
-            total_memory: 17 * PAGE_SIZE,
-            avl_memory: 17 * PAGE_SIZE,
-            free_block_list,
-            alloc_block_list: List::new()
-        };
+    let cb = PhyMemConBlk {
+        total_memory: 18 * PAGE_SIZE,
+        avl_memory: 18 * PAGE_SIZE,
+        free_block_list,
+        alloc_block_list: List::new()
+    };
 
-        Spinlock::new(cb)
-    });
+    if let Some(val) = PHY_MEM_CB.get() {
+        *val.lock() = cb;
+    }
+    else {
+        PHY_MEM_CB.call_once(|| {
+            Spinlock::new(cb)
+        });
+    }
+}
+
+#[cfg(test)]
+pub fn test_init_allocator_for_virtual() {
+    let desc = PageDescriptor {
+        num_pages: 100,
+        start_phy_address: 0xf000,
+        start_virt_address: 0x0,
+        flags: 0x0
+    };
+
+    let mut free_block_list= List::new();
+    free_block_list.add_node(desc).unwrap();
+
+    let cb = PhyMemConBlk {
+        total_memory: 100 * PAGE_SIZE,
+        avl_memory: 100 * PAGE_SIZE,
+        free_block_list,
+        alloc_block_list: List::new()
+    };
+
+    if let Some(val) = PHY_MEM_CB.get() {
+        *val.lock() = cb;
+    }
+    else {
+        PHY_MEM_CB.call_once(|| {
+            Spinlock::new(cb)
+        });
+    }
 }
 
 #[cfg(test)]
 pub fn check_mem_nodes() {
 
-    // We should have (2 + 5) - (2 + 6 + 2) layout
+    // We should have (8) - (2 + 6 + 2) layout
     let allocator = PHY_MEM_CB.get().unwrap().lock();
 
-    assert_eq!(allocator.free_block_list.get_nodes(), 2);
+    assert_eq!(allocator.free_block_list.get_nodes(), 1);
     assert_eq!(allocator.alloc_block_list.get_nodes(), 3);
 
-    let free_list = [2, 5];
+    let free_list = [8];
     let alloc_list = [2, 6, 2];
 
     common::test_log!("Printing free_block_list....");
