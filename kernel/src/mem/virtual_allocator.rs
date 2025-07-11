@@ -219,7 +219,7 @@ impl VirtMemConBlk {
         for blk in self.alloc_block_list.iter() {
             if blk.start_virt_address >= virt_addr && blk.start_virt_address + blk.num_pages * PAGE_SIZE < virt_addr
             && blk.flags & PageDescriptor::VIRTUAL != 0 {
-                return Some(hal::canonicalize_physical(blk.start_phy_address + virt_addr - blk.start_virt_address));
+                return Some(blk.start_phy_address + virt_addr - blk.start_virt_address);
             }
         }
 
@@ -401,7 +401,7 @@ pub fn get_physical_address(virt_addr: usize) -> Option<usize> {
     }
     else {
         // Since virtual_mem = physical_mem
-        Some(hal::canonicalize_physical(virt_addr))
+        Some(virt_addr)
     }
 }
 

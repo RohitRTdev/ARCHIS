@@ -22,11 +22,12 @@ pub struct CPUFeatures {
     pub smep: bool,
     pub smap: bool,
     pub pge: bool,
+    pub mtrr: bool,
 
     pub phy_addr_width: u8
 }
 
-const FEATURE_MAP: [FeatureDescriptor; 8] = [
+const FEATURE_MAP: [FeatureDescriptor; 9] = [
     FeatureDescriptor {
         fn_num: 0x1,
         ext_fn_num: 0,
@@ -89,6 +90,15 @@ const FEATURE_MAP: [FeatureDescriptor; 8] = [
         bit_idx: 13,
         is_required: FeatureState::NotRequired(|val| {
             val.pge = true;
+        })
+    },
+    FeatureDescriptor {
+        fn_num: 0x1,
+        ext_fn_num: 0,
+        reg_idx: 3,
+        bit_idx: 12,
+        is_required: FeatureState::NotRequired(|val| {
+            val.mtrr = true;
         })
     }
 ];

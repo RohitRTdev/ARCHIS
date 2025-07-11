@@ -1,30 +1,15 @@
 use super::asm;
-use crate::hal::x86_64::features::CPU_FEATURES;
 use crate::logger::debug;
-
-#[inline(always)]
-fn canonicalize(mut addr: u64, last_bit: u8) -> u64 {
-    if addr & (1 << last_bit) != 0 {
-        addr |= (0xffff as u64) << (last_bit + 1);
-    }
-    else {
-        addr &= !((0xffff as u64) << (last_bit + 1));
-    }
-
-    addr
-}
 
 #[derive(Debug, Clone, Copy)]
 pub struct VirtAddr(u64);
 
-#[derive(Debug, Clone, Copy)]
-pub struct PhysAddr(u64);
-
 impl VirtAddr {
     #[cfg(not(test))]
+    #[inline(always)]
     pub fn new(addr: usize) -> Self {
         // Virtual address in AMD/Intel for 64 bit mode is 48 bits. All upper bits must match 47th bit
-        Self (canonicalize(addr as u64, 47))
+        Self (Self::canonicalize(addr as u64, 47))
     }
     
     #[cfg(test)]
@@ -32,29 +17,22 @@ impl VirtAddr {
         Self(addr as u64)
     }
 
+    #[inline(always)]
+    fn canonicalize(mut addr: u64, last_bit: u8) -> u64 {
+        if addr & (1 << last_bit) != 0 {
+            addr |= (0xffff as u64) << (last_bit + 1);
+        }
+        else {
+            addr &= !((0xffff as u64) << (last_bit + 1));
+        }
+
+        addr
+    }
+
+    #[inline(always)]
     pub fn get(&self) -> usize {
         self.0 as usize
     }
-}
-
-impl PhysAddr {
-    #[cfg(not(test))]
-    pub fn new(addr: usize) -> Self {
-        Self (canonicalize(addr as u64, CPU_FEATURES.get().unwrap().lock().phy_addr_width - 1))
-    }
-    
-    #[cfg(test)]
-    pub fn new(addr: usize) -> Self {
-        Self(addr as u64)
-    }
-
-    pub fn get(&self) -> usize {
-        self.0 as usize
-    }
-}
-
-pub fn canonicalize_physical(addr: usize) -> usize {
-    PhysAddr::new(addr).get()
 }
 
 pub fn canonicalize_virtual(addr: usize) -> usize {

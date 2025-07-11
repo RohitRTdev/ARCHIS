@@ -1,6 +1,6 @@
 use core::alloc::Layout;
 use crate::{hal::x86_64::features::CPU_FEATURES, mem};
-use crate::hal::{VirtAddr, PhysAddr};
+use crate::hal::VirtAddr;
 use crate::logger::info;
 use common::{align_down, ceil_div, en_flag, PAGE_SIZE};
 use super::asm;
@@ -45,8 +45,7 @@ impl PageMapper {
         unsafe {
             let raw_addr = pml4 as *mut u64;
             raw_addr.write_bytes(0, TOTAL_ENTRIES);
-            *raw_addr.add(RECURSIVE_SLOT as usize) = PhysAddr::new(
-                ((pml4_phy as u64 & PTE::PHY_ADDR_MASK) | PTE::U | PTE::PWT | PTE::RW | PTE::P) as usize).get() as u64; 
+            *raw_addr.add(RECURSIVE_SLOT as usize) = (pml4_phy as u64 & PTE::PHY_ADDR_MASK) | PTE::U | PTE::PWT | PTE::RW | PTE::P; 
         }
 
         Self {
@@ -126,7 +125,7 @@ impl PageMapper {
         let pd = self.get_or_alloc_table(pdpt, pdpt_idx, PageLevel::PD, pdpt_idx, pd_idx, 0);
         let pt = self.get_or_alloc_table(pd, pd_idx, PageLevel::PT, pdpt_idx, pd_idx, pt_idx);
         
-        pt[pt_idx] = (PhysAddr::new(phys_addr as usize).get() as u64 & PTE::PHY_ADDR_MASK) | en_flag!(is_user, PTE::U) | 
+        pt[pt_idx] = (phys_addr & PTE::PHY_ADDR_MASK) | en_flag!(is_user, PTE::U) | 
         en_flag!(!is_user && CPU_FEATURES.get().unwrap().lock().pge, PTE::G) 
         | PTE::RW | PTE::P; 
         
@@ -161,7 +160,7 @@ impl PageMapper {
             let addr = self.allocate_page_table();
             
             // Map the physical address to the upper level table
-            table[idx] = (PhysAddr::new(addr.1).get() as u64 & PTE::PHY_ADDR_MASK)
+            table[idx] = addr.1 as u64 & PTE::PHY_ADDR_MASK
             | PTE::U | PTE::PWT | PTE::P | PTE::RW;
             Some(addr)
         }

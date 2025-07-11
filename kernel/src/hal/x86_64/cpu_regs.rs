@@ -1,14 +1,17 @@
 use core::marker::PhantomData;
 
 use super::{asm, features};
-use crate::logger::debug;
+use crate::{logger::{debug, info}, BOOT_INFO};
 use common::en_flag;
 
 pub struct CR0;
 pub struct CR4;
 pub struct RFLAGS;
 pub struct EFER;
-
+pub struct MTRRCAP;
+pub struct MTRRPHY;
+pub struct MTRRPHYMASK;
+pub struct MTRRDEF;
 struct CPUReg<T: Reg> {
     _mark: PhantomData<T>
 }
@@ -114,6 +117,27 @@ impl EFER {
     pub const LMA: u64 = 1 << 10;
 }
 
+impl MTRRCAP {
+    pub const ADDRESS: u32 = 0xFE;
+    pub const VAR_REG_CNT_MASK: u64 = 0xff;
+    pub const FIX_RNG_REG: u64 = 1 << 8;
+    pub const WC: u64 = 1 << 10;
+}
+
+impl MTRRPHY {
+    pub const ADDRESS: u32 = 0x200;
+}
+
+impl MTRRPHYMASK {
+    pub const ADDRESS: u32 = 0x201;
+    pub const VALID: u64 = 1 << 11;
+}
+
+impl MTRRDEF {
+    pub const ADDRESS: u32 = 0x2FF;
+    pub const MTRR_ENABLE: u64 = 1 << 11;
+}
+
 
 #[cfg(debug_assertions)]
 fn log_registers() {
@@ -132,6 +156,53 @@ pub fn init() {
 
         CPUReg::<EFER>::init(EFER::SCE | EFER::LME | EFER::LMA);
         CPUReg::<RFLAGS>::clear(RFLAGS::IOPL | RFLAGS::AC);
+    }
+
+    if features.mtrr {
+        // Set video memory to WC caching type and disable remaining variable mtrr's
+        let mtrr_cap = unsafe {
+            asm::rdmsr(MTRRCAP::ADDRESS)
+        };
+
+        let wc_support = mtrr_cap & MTRRCAP::WC != 0;
+        let mut var_reg_cnt = mtrr_cap & MTRRCAP::VAR_REG_CNT_MASK;
+        let mut var_reg_offset = MTRRPHYMASK::ADDRESS;
+
+        info!("Total MTRR variable counters = {}, WC support={}", var_reg_cnt, wc_support);
+        if wc_support && var_reg_cnt > 0 {
+            let fb_cb = BOOT_INFO.get().unwrap().lock();
+            let fb_base = fb_cb.framebuffer_desc.fb.base_address;
+            let fb_size = fb_cb.framebuffer_desc.fb.size;
+            
+            let mask = ((1 << features.phy_addr_width) - 1 - (fb_base + fb_size - 1)) as u64 & !0xfff; 
+
+            // Type 1 -> WC encoding + physical address
+            let vid_mtrr_data: u64 = (fb_base as u64 & !0xfff) | 0x1;
+            let vid_mtrr_mask_data: u64 = mask | MTRRPHYMASK::VALID;
+
+            info!("Setting MTRRPHY0 with WC encoding, phy_data={:#X} and mask={:#X}", vid_mtrr_data, vid_mtrr_mask_data); 
+            unsafe {
+                asm::wrmsr(MTRRPHY::ADDRESS, vid_mtrr_data);
+                asm::wrmsr(MTRRPHYMASK::ADDRESS, vid_mtrr_mask_data);
+            }
+
+            var_reg_cnt -= 1;
+            var_reg_offset += 2;
+        }
+
+        while var_reg_cnt > 0 {
+            unsafe {
+                // Disable all remaining mtrr's
+                asm::wrmsr(var_reg_offset, 0);
+            }
+            var_reg_offset += 2;
+            var_reg_cnt -= 1;
+        } 
+
+        unsafe {
+            // Set default memory region range to WB and disable fixed mtrr's
+            asm::wrmsr(MTRRDEF::ADDRESS, MTRRDEF::MTRR_ENABLE | 0x6)
+        }
     }
 
 #[cfg(debug_assertions)]
