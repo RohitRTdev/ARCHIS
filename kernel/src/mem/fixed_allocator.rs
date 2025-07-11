@@ -6,7 +6,7 @@ use common::{ceil_div, ptr_to_usize, MemoryRegion, PAGE_SIZE};
 use crate::error::KError;
 use crate::sync::Spinlock;
 use crate::logger::info;
-use crate::{RemapEntry, REMAP_LIST};
+use crate::{RemapEntry, RemapType::*, REMAP_LIST};
 
 #[repr(usize)]
 pub enum Regions {
@@ -251,6 +251,6 @@ pub fn fixed_allocator_init() {
             base_address: ptr_to_usize(&HEAP),
             size: mem::size_of::<HeapWrapper>() 
         },
-        is_identity_mapped: true
+        map_type: IdentityMapped
     }).unwrap();
 }

@@ -1,5 +1,5 @@
 use common::{MemType, MemoryDesc, PAGE_SIZE};
-use crate::{ds::*, RemapEntry, BOOT_INFO, REMAP_LIST};
+use crate::{ds::*, RemapEntry, RemapType::*, BOOT_INFO, REMAP_LIST};
 use crate::sync::{Once, Spinlock};
 use crate::error::KError;
 use crate::logger::{info, debug};
@@ -186,7 +186,7 @@ pub fn frame_allocator_init() {
                     if desc.mem_type == MemType::Runtime {
                         REMAP_LIST.lock().add_node(RemapEntry { 
                             value: desc.val,
-                            is_identity_mapped: true }).unwrap();
+                            map_type: IdentityMapped }).unwrap();
                     }
             }
         }

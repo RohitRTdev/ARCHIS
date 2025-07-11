@@ -3,7 +3,8 @@ use crate::sync::{Once, Spinlock};
 use crate::hal::{self, PageMapper};
 use crate::ds::*;
 use crate::error::KError;
-use crate::logger::{info, debug};
+use crate::logger::info;
+use crate::{RemapEntry, RemapType::*};
 use core::alloc::Layout;
 use core::ptr::NonNull;
 use common::{ceil_div, en_flag, PAGE_SIZE};
@@ -425,7 +426,7 @@ pub fn virtual_allocator_init() {
     // In case, identity mapped region straddles the kernel upper half, the checks within function will halt kernel
     // We can take it up later
     remap_list.iter().filter(|item| {
-        item.is_identity_mapped
+        item.map_type == IdentityMapped
     }).for_each(|item| {
         info!("Identity mapping region of size:{} with physical address:{:#X}", 
         item.value.size, item.value.base_address);
@@ -436,7 +437,7 @@ pub fn virtual_allocator_init() {
 
     // Now map remaining set of regions onto upper half of memory
     remap_list.iter().filter(|item| {
-        !item.is_identity_mapped
+        item.map_type != IdentityMapped
     }).for_each(|item| {
         let layout = Layout::from_size_align(item.value.size, PAGE_SIZE).unwrap();
         let virt_addr = kernel_addr_space.allocate(layout, PageDescriptor::VIRTUAL | PageDescriptor::NO_ALLOC)
@@ -446,6 +447,11 @@ pub fn virtual_allocator_init() {
         item.value.size, item.value.base_address, virt_addr);
 
         kernel_addr_space.map_memory(item.value.base_address, virt_addr, item.value.size, false).unwrap();
+        
+        // Update user of new location
+        if let OffsetMapped(f) = &item.map_type {
+            f(virt_addr);
+        }
     });
 
     ADDRESS_SPACES.call_once(|| {
@@ -475,7 +481,7 @@ pub fn virtual_allocator_test() {
     let ptr1 = allocator.allocate(layout, PageDescriptor::VIRTUAL | PageDescriptor::USER).unwrap();
     assert_eq!(ptr1 as usize, 11 * PAGE_SIZE);
 
-    let ptr2 = allocator.allocate(layout, PageDescriptor::VIRTUAL | PageDescriptor::USER).unwrap();
+    let ptr2: *mut u8 = allocator.allocate(layout, PageDescriptor::VIRTUAL | PageDescriptor::USER).unwrap();
     assert_eq!(ptr2 as usize, 21 * PAGE_SIZE);
 
     allocator.deallocate(ptr1, layout).unwrap();

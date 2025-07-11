@@ -104,6 +104,17 @@ impl<T, A: Allocator<ListNode<T>>> List<T, A> {
         }
     }
 
+    pub fn first_mut(&mut self) -> Option<&mut ListNode<T>> {
+        if self.head.is_none() {
+            None
+        }
+        else {
+            unsafe {
+                Some(&mut *self.head.unwrap())
+            }
+        }
+    }
+
     pub fn add_node(&mut self, data: T) -> Result<(), KError> {
         let layout = Layout::from_size_align(size_of::<ListNode<T>>(), align_of::<ListNode<T>>()).unwrap();
         let addr = A::alloc(layout)?.as_ptr();

@@ -30,17 +30,22 @@ struct Stack {
     _guard_page: [u8; PAGE_SIZE]
 }
 
+#[derive(Debug, PartialEq)]
+enum RemapType {
+    IdentityMapped,
+    OffsetMapped(fn(usize))
+}
+
 #[derive(Debug)]
 struct RemapEntry {
     value: MemoryRegion,
-    is_identity_mapped: bool
+    map_type: RemapType
 }
 
 static KERN_INIT_STACK: Stack = Stack {
     stack: [0; KERN_INIT_STACK_SIZE],
     _guard_page: [0; PAGE_SIZE]
 };
-
 
 static REMAP_LIST: Spinlock<List<RemapEntry, FixedAllocator<ListNode<RemapEntry>, {Region3 as usize}>>> = Spinlock::new(List::new());
 static CUR_STACK_BASE: Spinlock<usize> = Spinlock::new(0);

@@ -1,5 +1,6 @@
 use crate::sync::Spinlock;
-use crate::{RemapEntry, BOOT_INFO, REMAP_LIST};
+use crate::{RemapEntry, RemapType::*, BOOT_INFO, REMAP_LIST};
+use crate::logger::debug;
 use common::{ceil_div, MemoryRegion};
 
 const PSF_MAGIC: u32 = 0x864AB572;
@@ -275,6 +276,8 @@ pub fn init() {
             base_address: logger.fb_base as usize,
             size: logger.height * logger.stride * 4
         },
-        is_identity_mapped: false
+        map_type: OffsetMapped(|new_fb_base| {
+            debug!("Framebuffer relocated to new base:{:#X}", new_fb_base);
+        })
     }).unwrap();
 }
