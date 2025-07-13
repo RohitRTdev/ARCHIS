@@ -1,6 +1,7 @@
+use crate::mem::MapFetchType;
 use crate::sync::Spinlock;
 use crate::{RemapEntry, RemapType::*, BOOT_INFO, REMAP_LIST};
-use crate::logger::debug;
+use crate::debug;
 use common::{ceil_div, MemoryRegion};
 
 const PSF_MAGIC: u32 = 0x864AB572;
@@ -278,6 +279,15 @@ pub fn init() {
         },
         map_type: OffsetMapped(|new_fb_base| {
             debug!("Framebuffer relocated to new base:{:#X}", new_fb_base);
+            // Do not change framebuffer address here. We will do it right before switching to new address space
         })
     }).unwrap();
+}
+
+pub fn relocate() {
+    let mut logger = FRAMEBUFFER_LOGGER.lock();
+    let new_fb_base = crate::mem::get_virtual_address(logger.fb_base as usize, MapFetchType::Any).expect("Could not find virtual address for boot display framebuffer");
+    let new_font_glyph_ptr = crate::mem::get_virtual_address(logger.font_glyphs as usize, MapFetchType::Kernel).expect("Could not find virtual address for boot font glyphs");
+    logger.fb_base = new_fb_base as *mut u8;
+    logger.font_glyphs = new_font_glyph_ptr as *const u8;
 }

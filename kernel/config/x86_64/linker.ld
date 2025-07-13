@@ -5,7 +5,7 @@ SECTIONS {
     .text ALIGN(0x1000): {
         KEEP(*(.text*))
     }
-
+    
     .rodata ALIGN(0x1000): {
         *(.rodata*)
     }
@@ -44,7 +44,6 @@ SECTIONS {
     .plt ALIGN(0x1000): {
         *(.plt) 
     }
-    
     
     /DISCARD/ : {
         *(.comment)

@@ -5,8 +5,7 @@ use core::fmt::Write;
 use serial_logger::SERIAL;
 use framebuffer_logger::FRAMEBUFFER_LOGGER;
 use crate::sync::Spinlock;
-
-pub use log::{debug, info};
+pub use framebuffer_logger::relocate;
 
 #[macro_export]
 macro_rules! println {
@@ -36,6 +35,27 @@ macro_rules! println {
     };
 }
 
+#[macro_export]
+macro_rules! info {
+    ($($arg:tt)*) => {
+        $crate::println!("[INFO]: {}", format_args!($($arg)*));
+    };
+}
+
+#[cfg(debug_assertions)]
+#[macro_export]
+macro_rules! debug {
+    ($($arg:tt)*) => {
+        $crate::println!("[DEBUG]: {}", format_args!($($arg)*));
+    };
+}
+
+#[cfg(not(debug_assertions))]
+#[macro_export]
+macro_rules! debug {
+    ($($arg:tt)*) => {};
+}
+
 impl core::fmt::Write for KernelLogger {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         // Write to serial
@@ -49,34 +69,11 @@ impl core::fmt::Write for KernelLogger {
 } 
 
 pub struct KernelLogger(bool);
-
-impl log::Log for Spinlock<KernelLogger> {
-    fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.level() <= log::max_level() 
-    }
-
-    fn log(&self, record: &log::Record) {
-        if self.enabled(record.metadata()) {
-            let _ = write!(&mut *self.lock(), "[{}]: {}\n", record.level(), record.args());
-        }
-    }
-
-    fn flush(&self) {}
-}
-
 pub static LOGGER: Spinlock<KernelLogger> = Spinlock::new(KernelLogger(false));
 
 pub fn init() {
     serial_logger::init();
     framebuffer_logger::init();
-    log::set_logger(&LOGGER).unwrap();
-
-#[cfg(debug_assertions)]
-    log::set_max_level(log::LevelFilter::Debug);
-
-#[cfg(not(debug_assertions))]
-    log::set_max_level(log::LevelFilter::Info);
-
 }
 
 pub fn set_panic_mode() {

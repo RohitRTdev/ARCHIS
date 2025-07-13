@@ -1,5 +1,5 @@
 use super::asm;
-use crate::logger::debug;
+use crate::debug;
 
 #[derive(Debug, Clone, Copy)]
 pub struct VirtAddr(u64);
@@ -40,13 +40,15 @@ pub fn canonicalize_virtual(addr: usize) -> usize {
 }
 
 
-pub fn switch_stack_and_jump(stack_address: VirtAddr, kernel_address: VirtAddr) -> ! {
-    
-    debug!("Init stack address:{:#X}", stack_address.get());
-    debug!("kern_main:{:#X}", kernel_address.get());
+pub fn jump_to_kernel_main(pml4_phys: usize, stack_address: usize, kernel_address: usize) -> ! {
+    debug!("Init stack address = {:#X}", stack_address);
+    debug!("kern_main address = {:#X}", kernel_address);
 
+    // Special hook to tell logger to update it's internal pointers to new framebuffer address now
+    crate::logger::relocate();
+    
     unsafe {
-        asm::switch_stack_and_jump(stack_address.get() as u64,  kernel_address.get() as u64);
+        asm::init_address_space(pml4_phys as u64, stack_address as u64,  kernel_address as u64);
         
         // Shouldn't reach here
         asm::halt();

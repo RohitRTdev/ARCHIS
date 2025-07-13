@@ -110,6 +110,7 @@ fn apply_relocation(load_base: usize, kernel_size: usize, reloc_sections: &Vec<M
                     unsafe {
                         *(address as *mut u64) = value as u64;
                     }
+
                     rel_relocations += 1;
                 },
                 R_X86_64_64 => {
@@ -306,11 +307,12 @@ pub fn load_kernel_arch(kernel_base: *const u8, hdr: &Elf64Ehdr) -> ModuleInfo {
     let last_entry =  map_regions_list.last().unwrap();
     let main_shn_size = last_entry.dest_addr + last_entry.dest_size;
     let aux_padding = (main_shn_size as *const u8).align_offset(aux_alignment);
-    let reloc_desc_padding = core::mem::align_of::<MemoryRegion>();
     let aux_shn_end = aux_padding + main_shn_size + aux_size; 
+    let reloc_desc_alignment = core::mem::align_of::<MemoryRegion>();  
+    let reloc_desc_padding = (aux_shn_end as *const u8).align_offset(reloc_desc_alignment);
     let total_module_size = aux_shn_end + reloc_desc_padding + num_reloc_shns * core::mem::size_of::<MemoryRegion>(); 
     
-    let mut layout = Layout::from_size_align(total_module_size, max_alignment.max(aux_alignment).max(reloc_desc_padding)).unwrap();
+    let mut layout = Layout::from_size_align(total_module_size, max_alignment.max(aux_alignment).max(reloc_desc_alignment)).unwrap();
     let load_base = unsafe {
         loader_alloc(layout)
     };
@@ -331,7 +333,7 @@ pub fn load_kernel_arch(kernel_base: *const u8, hdr: &Elf64Ehdr) -> ModuleInfo {
     
     if reloc_sections.len() > 0 {
         load_aux_tables(&mut reloc_sections, &mut symtab, &mut symstr, &mut dynsymtab, &mut dynstr, load_base as usize + main_shn_size + aux_padding, aux_alignment);
-        apply_relocation(load_base as usize, layout.size(), &reloc_sections);
+        apply_relocation(load_base as usize, main_shn_size, &reloc_sections);
     }
 
     // Fill up all output information

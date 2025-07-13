@@ -207,7 +207,7 @@ impl<T, A: Allocator<ListNode<T>>> List<T, A> {
                 self.tail = Some(this_node.prev.as_ptr());
             }
         }
-        
+
         self.num_nodes -= 1; 
 
         ListNodeGuard {guard: this, _marker: PhantomData}

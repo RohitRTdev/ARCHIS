@@ -1,5 +1,5 @@
 use crate::sync::{Once, Spinlock};
-use crate::logger::{debug, info};
+use crate::{debug, info};
 use super::asm;
 
 enum FeatureState {

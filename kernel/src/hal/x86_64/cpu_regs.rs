@@ -1,7 +1,7 @@
 use core::marker::PhantomData;
 
 use super::{asm, features};
-use crate::{logger::{debug, info}, BOOT_INFO};
+use crate::{debug, info, BOOT_INFO};
 use common::en_flag;
 
 pub struct CR0;
@@ -120,7 +120,6 @@ impl EFER {
 impl MTRRCAP {
     pub const ADDRESS: u32 = 0xFE;
     pub const VAR_REG_CNT_MASK: u64 = 0xff;
-    pub const FIX_RNG_REG: u64 = 1 << 8;
     pub const WC: u64 = 1 << 10;
 }
 

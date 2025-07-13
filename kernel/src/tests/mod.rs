@@ -30,6 +30,7 @@ fn fixed_allocator_test() {
     let mut layout = Layout::array::<Sample>(3).unwrap();   
     
     mem::clear_heap();
+    mem::setup_heap();
     let (heap, r0_bm) = mem::get_heap(mem::Regions::Region0);
 
     // This should allocate first 3 slots in heap from region 0
@@ -67,6 +68,7 @@ fn list_alloc_test() {
     let _guard = get_test_lock().lock().unwrap();
     let mut structure: List<Sample, mem::FixedAllocator<ListNode<Sample>, {mem::Regions::Region0 as usize}>> = List::new();
     mem::clear_heap();
+    mem::setup_heap();
     let (_, r0_bm) = mem::get_heap(mem::Regions::Region0);
 
     structure.add_node(Sample{_a:52, _b: 12}).unwrap();
@@ -107,6 +109,7 @@ fn queue_alloc_test() {
     let mut structure: Queue<Sample, mem::FixedAllocator<ListNode<Sample>, {mem::Regions::Region0 as usize}>> = Queue::new();
     let _guard = get_test_lock().lock().unwrap();
     mem::clear_heap();
+    mem::setup_heap();
     let (_, r0_bm) = mem::get_heap(mem::Regions::Region0);
 
     structure.push(Sample{_a:14, _b: 23}).unwrap();
@@ -136,6 +139,7 @@ fn queue_alloc_test() {
 fn phy_alloc_test() {
     let _guard = get_test_lock().lock().unwrap();
     mem::clear_heap();
+    mem::setup_heap();
 
     mem::test_init_allocator();
 
@@ -186,6 +190,7 @@ fn phy_alloc_test() {
 fn virt_alloc_test() {
     let _guard = get_test_lock().lock().unwrap();
     mem::clear_heap();
+    mem::setup_heap();
     mem::test_init_allocator_for_virtual();
     mem::virtual_allocator_test();
 }

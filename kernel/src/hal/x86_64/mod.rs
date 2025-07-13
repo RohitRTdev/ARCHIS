@@ -1,10 +1,12 @@
-use crate::logger::info;
+use crate::info;
+use crate::mem::MapFetchType;
+use common::ptr_to_ref_mut;
 mod asm;
 mod utils;
 mod features;
 mod cpu_regs;
 mod page_mapper;
-use common::ptr_to_ref_mut;
+mod tables;
 pub use utils::*;
 pub use page_mapper::*;
 
@@ -99,7 +101,7 @@ pub fn unwind_stack(max_depth: usize, stack_base: usize, address: &mut [usize]) 
 }
 
 fn get_stack_base(stack_top: usize, stack_size: usize) -> usize {
-    stack_top + stack_size
+    crate::mem::get_virtual_address(stack_top + stack_size, MapFetchType::Kernel).expect("Unexpected error. Stack virtual address not found!")
 }
 
 
@@ -114,6 +116,7 @@ pub fn init() -> ! {
     let stack_top = KERN_INIT_STACK.stack.as_ptr() as usize;
     let stack_base = get_stack_base(stack_top, crate::KERN_INIT_STACK_SIZE); 
     *crate::CUR_STACK_BASE.lock() = stack_base; 
-    
-    switch_stack_and_jump(VirtAddr::new(stack_base), VirtAddr::new(crate::kern_main as usize));
+
+    jump_to_kernel_main(page_mapper::get_kernel_pml4(), stack_base,
+        crate::mem::get_virtual_address(crate::kern_main as usize, MapFetchType::Kernel).expect("kern_main virtual address not found!"));
 }

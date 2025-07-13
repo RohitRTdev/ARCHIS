@@ -1,8 +1,10 @@
 use core::alloc::Layout;
+use core::sync::atomic::{Ordering, AtomicUsize};
+use crate::mem::MapFetchType;
 use crate::{hal::x86_64::features::CPU_FEATURES, mem};
 use crate::hal::VirtAddr;
-use crate::logger::info;
-use common::{align_down, ceil_div, en_flag, PAGE_SIZE};
+use crate::info;
+use common::{ceil_div, en_flag, PAGE_SIZE};
 use super::asm;
 struct PTE;
 
@@ -23,6 +25,8 @@ enum PageLevel {
     PT
 }
 
+static KERNEL_PML4: AtomicUsize = AtomicUsize::new(0);
+
 pub struct PageMapper {
     pml4_phys: usize, 
     is_current: bool, 
@@ -33,7 +37,7 @@ const TOTAL_ENTRIES: usize = 512;
 
 impl PageMapper {
     #[cfg(not(test))]
-    pub fn new() -> Self {
+    pub fn new(is_kernel_pml4: bool) -> Self {
         let layout = Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap();
         let pml4 = mem::allocate_memory(layout, mem::PageDescriptor::VIRTUAL)
                                 .expect("Page base table allocation failed!") as usize;
@@ -45,7 +49,11 @@ impl PageMapper {
         unsafe {
             let raw_addr = pml4 as *mut u64;
             raw_addr.write_bytes(0, TOTAL_ENTRIES);
-            *raw_addr.add(RECURSIVE_SLOT as usize) = (pml4_phy as u64 & PTE::PHY_ADDR_MASK) | PTE::U | PTE::PWT | PTE::RW | PTE::P; 
+            *raw_addr.add(RECURSIVE_SLOT as usize) = (pml4_phy as u64 & PTE::PHY_ADDR_MASK) | PTE::PWT | PTE::RW | PTE::P; 
+        }
+
+        if is_kernel_pml4 {
+            KERNEL_PML4.store(pml4_phy, Ordering::SeqCst);
         }
 
         Self {
@@ -55,7 +63,7 @@ impl PageMapper {
     }
 
     #[cfg(test)]
-    pub fn new() -> Self {
+    pub fn new(_: bool) -> Self {
         Self {
             pml4_phys: 0,
             is_current: false
@@ -63,18 +71,20 @@ impl PageMapper {
     }
     
     pub fn map_memory(&mut self, virt_addr: usize, phys_addr: usize, size: usize, flags: u8) {
+        assert!(virt_addr & 0xfff == 0  && phys_addr & 0xfff == 0 && size & 0xfff == 0);
         let num_pages = ceil_div(size, PAGE_SIZE);
         for i in 0..num_pages {
-            let va = align_down(virt_addr, PAGE_SIZE) + i * PAGE_SIZE;
-            let pa = align_down(phys_addr, PAGE_SIZE) + i * PAGE_SIZE;
+            let va = virt_addr + i * PAGE_SIZE;
+            let pa = phys_addr + i * PAGE_SIZE;
             self.map_page(va as u64, pa as u64, flags & mem::PageDescriptor::USER != 0);
         }
     }
 
     pub fn unmap_memory(&mut self, virt_addr: usize, size: usize) {
+        assert!(virt_addr & 0xfff == 0 && size & 0xfff == 0);
         let num_pages = ceil_div(size, PAGE_SIZE);
         for i in 0..num_pages {
-            let va = align_down(virt_addr, PAGE_SIZE) + i * PAGE_SIZE;
+            let va = virt_addr + i * PAGE_SIZE;
             self.unmap_page(va as u64);
         }
     }
@@ -83,13 +93,13 @@ impl PageMapper {
         let (pml4_idx, pdpt_idx, pd_idx, pt_idx) = Self::split_indices(virt_addr);
         let vaddr = if !self.is_current {
             unsafe {
-                let pml_addr = mem::get_virtual_address(self.pml4_phys).expect("Page base table is expected to be mapped to caller virtual memory");
+                let pml_addr = mem::get_virtual_address(self.pml4_phys, MapFetchType::Any).expect("Page base table is expected to be mapped to caller virtual memory");
                 let pdpt = *(pml_addr as *mut u64).add(pml4_idx) & PTE::PHY_ADDR_MASK;
-                let pdpt_addr = mem::get_virtual_address(pdpt as usize).expect("PDPT is expected to be mapped to caller virtual memory");
+                let pdpt_addr = mem::get_virtual_address(pdpt as usize, MapFetchType::Any).expect("PDPT is expected to be mapped to caller virtual memory");
                 let pd = *(pdpt_addr as *mut u64).add(pdpt_idx) & PTE::PHY_ADDR_MASK;
-                let pd_addr = mem::get_virtual_address(pd as usize).expect("PD is expected to be mapped to caller virtual memory");
+                let pd_addr = mem::get_virtual_address(pd as usize, MapFetchType::Any).expect("PD is expected to be mapped to caller virtual memory");
                 let pt = *(pd_addr as *mut u64).add(pd_idx) & PTE::PHY_ADDR_MASK;
-                let pt_addr = mem::get_virtual_address(pt as usize).expect("PT is expected to be mapped to caller virtual memory");
+                let pt_addr = mem::get_virtual_address(pt as usize, MapFetchType::Any).expect("PT is expected to be mapped to caller virtual memory");
                 pt_addr
             }
         }
@@ -97,10 +107,10 @@ impl PageMapper {
             0
         };
 
-        let pt = self.get_table_mut(PageLevel::PT, pdpt_idx, pd_idx, pt_idx, vaddr);
+        let pt = self.get_table_mut(PageLevel::PT, pml4_idx, pdpt_idx, pd_idx, vaddr);
 
         // Unmap this entry
-        pt[pt_idx as usize] = 0;
+        pt[pt_idx] = 0;
 
         if self.is_current {
             unsafe { asm::invlpg(VirtAddr::new(virt_addr as usize).get() as u64); }
@@ -114,16 +124,16 @@ impl PageMapper {
         let (pml4_idx, pdpt_idx, pd_idx, pt_idx) = Self::split_indices(virt_addr);
 
         let pml_base = if !self.is_current {
-            mem::get_virtual_address(self.pml4_phys).expect("Page base table is expected to be mapped to caller virtual memory")
+            mem::get_virtual_address(self.pml4_phys, MapFetchType::Any).expect("Page base table is expected to be mapped to caller virtual memory")
         }
         else {
             0
         };
 
         let pml4 = self.get_table_mut(PageLevel::PML4, 0, 0, 0, pml_base);
-        let pdpt = self.get_or_alloc_table(pml4, pml4_idx, PageLevel::PDPT, pdpt_idx, 0, 0);
-        let pd = self.get_or_alloc_table(pdpt, pdpt_idx, PageLevel::PD, pdpt_idx, pd_idx, 0);
-        let pt = self.get_or_alloc_table(pd, pd_idx, PageLevel::PT, pdpt_idx, pd_idx, pt_idx);
+        let pdpt = self.get_or_alloc_table(pml4, pml4_idx, PageLevel::PDPT, pml4_idx, 0, 0);
+        let pd = self.get_or_alloc_table(pdpt, pdpt_idx, PageLevel::PD, pml4_idx, pdpt_idx, 0);
+        let pt = self.get_or_alloc_table(pd, pd_idx, PageLevel::PT, pml4_idx, pdpt_idx, pd_idx);
         
         pt[pt_idx] = (phys_addr & PTE::PHY_ADDR_MASK) | en_flag!(is_user, PTE::U) | 
         en_flag!(!is_user && CPU_FEATURES.get().unwrap().lock().pge, PTE::G) 
@@ -136,13 +146,13 @@ impl PageMapper {
 
     // Get a mutable reference to a page table at a given level and index using recursive mapping
     // If this address space is not active, then caller is expected to fetch the virtual address to which this page table is mapped
-    fn get_table_mut(&self, level: PageLevel, pdpt_idx: usize, pd_idx: usize, pt_idx: usize, vaddr: usize) -> &mut [u64; 512] {
+    fn get_table_mut(&self, level: PageLevel, pml_idx: usize, pdpt_idx: usize, pd_idx: usize, vaddr: usize) -> &mut [u64; 512] {
         let virt = if self.is_current {
             match level {
                 PageLevel::PML4 => Self::recursive_map_addr(RECURSIVE_SLOT, RECURSIVE_SLOT, RECURSIVE_SLOT),
                 PageLevel::PDPT => Self::recursive_map_addr(RECURSIVE_SLOT, RECURSIVE_SLOT, pdpt_idx as u64),
                 PageLevel::PD => Self::recursive_map_addr(RECURSIVE_SLOT, pdpt_idx as u64, pd_idx as u64),
-                PageLevel::PT => Self::recursive_map_addr(pdpt_idx as u64, pd_idx as u64, pt_idx as u64)
+                PageLevel::PT => Self::recursive_map_addr(pml_idx as u64, pdpt_idx as u64, pd_idx as u64)
             }
         }
         else {
@@ -153,7 +163,7 @@ impl PageMapper {
     }
 
     // Get or allocate the next-level table, and ensure it is mapped in the recursive region
-    fn get_or_alloc_table(&self, table: &mut [u64; 512], idx: usize, level: PageLevel, pdpt_idx: usize, pd_idx: usize, pt_idx: usize) -> &mut [u64; 512] {
+    fn get_or_alloc_table(&self, table: &mut [u64; 512], idx: usize, level: PageLevel, pml_idx: usize, pdpt_idx: usize, pd_idx: usize) -> &mut [u64; 512] {
         // Get the virtual address of the table we're interested in
         // If page table is not present, then allocate it first
         let addr = if table[idx] & 1 == 0 {
@@ -169,7 +179,7 @@ impl PageMapper {
         };
         let vaddr = if self.is_current {
             // This address is valid if this address space were active
-            let rec_addr = Self::recursive_map_addr(pdpt_idx as u64, pd_idx as u64, pt_idx as u64) as usize;
+            let rec_addr = Self::recursive_map_addr(pml_idx as u64, pdpt_idx as u64, pd_idx as u64) as usize;
             
             // If we had just mapped that memory, need to invalidate this region to make it visible
             if addr.is_some() {
@@ -187,7 +197,7 @@ impl PageMapper {
             else {
                 // Page table was already existing. In this case, simply find what it is
                 let phys = table[idx] & PTE::PHY_ADDR_MASK;
-                mem::get_virtual_address(phys as usize).expect("Expected page table to have been mapped")
+                mem::get_virtual_address(phys as usize, MapFetchType::Any).expect("Expected page table to have been mapped")
             }
         };
 
@@ -200,7 +210,7 @@ impl PageMapper {
         
         // Using the table's virtual address, get reference to actual table
         // This virtual address may be in recursive region or in some region in caller's memory
-        self.get_table_mut(level, pdpt_idx, pd_idx, pt_idx, vaddr)
+        self.get_table_mut(level, pml_idx, pdpt_idx, pd_idx, vaddr)
     }
 
 
@@ -220,14 +230,32 @@ impl PageMapper {
             (virt_addr, phy_addr)
         }
     }
-    
+
+    // This is purely for debugging, don't use this
+    #[cfg(debug_assertions)]
+    pub fn get_physical_address(&self, virt_addr: usize) -> usize {
+        let (pml4_idx, pdpt_idx, pd_idx, pt_idx) = Self::split_indices(virt_addr as u64);
+
+        //let pml4 = self.get_table_mut(PageLevel::PML4, pml4_idx, pdpt_idx, pd_idx, self.pml4_phys);
+        //let pdpt = self.get_table_mut(PageLevel::PDPT, pml4_idx, pdpt_idx, pd_idx, (pml4[pml4_idx] & PTE::PHY_ADDR_MASK) as usize); 
+        //let pd = self.get_table_mut(PageLevel::PD, pml4_idx, pdpt_idx, pd_idx, (pdpt[pdpt_idx] & PTE::PHY_ADDR_MASK) as usize); 
+        let pt = self.get_table_mut(PageLevel::PT, pml4_idx, pdpt_idx, pd_idx, 0); 
+
+        (pt[pt_idx]) as usize
+    }
+
+    // Used internally -> Setup initial address space
+    pub fn bootstrap_activate(&mut self) {
+        self.is_current = true;
+    }
+
     /// Compute the recursive mapping address for a page table at a given level and indices
-    fn recursive_map_addr(pdpt: u64, pd: u64, pt: u64) -> u64 {
+    fn recursive_map_addr(pml: u64, pdpt: u64, pd: u64) -> u64 {
         // Since memory address needs to be canonical, we use 0xffffff instead of 0x1ff
-        (0xffffff << 39) |
-        ((pdpt & RECURSIVE_SLOT) << 30) |
-        ((pd & RECURSIVE_SLOT) << 21) |
-        ((pt & RECURSIVE_SLOT) << 12)
+        (0x1ffffff << 39) |
+        ((pml & 0x1ff) << 30) |
+        ((pdpt & 0x1ff) << 21) |
+        ((pd & 0x1ff) << 12)
     }
     
     fn split_indices(virt_addr: u64) -> (usize, usize, usize, usize) {
@@ -240,3 +268,6 @@ impl PageMapper {
 }
 
 
+pub fn get_kernel_pml4() -> usize {
+    KERNEL_PML4.load(Ordering::SeqCst)
+}

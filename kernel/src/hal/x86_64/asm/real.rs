@@ -11,7 +11,7 @@ extern "C" {
     pub fn fetch_rsp() -> u64;
     pub fn halt() -> !;
 
-    pub fn switch_stack_and_jump(stack_addr: u64, branch_addr: u64);
+    pub fn init_address_space(pml4_phys: u64, stack_address: u64, branch_addr: u64);
 
     pub fn cpuid(fn_number: u32, opt_fn_number: u32, result: *mut u8);
     pub fn write_cr0(val: u64);

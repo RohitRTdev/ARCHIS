@@ -2,7 +2,7 @@ use common::{MemType, MemoryDesc, PAGE_SIZE};
 use crate::{ds::*, RemapEntry, RemapType::*, BOOT_INFO, REMAP_LIST};
 use crate::sync::{Once, Spinlock};
 use crate::error::KError;
-use crate::logger::{info, debug};
+use crate::{info, debug};
 use super::{FixedAllocator, Regions::*};
 use super::PageDescriptor;
 use core::alloc::Layout;
