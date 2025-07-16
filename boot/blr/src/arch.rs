@@ -79,7 +79,7 @@ fn load_aux_tables(reloc_sections: &mut Vec<MapRegion>, symtab: &mut Option<MapR
     }
 }
 
-fn apply_relocation(load_base: usize, kernel_size: usize, reloc_sections: &Vec<MapRegion>) {
+fn apply_relocation(load_base: usize, kernel_size: usize, reloc_sections: &Vec<MapRegion>, dyn_tab: &Option<MapRegion>) {
     // Necessary, since it could be zero after removing symbol table from list
     if reloc_sections.len() == 0 {
         return;
@@ -102,6 +102,7 @@ fn apply_relocation(load_base: usize, kernel_size: usize, reloc_sections: &Vec<M
 
         // Here, we are assuming that linker assigned base address of elf as 0
         for entry in entries {
+            // Bootloader will only patch up the reloc entries, plt relocations and global relocations will be enabled by kernel
             match info(entry.r_info) {
                 R_X86_64_RELATIVE => {
                     let address = load_base + entry.r_offset as usize;
@@ -317,7 +318,7 @@ pub fn load_kernel_arch(kernel_base: *const u8, hdr: &Elf64Ehdr) -> ModuleInfo {
         loader_alloc(layout)
     };
 
-    test_log!("Loading kernel regions at load_base: {:#X}", load_base as usize);
+    debug!("Loading kernel regions at load_base: {:#X}", load_base as usize);
     //Now, map all loadable regions to appropriate locations
     for (idx, entry) in map_regions_list.iter().enumerate() {
         unsafe {
@@ -327,13 +328,13 @@ pub fn load_kernel_arch(kernel_base: *const u8, hdr: &Elf64Ehdr) -> ModuleInfo {
             current_load_ptr.write_bytes(0, entry.dest_size);
             
             copy_nonoverlapping(entry.src_addr as *const u8, current_load_ptr, entry.src_size);
-            test_log!("Loaded location:{} from {:#X} of va:{:#X} to {:#X}", idx, entry.src_addr, entry.dest_addr, current_load_ptr as usize);
+            debug!("Loaded location:{} from {:#X} of va:{:#X} to {:#X}", idx, entry.src_addr, entry.dest_addr, current_load_ptr as usize);
         }
     }
     
     if reloc_sections.len() > 0 {
         load_aux_tables(&mut reloc_sections, &mut symtab, &mut symstr, &mut dynsymtab, &mut dynstr, load_base as usize + main_shn_size + aux_padding, aux_alignment);
-        apply_relocation(load_base as usize, main_shn_size, &reloc_sections);
+        apply_relocation(load_base as usize, main_shn_size, &reloc_sections, &dynsymtab);
     }
 
     // Fill up all output information

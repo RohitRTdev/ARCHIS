@@ -50,12 +50,14 @@ pub struct Elf64Rela {
     pub r_addend: i64
 }
 
+#[derive(Debug)]
 #[repr(C)]
 pub struct ElfDyn {
-    pub tag: u64,
+    pub tag: i64,
     pub val: u64
 }
 
+#[derive(Debug)]
 #[repr(C)]
 pub struct Elf64Sym {
     pub st_name: u32,    
@@ -74,7 +76,7 @@ pub const SHT_SYMTAB: u32 = 2;
 pub const SHT_STRTAB: u32 = 3;
 pub const SHT_RELA: u32 = 4;
 pub const SHT_DYNAMIC: u32 = 6;
-pub const  SHT_DYNSYM: u32 = 11;
+pub const SHT_DYNSYM: u32 = 11;
 
 pub const STT_OBJECT: u8 = 1;
 pub const STT_FUNC: u8 = 2;
@@ -83,5 +85,8 @@ pub const R_X86_64_64: u32 = 1;
 pub const R_X86_64_RELATIVE: u32 = 8;  
 pub const R_GLOB_DAT: u32 = 6;
 pub const R_JUMP_SLOT: u32 = 7;
+
+pub const DT_JMPREL: i64 = 23;
+
 // ELF Magic numbers
 pub const ELFMAG: u32 = u32::from_le_bytes([0x7F, b'E', b'L', b'F']);

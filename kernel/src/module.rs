@@ -4,7 +4,7 @@ use crate::{RemapEntry, RemapType::*, BOOT_INFO, REMAP_LIST};
 use crate::ds::{List, ListNode};
 use crate::sync::Spinlock;
 use crate::{info, debug};
-use crate::mem::{self, FixedAllocator, Regions::*};
+use crate::mem::{self, FixedAllocator, MapFetchType, Regions::*};
 
 pub struct ModuleDescriptor {
     pub name: &'static str,
@@ -18,7 +18,7 @@ pub fn early_init() {
     let kernel_total_size;
     {
         let mut mod_cb = MODULE_LIST.lock();
-        let info = BOOT_INFO.get().unwrap().lock();
+        let info = BOOT_INFO.get().unwrap();
         kernel_base_address = info.kernel_desc.base;  
         kernel_total_size = info.kernel_desc.total_size; 
         mod_cb.add_node(ModuleDescriptor { name: env!("CARGO_PKG_NAME"), info: info.kernel_desc}).unwrap();
@@ -96,9 +96,9 @@ pub fn complete_handoff() {
     
     info!("Reapplying relocations to switch to new address space");
     {
-        let mod_list = MODULE_LIST.lock();
-        let mod_cb = mod_list.first().unwrap();
-        let boot_info = BOOT_INFO.get().unwrap().lock();
+        let mut mod_list = MODULE_LIST.lock();
+        let mod_cb = mod_list.first_mut().unwrap();
+        let boot_info = BOOT_INFO.get().unwrap();
         if mod_cb.info.rlc_shn.is_none() {
             return;
         }
@@ -111,6 +111,7 @@ pub fn complete_handoff() {
         kernel_base = boot_info.kernel_desc.base;
         total_size = boot_info.kernel_desc.total_size;
         load_base = mod_cb.info.base;
+        let dyn_tab = mod_cb.info.dyn_tab;
         
         let info = |bitmap: u64| {
             (bitmap & 0xffffffff) as u32
@@ -123,26 +124,43 @@ pub fn complete_handoff() {
             };
             
             for entry in entries {
+                let address = load_base + entry.r_offset as usize;
                 match info(entry.r_info) {
-                    // Unlike the bootloader, here we will first read the value at the given offset
-                    // and calculate the addend from that value instead of applying the addend in the reloc entry
-                    // This is apparently needed as some entries can be switched to different values due to a library's
-                    // internal routine, but the change won't be reflected in reloc table which causes issue if we ignore it
-                    // For example, set_logger(&LOGGER) from log crate has this issue
                     R_X86_64_RELATIVE => {
-                        let address = load_base + entry.r_offset as usize;
-                        let addend = unsafe {
-                            *(address as *mut u64) as usize
-                        } - kernel_base;
                         unsafe {
-                            *(address as *mut u64) = (load_base + addend) as u64;
+                            *(address as *mut u64) = (load_base + entry.r_addend as usize) as u64;
                         }
                     },
+                    R_JUMP_SLOT => {
+                        assert!(dyn_tab.is_some());
+                        let dyn_entries = unsafe {
+                            let tab = dyn_tab.as_ref().unwrap();
+                            core::slice::from_raw_parts(tab.start as *const Elf64Sym, tab.size / tab.entry_size)
+                        };
+
+                        let sym_idx = (entry.r_info >> 32) as usize;
+
+                        let value = load_base + dyn_entries[sym_idx].st_value as usize;
+
+                        unsafe {
+                            *(address as *mut u64) = value as u64;
+                        }
+                    },
+
                     _ => {} 
                 }
             }
-
         }
+        
+        // The module name needs to be patched up to new address
+        let name_ptr = mem::get_virtual_address(mod_cb.name.as_ptr() as usize, MapFetchType::Kernel).expect("Unable to find virtual address for module name");
+        
+        mod_cb.name = unsafe {
+            let slice = core::slice::from_raw_parts(name_ptr as *const u8, mod_cb.name.len());
+            core::str::from_utf8_unchecked(slice)
+        }; 
+    
+        debug!("Module address:{:#X}, mod_name={}", mod_cb.name.as_ptr() as usize, mod_cb.name);
     }
 
     mem::unmap_kernel_memory(kernel_base, total_size);

@@ -17,3 +17,9 @@ FUNC halt
     cli
     hlt
 ENDF halt
+
+
+FUNC int
+    int $14
+    ret
+ENDF int

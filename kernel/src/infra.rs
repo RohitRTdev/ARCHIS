@@ -11,7 +11,7 @@ use crate::module::*;
 static GLOBAL_PANIC_LOCK: Spinlock<bool> = Spinlock::new(false);
 const STACK_UNWIND_DEPTH: usize = 16;
 
-fn common_panic_handler(mod_name: &str, info: &PanicInfo) -> ! {
+pub fn common_panic_handler(mod_name: &str, info: &PanicInfo) -> ! {
     let _sync = GLOBAL_PANIC_LOCK.lock();
     logger::set_panic_mode();
     let stack_base = *CUR_STACK_BASE.lock();
@@ -27,7 +27,7 @@ fn common_panic_handler(mod_name: &str, info: &PanicInfo) -> ! {
 
         let actual_depth = hal::unwind_stack(STACK_UNWIND_DEPTH, stack_base, unwind_list.as_mut_slice());
         let start_depth = if mod_name == env!("CARGO_PKG_NAME") { 3 } else { 4 };
-         
+
         for addr in start_depth..actual_depth {
             if unwind_list[addr] != 0 {
                 let sym_info = symbol_trace(unwind_list[addr]);

@@ -36,7 +36,7 @@ ifeq ($(CONFIG),debug)
 	DRIVER_FLAGS += -C force-frame-pointers=yes
 endif
 
-.PHONY: all clean build_blr build_kernel build_image
+.PHONY: all clean build_blr build_kernel build_kernel_test build_kernel_template build_image
 
 all: build_image
 
@@ -66,16 +66,25 @@ build_blr: $(OUTPUT_DIR)
 	)
 	@cp $(BLR_EXE) $(OUTPUT_DIR)/bootx64.efi
 
-build_kernel: $(OUTPUT_DIR)
+build_kernel_template:
 	@echo "Building kernel..."
-	@rm -f $(KERN_PLACEHOLDER)
 	@(cd kernel && RUSTFLAGS="$(KERNEL_FLAGS)" \
 		cargo build $(BUILD_OPTIONS) \
-    	-Z build-std=core,compiler_builtins \
-    	-Z build-std-features=compiler-builtins-mem \
-    	--target $(KERNEL_TARGET) \
-	) 
+		-Z build-std=core,compiler_builtins \
+		-Z build-std-features=compiler-builtins-mem \
+		--target $(KERNEL_TARGET) \
+	)
 	@cp $(KERNEL_EXE) $(OUTPUT_DIR)/aris
+
+build_kernel: $(OUTPUT_DIR)
+	@if [ -f "$(KERN_PLACEHOLDER)" ]; then cargo clean; fi
+	@rm -f $(KERN_PLACEHOLDER)	
+	@MAKE build_kernel_template
+
+build_kernel_test: $(OUTPUT_DIR)
+	@if [ ! -f "$(KERN_PLACEHOLDER)" ]; then cargo clean; fi	
+	@echo -e $(GEN_MSG) > $(KERN_PLACEHOLDER) 
+	@MAKE build_kernel_template
 
 build_drivers: build_kernel
 	@echo "Building drivers..."
@@ -94,8 +103,7 @@ build_drivers: build_kernel
 		fi \
 	done
 
-run_unit_test: build_kernel
-	@echo -e $(GEN_MSG) > $(KERN_PLACEHOLDER) 
+run_unit_test: build_kernel_test
 	@cargo test --manifest-path=boot/blr/Cargo.toml -- --nocapture
 	@cargo test --manifest-path=kernel/Cargo.toml -- --nocapture
 

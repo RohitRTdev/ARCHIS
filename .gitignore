@@ -1,5 +1,5 @@
 **/placeholder*
 *.lock
-stub*
+*stub*
 output
 **/target

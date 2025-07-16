@@ -11,7 +11,6 @@ mod logger;
 mod error;
 
 use common::*;
-use logger::*;
 
 #[cfg(test)]
 mod tests;
@@ -20,7 +19,7 @@ use sync::{Once, Spinlock};
 use crate::mem::{FixedAllocator, Regions::*};
 use crate::ds::*;
 
-static BOOT_INFO: Once<Spinlock<BootInfo>> = Once::new();
+static BOOT_INFO: Once<BootInfo> = Once::new();
 
 const KERN_INIT_STACK_SIZE: usize  = PAGE_SIZE * 2;
 
@@ -50,10 +49,10 @@ static KERN_INIT_STACK: Stack = Stack {
 static REMAP_LIST: Spinlock<List<RemapEntry, FixedAllocator<ListNode<RemapEntry>, {Region3 as usize}>>> = Spinlock::new(List::new());
 static CUR_STACK_BASE: Spinlock<usize> = Spinlock::new(0);
 
-extern "C" fn kern_main() {
+fn kern_main() {
     info!("Starting main kernel init");
-    module::complete_handoff();
-
+    hal::fire_interrupt();
+    
     info!("Halting main core");
     hal::halt();
 }
@@ -64,7 +63,7 @@ unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
     *CUR_STACK_BASE.lock() = hal::get_current_stack_base();
     
     BOOT_INFO.call_once(|| {
-        Spinlock::new(*boot_info)
+        *boot_info
     });   
 
     mem::setup_heap(); 
@@ -74,7 +73,7 @@ unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
 
     module::early_init();
 
-    debug!("{:?}", *BOOT_INFO.get().unwrap().lock());
+    debug!("{:?}", BOOT_INFO.get().unwrap());
 
     hal::init();
 }

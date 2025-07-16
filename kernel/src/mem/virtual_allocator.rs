@@ -256,6 +256,11 @@ impl VirtMemConBlk {
             }
         }
 
+        #[cfg(debug_assertions)]
+        if lowest_address.is_none() {
+            debug!("phys_addr={}, alloc_block_list={:?}", phys_addr, self.alloc_block_list);
+        }
+
         lowest_address
     }
     

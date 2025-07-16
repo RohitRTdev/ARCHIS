@@ -40,9 +40,9 @@ pub fn canonicalize_virtual(addr: usize) -> usize {
 }
 
 
-pub fn jump_to_kernel_main(pml4_phys: usize, stack_address: usize, kernel_address: usize) -> ! {
+pub fn switch_to_new_address_space(pml4_phys: usize, stack_address: usize, kernel_address: usize) -> ! {
     debug!("Init stack address = {:#X}", stack_address);
-    debug!("kern_main address = {:#X}", kernel_address);
+    debug!("kern_address_space_start address = {:#X}", kernel_address);
 
     // Special hook to tell logger to update it's internal pointers to new framebuffer address now
     crate::logger::relocate();

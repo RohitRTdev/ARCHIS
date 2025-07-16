@@ -7,8 +7,11 @@ mod features;
 mod cpu_regs;
 mod page_mapper;
 mod tables;
+mod handlers;
 pub use utils::*;
 pub use page_mapper::*;
+
+const MAX_INTERRUPT_VECTORS: usize = 256;
 
 pub fn disable_interrupts() -> bool {
     // RFLAGS register bit 9 is IF -> 1 is enabled
@@ -104,6 +107,13 @@ fn get_stack_base(stack_top: usize, stack_size: usize) -> usize {
     crate::mem::get_virtual_address(stack_top + stack_size, MapFetchType::Kernel).expect("Unexpected error. Stack virtual address not found!")
 }
 
+#[inline(always)]
+pub fn fire_interrupt() {
+    unsafe {
+        asm::int();
+    }
+}
+
 
 pub fn init() -> ! {
     info!("Starting platform initialization");
@@ -117,6 +127,6 @@ pub fn init() -> ! {
     let stack_base = get_stack_base(stack_top, crate::KERN_INIT_STACK_SIZE); 
     *crate::CUR_STACK_BASE.lock() = stack_base; 
 
-    jump_to_kernel_main(page_mapper::get_kernel_pml4(), stack_base,
-        crate::mem::get_virtual_address(crate::kern_main as usize, MapFetchType::Kernel).expect("kern_main virtual address not found!"));
+    switch_to_new_address_space(page_mapper::get_kernel_pml4(), stack_base,
+        crate::mem::get_virtual_address(tables::kern_addr_space_start as usize, MapFetchType::Kernel).expect("kern_addr_space_start virtual address not found!"));
 }

@@ -147,7 +147,7 @@ impl PhyMemConBlk {
 
 
 pub fn frame_allocator_init() {
-    let boot_info = BOOT_INFO.get().unwrap().lock();
+    let boot_info = BOOT_INFO.get().unwrap();
     let mut init_mem_cb = PhyMemConBlk {
         total_memory: 0,
         avl_memory: 0,

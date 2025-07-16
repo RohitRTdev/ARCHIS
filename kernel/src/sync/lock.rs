@@ -39,9 +39,9 @@ impl<T> Drop for SpinlockGuard<'_, T> {
 
 pub struct Spinlock<T> {
 #[cfg(not(test))] 
-    lock: hal::Spinlock,
+    pub lock: hal::Spinlock,
 #[cfg(test)]
-    lock: Mutex<u32>,
+    pub lock: Mutex<u32>,
     data: RefCell<T>
 }
 

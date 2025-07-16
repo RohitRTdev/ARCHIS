@@ -1,6 +1,6 @@
 use crate::mem::MapFetchType;
 use crate::sync::Spinlock;
-use crate::{RemapEntry, RemapType::*, BOOT_INFO, REMAP_LIST};
+use crate::{hal, RemapEntry, RemapType::*, BOOT_INFO, REMAP_LIST};
 use crate::debug;
 use common::{ceil_div, MemoryRegion};
 
@@ -55,7 +55,7 @@ pub static FRAMEBUFFER_LOGGER: Spinlock<FramebufferLogger> = Spinlock::new(Frame
 
 impl FramebufferLogger {
     fn init(&mut self) {
-        let boot_info = BOOT_INFO.get().unwrap().lock();
+        let boot_info = BOOT_INFO.get().unwrap();
         let fb_info = boot_info.framebuffer_desc;
         
         self.fb_base = fb_info.fb.base_address as *mut u8;
