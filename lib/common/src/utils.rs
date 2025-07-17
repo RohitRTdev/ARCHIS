@@ -11,6 +11,11 @@ pub fn align_down(a: usize, alignment: usize) -> usize {
 }
 
 #[inline(always)]
+pub fn align_up(a: usize, alignment: usize) -> usize {
+    (a + alignment - 1) & !(alignment - 1)
+}
+
+#[inline(always)]
 pub fn ptr_to_usize<T>(r: &T) -> usize {
     r as *const T as usize
 }

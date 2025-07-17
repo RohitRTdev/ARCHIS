@@ -12,6 +12,11 @@ mod error;
 
 use common::*;
 
+extern crate alloc;
+use alloc::vec::Vec;
+use alloc::string::String;
+
+
 #[cfg(test)]
 mod tests;
 
@@ -51,8 +56,31 @@ static CUR_STACK_BASE: Spinlock<usize> = Spinlock::new(0);
 
 fn kern_main() {
     info!("Starting main kernel init");
-    hal::fire_interrupt();
-    
+
+    {
+        let mut list = Vec::new();
+        list.push(1);
+        list.push(3);
+        list.push(23);
+        list.push(23);
+        list.push(23);
+        list.push(23);
+        list.push(23);
+        list.push(23);
+        debug!("List={:?}", list);
+        list.remove(3);
+        list.remove(2);
+        debug!("List={:?}", list);
+
+
+        let mut s = String::from("Heap allocated string test!!");
+        debug!("String test = {}", s);
+        s.insert_str(4, " string");
+        debug!("String test after insertion = {}", s);
+    }
+
+    //hal::fire_interrupt();
+
     info!("Halting main core");
     hal::halt();
 }

@@ -79,7 +79,7 @@ fn load_aux_tables(reloc_sections: &mut Vec<MapRegion>, symtab: &mut Option<MapR
     }
 }
 
-fn apply_relocation(load_base: usize, kernel_size: usize, reloc_sections: &Vec<MapRegion>, dyn_tab: &Option<MapRegion>) {
+fn apply_relocation(load_base: usize, kernel_size: usize, reloc_sections: &Vec<MapRegion>) {
     // Necessary, since it could be zero after removing symbol table from list
     if reloc_sections.len() == 0 {
         return;
@@ -334,7 +334,7 @@ pub fn load_kernel_arch(kernel_base: *const u8, hdr: &Elf64Ehdr) -> ModuleInfo {
     
     if reloc_sections.len() > 0 {
         load_aux_tables(&mut reloc_sections, &mut symtab, &mut symstr, &mut dynsymtab, &mut dynstr, load_base as usize + main_shn_size + aux_padding, aux_alignment);
-        apply_relocation(load_base as usize, main_shn_size, &reloc_sections, &dynsymtab);
+        apply_relocation(load_base as usize, main_shn_size, &reloc_sections);
     }
 
     // Fill up all output information

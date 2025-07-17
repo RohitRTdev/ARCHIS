@@ -5,6 +5,7 @@ use crate::error::KError;
 mod fixed_allocator;
 mod frame_allocator;
 mod virtual_allocator;
+mod heap_allocator;
 pub use fixed_allocator::*;
 pub use frame_allocator::*;
 pub use virtual_allocator::*;
