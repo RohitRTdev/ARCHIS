@@ -134,7 +134,7 @@ impl PageMapper {
         let pdpt = self.get_or_alloc_table(pml4, pml4_idx, PageLevel::PDPT, pml4_idx, 0, 0);
         let pd = self.get_or_alloc_table(pdpt, pdpt_idx, PageLevel::PD, pml4_idx, pdpt_idx, 0);
         let pt = self.get_or_alloc_table(pd, pd_idx, PageLevel::PT, pml4_idx, pdpt_idx, pd_idx);
-        
+
         pt[pt_idx] = (phys_addr & PTE::PHY_ADDR_MASK) | en_flag!(is_user, PTE::U) | 
         en_flag!(!is_user && CPU_FEATURES.get().unwrap().lock().pge, PTE::G) 
         | PTE::RW | PTE::P; 
@@ -146,12 +146,13 @@ impl PageMapper {
 
     // Get a mutable reference to a page table at a given level and index using recursive mapping
     // If this address space is not active, then caller is expected to fetch the virtual address to which this page table is mapped
+    // level -> Indicates which level page table user wants to access
     fn get_table_mut(&self, level: PageLevel, pml_idx: usize, pdpt_idx: usize, pd_idx: usize, vaddr: usize) -> &mut [u64; 512] {
         let virt = if self.is_current {
             match level {
                 PageLevel::PML4 => Self::recursive_map_addr(RECURSIVE_SLOT, RECURSIVE_SLOT, RECURSIVE_SLOT),
-                PageLevel::PDPT => Self::recursive_map_addr(RECURSIVE_SLOT, RECURSIVE_SLOT, pdpt_idx as u64),
-                PageLevel::PD => Self::recursive_map_addr(RECURSIVE_SLOT, pdpt_idx as u64, pd_idx as u64),
+                PageLevel::PDPT => Self::recursive_map_addr(RECURSIVE_SLOT, RECURSIVE_SLOT, pml_idx as u64),
+                PageLevel::PD => Self::recursive_map_addr(RECURSIVE_SLOT, pml_idx as u64, pdpt_idx as u64),
                 PageLevel::PT => Self::recursive_map_addr(pml_idx as u64, pdpt_idx as u64, pd_idx as u64)
             }
         }
@@ -163,6 +164,10 @@ impl PageMapper {
     }
 
     // Get or allocate the next-level table, and ensure it is mapped in the recursive region
+    // table -> Parent table from which we're going to obtain the next level page table
+    // idx -> index in parent table to which the next level page table points
+    // level -> Should be the next level page table we want
+    // Ex: if table is PDPT, then level must be PD and idx must be the PDPT entry that points to that PD
     fn get_or_alloc_table(&self, table: &mut [u64; 512], idx: usize, level: PageLevel, pml_idx: usize, pdpt_idx: usize, pd_idx: usize) -> &mut [u64; 512] {
         // Get the virtual address of the table we're interested in
         // If page table is not present, then allocate it first
@@ -179,7 +184,14 @@ impl PageMapper {
         };
         let vaddr = if self.is_current {
             // This address is valid if this address space were active
-            let rec_addr = Self::recursive_map_addr(pml_idx as u64, pdpt_idx as u64, pd_idx as u64) as usize;
+            let rec_addr = match level {
+                PageLevel::PDPT => Self::recursive_map_addr(RECURSIVE_SLOT, RECURSIVE_SLOT, pml_idx as u64),
+                PageLevel::PD => Self::recursive_map_addr(RECURSIVE_SLOT, pml_idx as u64, pdpt_idx as u64),
+                PageLevel::PT => Self::recursive_map_addr(pml_idx as u64, pdpt_idx as u64, pd_idx as u64),
+                _ => {
+                    panic!("get_or_alloc_table() called with level: PML4");
+                }
+            } as usize;
             
             // If we had just mapped that memory, need to invalidate this region to make it visible
             if addr.is_some() {

@@ -1,6 +1,6 @@
 use crate::mem::MapFetchType;
 use crate::sync::Spinlock;
-use crate::{hal, RemapEntry, RemapType::*, BOOT_INFO, REMAP_LIST};
+use crate::{RemapEntry, RemapType::*, BOOT_INFO, REMAP_LIST};
 use crate::debug;
 use common::{ceil_div, MemoryRegion};
 

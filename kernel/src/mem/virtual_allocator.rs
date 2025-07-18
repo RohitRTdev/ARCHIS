@@ -4,7 +4,7 @@ use crate::hal::{self, PageMapper};
 use crate::ds::*;
 use crate::error::KError;
 use crate::{info, debug};
-use crate::{RemapEntry, RemapType::*};
+use crate::RemapType::*;
 use core::alloc::Layout;
 use core::ptr::NonNull;
 use common::{ceil_div, en_flag, PAGE_SIZE};
@@ -204,6 +204,7 @@ impl VirtMemConBlk {
         }
         if let Some(blk) = alloc_blk {
             unsafe {
+                PHY_MEM_CB.get().unwrap().lock().deallocate(blk.as_ref().start_phy_address as *mut u8, layout).expect(ERROR_MESSAGE);
                 self.alloc_block_list.remove_node(blk);
             }
         }
@@ -216,6 +217,7 @@ impl VirtMemConBlk {
         self.page_mapper.unmap_memory(addr as usize, num_size);
         
         self.coalesce_block(addr as usize, num_pages);
+
 
         Ok(())
     }
@@ -431,10 +433,10 @@ pub fn get_virtual_address(phys_addr: usize, fetch_type: MapFetchType) -> Option
 
 // Later, we'll add function for map_memory and here we also need to add type of memory we're unmapping (kernel or user)
 // This is important, since if it's kernel memory, we need to unmap that memory in all address spaces
-pub fn unmap_memory(virt_addr: usize, size: usize) -> Result<(), KError> {
+pub fn unmap_memory(virt_addr: *mut u8, size: usize) -> Result<(), KError> {
     if ACTIVE_VIRTUAL_CON_BLK.is_init() {
         unsafe {
-            (*ACTIVE_VIRTUAL_CON_BLK.get().unwrap().lock().as_ptr()).unmap_memory(virt_addr as *mut u8, size)
+            (*ACTIVE_VIRTUAL_CON_BLK.get().unwrap().lock().as_ptr()).unmap_memory(virt_addr, size)
         }
     }
     else {

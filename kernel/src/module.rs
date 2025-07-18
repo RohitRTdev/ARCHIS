@@ -1,5 +1,8 @@
-use common::{elf::*, ArrayTable};
-use common::{MemoryRegion, ModuleInfo};
+use core::sync::atomic::{AtomicUsize, Ordering};
+
+use alloc::{collections::BTreeMap};
+use common::{elf::*, ArrayTable, PAGE_SIZE};
+use common::{MemoryRegion, ModuleInfo, FileDescriptor};
 use crate::{RemapEntry, RemapType::*, BOOT_INFO, REMAP_LIST};
 use crate::ds::{List, ListNode};
 use crate::sync::Spinlock;
@@ -12,6 +15,9 @@ pub struct ModuleDescriptor {
 }
 
 pub static MODULE_LIST: Spinlock<List<ModuleDescriptor, FixedAllocator<ListNode<ModuleDescriptor>, {Region2 as usize}>>> = Spinlock::new(List::new());
+
+
+static FILE_INDEX: AtomicUsize = AtomicUsize::new(0);
 
 pub fn early_init() {
     let kernel_base_address;
@@ -78,7 +84,50 @@ pub fn early_init() {
                 debug!("Updated kernel module info = {:?}", mod_cb.info);
             })
         }).unwrap();
+
+        // Relocate init fs
+        let fs_entries = unsafe {
+            core::slice::from_raw_parts_mut(info.init_fs.start as *mut FileDescriptor, info.init_fs.size / info.init_fs.entry_size)
+        };
+
+        for entry in fs_entries {
+            assert!(entry.contents.as_ptr() as usize & (PAGE_SIZE - 1) == 0);
+            remap_list.add_node(RemapEntry { 
+                value: MemoryRegion { 
+                    base_address: entry.contents.as_ptr() as usize,
+                    size: entry.contents.len() + entry.name.len()
+                },
+                map_type: OffsetMapped(|virt_addr| {
+                    let info = BOOT_INFO.get().unwrap();
+                    let fs_entries = unsafe {
+                        core::slice::from_raw_parts_mut(info.init_fs.start as *mut FileDescriptor, info.init_fs.size / info.init_fs.entry_size)
+                    };
+
+
+                    let entry = &mut fs_entries[FILE_INDEX.fetch_add(1, Ordering::Relaxed)]; 
+                    entry.contents = unsafe {
+                        core::slice::from_raw_parts(virt_addr as *const u8, entry.contents.len())
+                    };
+                    
+                    entry.name = unsafe {
+                        let ptr = core::slice::from_raw_parts((virt_addr + entry.contents.len()) as *const u8, entry.name.len());
+                        core::str::from_utf8_unchecked(ptr)
+                    };
+
+                })
+            }).unwrap();
+        }
+
+        // Identity map the descriptors pointing to the files 
+        remap_list.add_node(RemapEntry { 
+            value: MemoryRegion { 
+                base_address: info.init_fs.start, 
+                size: info.init_fs.size 
+            }, 
+            map_type: IdentityMapped 
+        }).unwrap();
     }
+
 
     // Temporarily id map the kernel
     // This is to help with the address space transition
@@ -161,7 +210,32 @@ pub fn complete_handoff() {
         }; 
     
         debug!("Module address:{:#X}, mod_name={}", mod_cb.name.as_ptr() as usize, mod_cb.name);
+
+        // Reconstruct init fs as a hashmap. This is done here, since we now have access to heap
+        crate::INIT_FS.call_once(|| {
+            let boot_info = BOOT_INFO.get().unwrap();
+            let fs_entries = unsafe {
+                core::slice::from_raw_parts(boot_info.init_fs.start as *const FileDescriptor, boot_info.init_fs.size / boot_info.init_fs.entry_size) 
+            };
+
+            let mut map = BTreeMap::new();
+
+            for entry in fs_entries {
+                debug!("Adding init fs entry:{} with total len:{}", entry.name, entry.contents.len());
+                map.insert(entry.name, entry.contents);
+            }
+            
+            map
+        });
+    
+        info!("Init-FS address:{:#X}, num_files={}", crate::INIT_FS.get().unwrap() as *const _ as usize, crate::INIT_FS.get().unwrap().len());
+        
+        // We have moved the init-fs metadata into kernel binary
+        // So we can remove the descriptors we had
+        // We can't call mem::deallocate_memory as the physical memory was allocated by blr. So we just unmap instead
+        mem::unmap_memory(boot_info.init_fs.start as *mut u8, boot_info.init_fs.size).expect("Could not deallocate init-fs descriptor memory");
     }
+
 
     mem::unmap_kernel_memory(kernel_base, total_size);
     info!("Handoff procedure completed");

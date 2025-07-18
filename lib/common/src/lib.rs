@@ -1,14 +1,17 @@
 #![no_std]
 
-//extern crate alloc;
 mod utils;
 pub use utils::*;
 pub mod elf;
-//use alloc::{collections::BTreeMap, string::String, vec::Vec};
 
 #[cfg(target_arch="x86_64")]
 pub const PAGE_SIZE: usize = 4096;
 pub const MAX_DESCRIPTORS: usize = 200;
+
+pub struct FileDescriptor<'a> {
+    pub contents: &'a[u8],
+    pub name: &'a str
+}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -61,7 +64,7 @@ pub struct BootInfo {
     pub kernel_desc: ModuleInfo,
     pub framebuffer_desc: FBInfo,
     pub memory_map_desc: ArrayTable,
- //   pub init_fs: BTreeMap<String, Vec<u8>>
+    pub init_fs: ArrayTable
 }
 
 #[repr(C)]

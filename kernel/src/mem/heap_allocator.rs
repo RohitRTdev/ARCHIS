@@ -93,7 +93,6 @@ unsafe impl GlobalAlloc for Spinlock<LinkedListAllocator> {
 
         // Out of memory, request more from virtual allocator and retry
         let alloc_size = align_up(size, PAGE_SIZE);
-        debug!("alloc_size={}", alloc_size);
         match allocate_memory(Layout::from_size_align(alloc_size, PAGE_SIZE).unwrap(), PageDescriptor::VIRTUAL) {
             Ok(mem) => {
                 allocator.add_free_region(mem as usize, alloc_size);
@@ -118,9 +117,9 @@ unsafe impl GlobalAlloc for Spinlock<LinkedListAllocator> {
         debug!("Requesting heap deallocation -> {:?} at address:{:#X} with memory:{}", layout, addr as usize, allocator.backing_memory);
         allocator.add_free_region(addr as usize, size);
         allocator.backing_memory += size;
-        debug!("Memory after:{}", allocator.backing_memory);
     }
 }
 
+#[cfg(not(test))]
 #[global_allocator]
 pub static GLOBAL_ALLOCATOR: Spinlock<LinkedListAllocator> = Spinlock::new(LinkedListAllocator::new()); 

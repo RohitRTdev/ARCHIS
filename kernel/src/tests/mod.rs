@@ -1,9 +1,8 @@
 use core::{alloc::Layout, ptr::NonNull};
 use std::{sync::{Arc, Mutex, OnceLock}};
 
-use common::{test_log, PAGE_SIZE};
-
 use crate::{ds::*, error::KError, mem};
+use common::test_log;
 
 tests::init_test_logger!(aris);
 
@@ -31,6 +30,7 @@ fn fixed_allocator_test() {
     
     mem::clear_heap();
     mem::setup_heap();
+    test_log!("Starting fixed_allocator_test");
     let (heap, r0_bm) = mem::get_heap(mem::Regions::Region0);
 
     // This should allocate first 3 slots in heap from region 0
@@ -69,6 +69,7 @@ fn list_alloc_test() {
     let mut structure: List<Sample, mem::FixedAllocator<ListNode<Sample>, {mem::Regions::Region0 as usize}>> = List::new();
     mem::clear_heap();
     mem::setup_heap();
+    test_log!("Starting list_alloc_test");
     let (_, r0_bm) = mem::get_heap(mem::Regions::Region0);
 
     structure.add_node(Sample{_a:52, _b: 12}).unwrap();
@@ -110,6 +111,7 @@ fn queue_alloc_test() {
     let _guard = get_test_lock().lock().unwrap();
     mem::clear_heap();
     mem::setup_heap();
+    test_log!("Starting queue_alloc_test");
     let (_, r0_bm) = mem::get_heap(mem::Regions::Region0);
 
     structure.push(Sample{_a:14, _b: 23}).unwrap();
@@ -140,6 +142,8 @@ fn phy_alloc_test() {
     let _guard = get_test_lock().lock().unwrap();
     mem::clear_heap();
     mem::setup_heap();
+    
+    test_log!("Starting phy_alloc_test");
 
     mem::test_init_allocator();
 
@@ -191,6 +195,7 @@ fn virt_alloc_test() {
     let _guard = get_test_lock().lock().unwrap();
     mem::clear_heap();
     mem::setup_heap();
+    test_log!("Starting virt_alloc_test");
     mem::test_init_allocator_for_virtual();
     mem::virtual_allocator_test();
 }

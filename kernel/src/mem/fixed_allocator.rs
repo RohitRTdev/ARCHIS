@@ -288,8 +288,8 @@ pub fn unmap_kernel_memory(base: usize, total_size: usize) {
     debug!("base={:#X}, heap={:#X}, size_top={}, base_end={:#X}, size_end={}", base, heap_start, size_top, kernel_end, size_end);
 
     // Remove the kernel identity mapped regions except the heap region
-    crate::mem::unmap_memory(base, size_top).expect("Unable to unmap kernel top identity mapped region");
-    crate::mem::unmap_memory(kernel_end, size_end).expect("Unable to unmap kernel end identity mapped region");
+    crate::mem::unmap_memory(base as *mut u8, size_top).expect("Unable to unmap kernel top identity mapped region");
+    crate::mem::unmap_memory(kernel_end as *mut u8, size_end).expect("Unable to unmap kernel end identity mapped region");
 }
 
 // This function should be called before using fixed allocator routines

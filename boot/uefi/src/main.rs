@@ -5,8 +5,7 @@ mod loader;
 mod logger;
 mod display;
 
-use common::{ArrayTable, BootInfo, MemType, MemoryDesc, MemoryRegion, MAX_DESCRIPTORS, PAGE_SIZE};
-use alloc::borrow::ToOwned;
+use common::{ArrayTable, BootInfo, MemType, MemoryDesc, MemoryRegion, FileDescriptor, MAX_DESCRIPTORS, PAGE_SIZE};
 use uefi::{mem::memory_map::MemoryMap, prelude::*};
 use uefi::boot::{MemoryAttribute, MemoryType};
 use log::{info, debug};
@@ -15,7 +14,6 @@ use core::panic::PanicInfo;
 use core::alloc::Layout;
 use uefi::{Identify, proto::media::fs::SimpleFileSystem};
 use blr::{KERNEL_FILE, ROOT_FILES, load_kernel, jump_to_kernel};
-
 
 extern crate alloc;
 
@@ -97,7 +95,7 @@ fn main() -> Status {
     let root_partition = loader::list_fs(&supported_handles);
     let file_table = loader::load_init_fs(root_partition, ROOT_FILES.as_slice());
     
-    let kernel_data = file_table.fetch_file_data(KERNEL_FILE.to_owned());
+    let kernel_data = file_table.fetch_file_data(KERNEL_FILE).unwrap();
     let kern_info  = load_kernel(kernel_data.as_ptr());
 
     debug!("{:?}", kern_info);
@@ -105,8 +103,10 @@ fn main() -> Status {
     info!("Fetching GPU and memmap info before transferring control to aris");
     let fb_info = display::get_primary_gpu_framebuffer();
     let mem_info = setup_memory_map();
-    
-    let boot_info = BootInfo {kernel_desc: kern_info, framebuffer_desc: fb_info, memory_map_desc: mem_info};
+    let fs_info = ArrayTable {start: file_table.descriptors.as_ptr() as usize, 
+        size: size_of::<FileDescriptor>() * file_table.length, entry_size: size_of::<FileDescriptor>()};
+
+    let boot_info = BootInfo {kernel_desc: kern_info, framebuffer_desc: fb_info, memory_map_desc: mem_info, init_fs: fs_info};
 
     unsafe {
         jump_to_kernel(&boot_info);

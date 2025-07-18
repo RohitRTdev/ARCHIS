@@ -13,8 +13,7 @@ mod error;
 use common::*;
 
 extern crate alloc;
-use alloc::vec::Vec;
-use alloc::string::String;
+use alloc::{collections::BTreeMap, string::String, vec::Vec};
 
 
 #[cfg(test)]
@@ -51,12 +50,12 @@ static KERN_INIT_STACK: Stack = Stack {
     _guard_page: [0; PAGE_SIZE]
 };
 
+static INIT_FS: Once<BTreeMap<&'static str, &'static [u8]>> = Once::new();  
 static REMAP_LIST: Spinlock<List<RemapEntry, FixedAllocator<ListNode<RemapEntry>, {Region3 as usize}>>> = Spinlock::new(List::new());
 static CUR_STACK_BASE: Spinlock<usize> = Spinlock::new(0);
 
 fn kern_main() {
     info!("Starting main kernel init");
-
     {
         let mut list = Vec::new();
         list.push(1);
@@ -101,7 +100,7 @@ unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
 
     module::early_init();
 
-    debug!("{:?}", BOOT_INFO.get().unwrap());
+    debug!("{:?}", *BOOT_INFO.get().unwrap());
 
     hal::init();
 }

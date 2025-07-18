@@ -2,7 +2,7 @@ use common::{MemType, MemoryDesc, PAGE_SIZE};
 use crate::{ds::*, RemapEntry, RemapType::*, BOOT_INFO, REMAP_LIST};
 use crate::sync::{Once, Spinlock};
 use crate::error::KError;
-use crate::{info, debug};
+use crate::info;
 use super::{FixedAllocator, Regions::*};
 use super::PageDescriptor;
 use core::alloc::Layout;
@@ -203,6 +203,7 @@ pub fn frame_allocator_init() {
 
 #[cfg(test)] 
 pub fn test_init_allocator() {
+    common::test_log!("Initializing physical allocator");
     let desc1 = PageDescriptor {
         num_pages: 10,
         start_phy_address: 0x0,
@@ -248,6 +249,7 @@ pub fn test_init_allocator() {
 
 #[cfg(test)]
 pub fn test_init_allocator_for_virtual() {
+    common::test_log!("Initializing virtual allocator");
     let desc = PageDescriptor {
         num_pages: 100,
         start_phy_address: 0xf000,
