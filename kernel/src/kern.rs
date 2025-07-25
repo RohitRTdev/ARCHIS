@@ -1,5 +1,6 @@
 #![cfg_attr(not(test), no_std)]
 #![feature(generic_const_exprs)]
+#![feature(likely_unlikely)]
 
 mod infra;
 mod hal;
@@ -9,6 +10,7 @@ mod ds;
 mod module;
 mod logger;
 mod error;
+mod cpu;
 
 use common::*;
 
@@ -25,14 +27,6 @@ use crate::ds::*;
 
 static BOOT_INFO: Once<BootInfo> = Once::new();
 
-const KERN_INIT_STACK_SIZE: usize  = PAGE_SIZE * 2;
-
-#[cfg_attr(target_arch="x86_64", repr(align(4096)))]
-struct Stack {
-    stack: [u8; KERN_INIT_STACK_SIZE],
-    _guard_page: [u8; PAGE_SIZE]
-}
-
 #[derive(Debug, PartialEq)]
 enum RemapType {
     IdentityMapped,
@@ -45,14 +39,8 @@ struct RemapEntry {
     map_type: RemapType
 }
 
-static KERN_INIT_STACK: Stack = Stack {
-    stack: [0; KERN_INIT_STACK_SIZE],
-    _guard_page: [0; PAGE_SIZE]
-};
-
 static INIT_FS: Once<BTreeMap<&'static str, &'static [u8]>> = Once::new();  
 static REMAP_LIST: Spinlock<List<RemapEntry, FixedAllocator<ListNode<RemapEntry>, {Region3 as usize}>>> = Spinlock::new(List::new());
-static CUR_STACK_BASE: Spinlock<usize> = Spinlock::new(0);
 
 fn kern_main() {
     info!("Starting main kernel init");
@@ -86,9 +74,6 @@ fn kern_main() {
 
 #[no_mangle]
 unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
-    hal::disable_interrupts();
-    *CUR_STACK_BASE.lock() = hal::get_current_stack_base();
-    
     BOOT_INFO.call_once(|| {
         *boot_info
     });   
@@ -96,7 +81,7 @@ unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
     mem::setup_heap(); 
     logger::init();
     info!("Starting aris");
-    info!("Early boot stack base:{:#X}", *CUR_STACK_BASE.lock()); 
+    cpu::init();
 
     module::early_init();
 

@@ -5,7 +5,7 @@ use core::fmt::Write;
 use serial_logger::SERIAL;
 use framebuffer_logger::FRAMEBUFFER_LOGGER;
 use crate::sync::Spinlock;
-pub use framebuffer_logger::relocate;
+pub use framebuffer_logger::relocate_framebuffer;
 
 #[macro_export]
 macro_rules! println {

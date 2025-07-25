@@ -16,7 +16,8 @@ FUNC init_address_space
     // At this point we're in new address space, load the new stack and jump to target address
     movq %rsi, %rsp
     movq %rsi, %rbp
-    jmp *%rdx
+    call *%rdx
+    hlt
 ENDF init_address_space
 
 

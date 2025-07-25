@@ -8,6 +8,11 @@ build = "build.rs"
 path = "src/kern.rs"
 crate-type = ["cdylib"]
 
+[features]
+default = []
+acpi = []
+stack_down = []
+
 [dependencies]
 common.workspace = true
 rustc-demangle = "*"

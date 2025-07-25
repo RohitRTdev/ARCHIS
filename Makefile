@@ -1,39 +1,34 @@
 CONFIG ?= debug
-SHELL = /bin/bash
-BLR_TARGET = x86_64-unknown-uefi
-KERNEL_ARCH = X86_64
+BUILD_CONFIG ?= x86_64-acpi-uefi
+CONFIG_FILE := config/$(BUILD_CONFIG).mk
+IMAGE_NAME = disk-tools
+OUTPUT_DIR = output
 ENV_PLACEHOLDER = placeholder.txt
 KERN_PLACEHOLDER = kernel/placeholder_test.txt
-KERNEL_TARGET = config/$(KERNEL_ARCH)/$(KERNEL_ARCH).json
-BLR_CRATE_PATH = boot/uefi
-KERNEL_CRATE_PATH = kernel
-BLR_EXE = target/$(BLR_TARGET)/$(CONFIG)/boot.efi
-KERNEL_EXE = target/$(KERNEL_ARCH)/$(CONFIG)/libaris.so
-LINKER_SCRIPT = $(KERNEL_CRATE_PATH)/config/$(KERNEL_ARCH)/linker.ld
-OUTPUT_DIR = output
-IMAGE_NAME = disk-tools
 GEN_MSG = "Automatically generated file..\nDo not remove manually.."
 DRIVER_DIRS := $(wildcard kernel/src/drivers/*)
-KERNEL_FLAGS := -C link-arg=-T$(LINKER_SCRIPT) 
-DRIVER_FLAGS := -C link-arg=-T$(LINKER_SCRIPT) -C link-arg=-Ltarget/$(KERNEL_ARCH)/$(CONFIG)
+SHELL = /bin/bash
 
-ifeq ($(OS),Windows_NT)
-    RUN_DOCKER_SCRIPT = @./scripts/docker.bat
-else
-    RUN_DOCKER_SCRIPT = @docker run -it --privileged -v "$$(pwd)":/workspace -w /workspace $(IMAGE_NAME) ./scripts/create_image_uefi.sh
+ifeq ($(wildcard $(CONFIG_FILE)),)
+$(error Config file '$(CONFIG_FILE)' not found!)
 endif
 
+include $(CONFIG_FILE)
+
+KERNEL_FLAGS := -C link-arg=-T$(LINKER_SCRIPT)
+DRIVER_FLAGS := -C link-arg=-T$(LINKER_SCRIPT) -C link-arg=-Ltarget/$(KERNEL_ARCH)/$(CONFIG)
+
 ifeq ($(CONFIG),release)
-	BUILD_OPTIONS := --release
+    BUILD_OPTIONS := --release
 else ifeq ($(CONFIG),debug)
-	BUILD_OPTIONS :=
+    BUILD_OPTIONS :=
 else 
 $(error Config flag must be either 'debug' or 'release')
 endif
 
 ifeq ($(CONFIG),debug)
-	KERNEL_FLAGS += -C force-frame-pointers=yes
-	DRIVER_FLAGS += -C force-frame-pointers=yes
+    KERNEL_FLAGS += -C force-frame-pointers=yes
+    DRIVER_FLAGS += -C force-frame-pointers=yes
 endif
 
 .PHONY: all clean build_blr build_kernel build_kernel_test build_kernel_template build_image
@@ -47,7 +42,7 @@ $(ENV_PLACEHOLDER):
 
 build_image: build_kernel build_blr build_drivers $(ENV_PLACEHOLDER)
 	@echo "Starting image creation"
-	@touch $(OUTPUT_DIR)/archis_os.iso
+	@touch $(OUTPUT_IMAGE)
 	$(RUN_DOCKER_SCRIPT)
 
 $(OUTPUT_DIR):
@@ -64,12 +59,12 @@ build_blr: $(OUTPUT_DIR)
 		-Z build-std=core,alloc \
 		--target $(BLR_TARGET) \
 	)
-	@cp $(BLR_EXE) $(OUTPUT_DIR)/bootx64.efi
+	@cp $(BLR_EXE) $(BLR_TARGET_EXE) 
 
 build_kernel_template:
 	@echo "Building kernel..."
 	@(cd kernel && RUSTFLAGS="$(KERNEL_FLAGS)" \
-		cargo build $(BUILD_OPTIONS) \
+		cargo build $(BUILD_OPTIONS) $(KERNEL_OPTIONS) \
 		-Z build-std=core,compiler_builtins,alloc \
 		-Z build-std-features=compiler-builtins-mem \
 		--target $(KERNEL_TARGET) \
@@ -114,8 +109,7 @@ test:
 
 clean:
 	@echo "Cleaning all builds..."
-	@cd $(BLR_CRATE_PATH) && cargo clean
-	@cd $(KERNEL_CRATE_PATH) && cargo clean
+	@cargo clean
 	@rm -rf $(OUTPUT_DIR)
 
 # Execute this to restart build process from very beginning

@@ -8,6 +8,8 @@ mod cpu_regs;
 mod page_mapper;
 mod tables;
 mod handlers;
+mod cpu;
+pub use cpu::*;
 pub use utils::*;
 pub use page_mapper::*;
 
@@ -31,8 +33,6 @@ pub fn enable_interrupts(int_status: bool) {
 
 pub use asm::read_port_u8;
 pub use asm::write_port_u8;
-
-use crate::KERN_INIT_STACK;
 
 pub struct Spinlock(u64);
 
@@ -90,21 +90,22 @@ pub fn get_current_stack_base() -> usize {
 #[cfg(debug_assertions)]
 pub fn unwind_stack(max_depth: usize, stack_base: usize, address: &mut [usize]) -> usize {
     let mut base = get_current_stack_base();
+    let mut prev_base = base;
     let mut depth = 0;
-
     while depth < max_depth && stack_base >= base + 8 {
+        prev_base = base;
         let fn_addr = unsafe {*((base + 8) as *const u64)} as usize;
-        address[depth] = fn_addr;
-        
         base = unsafe {*(base as *const u64)} as usize;
+        
+        if base <= prev_base {
+            break;
+        }
+
+        address[depth] = fn_addr;
         depth += 1;
     }
 
     depth
-}
-
-fn get_stack_base(stack_top: usize, stack_size: usize) -> usize {
-    crate::mem::get_virtual_address(stack_top + stack_size, MapFetchType::Kernel).expect("Unexpected error. Stack virtual address not found!")
 }
 
 #[inline(always)]
@@ -114,7 +115,6 @@ pub fn fire_interrupt() {
     }
 }
 
-
 pub fn init() -> ! {
     info!("Starting platform initialization");
 
@@ -123,10 +123,10 @@ pub fn init() -> ! {
 
     crate::mem::init();
 
-    let stack_top = KERN_INIT_STACK.stack.as_ptr() as usize;
-    let stack_base = get_stack_base(stack_top, crate::KERN_INIT_STACK_SIZE); 
-    *crate::CUR_STACK_BASE.lock() = stack_base; 
+    let stack_base = crate::mem::get_virtual_address(crate::cpu::get_current_stack_base(), MapFetchType::Kernel)
+    .expect("Unexpected error. Stack virtual address not found!");
 
     switch_to_new_address_space(page_mapper::get_kernel_pml4(), stack_base,
         crate::mem::get_virtual_address(tables::kern_addr_space_start as usize, MapFetchType::Kernel).expect("kern_addr_space_start virtual address not found!"));
 }
+

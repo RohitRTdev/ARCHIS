@@ -14,7 +14,8 @@ pub enum Regions {
     Region0,
     Region1,
     Region2,
-    Region3
+    Region3,
+    Region4
 }
 
 // It's important that regions are declared in descending order of their size (in order to avoid padding while laying out heap)
@@ -22,6 +23,7 @@ const BOOT_REGION_SIZE0: usize = 10 * PAGE_SIZE;
 const BOOT_REGION_SIZE1: usize = 4 * PAGE_SIZE;
 const BOOT_REGION_SIZE2: usize = PAGE_SIZE;
 const BOOT_REGION_SIZE3: usize = PAGE_SIZE;
+const BOOT_REGION_SIZE4: usize = PAGE_SIZE;
 const TOTAL_BOOT_MEMORY: usize = BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2 + BOOT_REGION_SIZE3;
 
 // Here we simply divide given memory into slots each of size 8 bytes
@@ -37,6 +39,7 @@ struct HeapWrapper {
     heap1: [u8; BOOT_REGION_SIZE1],
     heap2: [u8; BOOT_REGION_SIZE2],
     heap3: [u8; BOOT_REGION_SIZE3],
+    heap4: [u8; BOOT_REGION_SIZE4],
     bitmap: [u8; BITMAP_SIZE],
     lock: Spinlock<core::marker::PhantomData<bool>>
 }
@@ -46,6 +49,7 @@ static HEAP: HeapWrapper = HeapWrapper {
     heap1: [0; BOOT_REGION_SIZE1],
     heap2: [0; BOOT_REGION_SIZE2],
     heap3: [0; BOOT_REGION_SIZE3],
+    heap4: [0; BOOT_REGION_SIZE4],
     bitmap: [0; BITMAP_SIZE],
     lock: Spinlock::new(core::marker::PhantomData)
 };
@@ -67,6 +71,9 @@ pub fn get_heap(reg: Regions) -> (*const u8, *const u8) {
         }
         Regions::Region3 => {
             (HEAP.heap3.as_ptr() as *mut u8, (BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2) >> 3)
+        }
+        Regions::Region4 => {
+            (HEAP.heap4.as_ptr() as *mut u8, (BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2 + BOOT_REGION_SIZE3) >> 3)
         }
     };
     
@@ -110,6 +117,9 @@ where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
             3 => {
                 (unsafe {heap_start.add(BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2)}, (BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2) >> 3)
             }
+            4 => {
+                (unsafe {heap_start.add(BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2 + BOOT_REGION_SIZE3)}, (BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2 + BOOT_REGION_SIZE3) >> 3)
+            }
 
             // This will never happen
             _ => {(core::ptr::null_mut(),0)}
@@ -136,6 +146,9 @@ where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
             }
             3 => {
                 BOOT_REGION_SIZE3 / mem::size_of::<T>()
+            }
+            4 => {
+                BOOT_REGION_SIZE4 / mem::size_of::<T>()
             }
             _ => {
                 0

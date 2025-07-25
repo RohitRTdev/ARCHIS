@@ -7,6 +7,7 @@ use crate::{info, debug};
 use crate::RemapType::*;
 use core::alloc::Layout;
 use core::ptr::NonNull;
+use core::hint::likely;
 use common::{ceil_div, en_flag, PAGE_SIZE};
 use super::PHY_MEM_CB;
 
@@ -265,7 +266,10 @@ impl VirtMemConBlk {
 
         lowest_address
     }
-    
+
+    // Allowed to map memory only if the address is not already allocated
+    // In case user wants to map new physical address to existing virtual address, then first unmap the memory
+    // and then map the new physical address 
     fn map_memory(&mut self, phys_addr: usize, virt_addr: usize, size: usize, is_user: bool) -> Result<(), KError> {
         if size == 0 {
             return Ok(())
@@ -403,7 +407,7 @@ pub fn deallocate_memory(addr: *mut u8, layout: Layout, flags: u8) -> Result<(),
 }
 
 pub fn get_physical_address(virt_addr: usize) -> Option<usize> {
-    if ACTIVE_VIRTUAL_CON_BLK.is_init() {
+    if likely(ACTIVE_VIRTUAL_CON_BLK.is_init()) {
         unsafe {
             (*ACTIVE_VIRTUAL_CON_BLK.get().unwrap().lock().as_ptr()).get_phys_address(virt_addr)
         }
@@ -414,13 +418,13 @@ pub fn get_physical_address(virt_addr: usize) -> Option<usize> {
     }
 }
 
-// Unlike get_physical_address, a physical address could be mapped to multiple virtual addresses
+// Unlike get_physical_address, multiple virtual addresses could be mapped to the same physical address
 // fetch type allows user to filter out the particular region they want
 // Following rules are applicable only when there is more than one virtual address for given physical address
 // Kernel -> If present, fetch the lowest address that is > KERNEL_HALF_OFFSET
 // Any -> Fetch the lowest virtual address region
 pub fn get_virtual_address(phys_addr: usize, fetch_type: MapFetchType) -> Option<usize> {
-    if ACTIVE_VIRTUAL_CON_BLK.is_init() {
+    if likely(ACTIVE_VIRTUAL_CON_BLK.is_init()) {
         unsafe {
             (*ACTIVE_VIRTUAL_CON_BLK.get().unwrap().lock().as_ptr()).get_virt_address(phys_addr, fetch_type)
         }
@@ -434,7 +438,7 @@ pub fn get_virtual_address(phys_addr: usize, fetch_type: MapFetchType) -> Option
 // Later, we'll add function for map_memory and here we also need to add type of memory we're unmapping (kernel or user)
 // This is important, since if it's kernel memory, we need to unmap that memory in all address spaces
 pub fn unmap_memory(virt_addr: *mut u8, size: usize) -> Result<(), KError> {
-    if ACTIVE_VIRTUAL_CON_BLK.is_init() {
+    if likely(ACTIVE_VIRTUAL_CON_BLK.is_init()) {
         unsafe {
             (*ACTIVE_VIRTUAL_CON_BLK.get().unwrap().lock().as_ptr()).unmap_memory(virt_addr, size)
         }

@@ -1,5 +1,5 @@
 use common::{en_flag, ptr_to_usize};
-use crate::{debug, hal::enable_interrupts, info, sync::{Once, Spinlock}};
+use crate::{cpu, debug, hal::enable_interrupts, info, sync::{Once, Spinlock}};
 use super::{asm, MAX_INTERRUPT_VECTORS, handlers};
 
 const KERNEL_CODE_SELECTOR: usize = 0x8;
@@ -120,10 +120,11 @@ static CPU_TSS: Once<TaskStateSegment> = Once::new();
 
 pub extern "C" fn kern_addr_space_start() {
     info!("Switched to new address space");
+    crate::cpu::set_panic_base(super::get_current_stack_base());
     crate::module::complete_handoff();
     
     CPU_TSS.call_once(|| {
-        TaskStateSegment::new(*crate::CUR_STACK_BASE.lock() as u64) 
+        TaskStateSegment::new(cpu::get_current_stack_base() as u64) 
     });
 
     let tss_base = CPU_TSS.get().unwrap() as *const _ as u64;

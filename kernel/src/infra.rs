@@ -2,24 +2,26 @@ use core::panic::PanicInfo;
 use core::ffi::CStr;
 use common::elf::*;
 use rustc_demangle::demangle;
+use crate::cpu;
 use crate::logger;
 use crate::println;
 use crate::sync::Spinlock;
-use crate::{hal, CUR_STACK_BASE};
+use crate::hal;
 use crate::module::*;
 
 static GLOBAL_PANIC_LOCK: Spinlock<bool> = Spinlock::new(false);
 const STACK_UNWIND_DEPTH: usize = 16;
 
 pub fn common_panic_handler(mod_name: &str, info: &PanicInfo) -> ! {
-    let _sync = GLOBAL_PANIC_LOCK.lock();
+    let panic_cb = GLOBAL_PANIC_LOCK.lock();
     logger::set_panic_mode();
-    let stack_base = *CUR_STACK_BASE.lock();
+    let stack_base = cpu::get_panic_base(); 
     let mut unwind_list: [usize; STACK_UNWIND_DEPTH] = [0; STACK_UNWIND_DEPTH];
 
     println!("Kernel panic!!");
     println!("Message: {}", info.message());
     println!("Module: {}", mod_name);
+
 
     #[cfg(debug_assertions)]
     {

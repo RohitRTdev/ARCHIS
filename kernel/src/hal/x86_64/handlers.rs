@@ -1,4 +1,5 @@
 use crate::debug;
+use crate::cpu;
 use crate::sync::Spinlock;
 use super::*;
 
@@ -66,9 +67,9 @@ pub struct CPUContext {
 
 #[no_mangle]
 extern "C" fn global_interrupt_handler(vector: u64, cpu_context: *const CPUContext) {
-    *crate::CUR_STACK_BASE.lock() = unsafe {
-        asm::fetch_rbp()
-    } as usize;
+    cpu::set_panic_base(unsafe {
+        asm::fetch_rbp() as usize
+    });
 
     VECTOR_TABLE.lock()[vector as usize](vector as usize);
 }
