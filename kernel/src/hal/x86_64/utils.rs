@@ -1,6 +1,14 @@
 use super::asm;
 use crate::debug;
 
+#[inline(always)]
+pub fn read_timestamp() -> u64 {
+    unsafe {
+        asm::rdtsc()
+    }
+}
+
+
 #[derive(Debug, Clone, Copy)]
 pub struct VirtAddr(u64);
 

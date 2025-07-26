@@ -17,6 +17,14 @@ FUNC cpuid
     ret 
 ENDF cpuid
 
+FUNC rdtsc
+    rdtsc
+    shlq $32, %rdx
+    orq %rdx, %rax
+    ret
+ENDF rdtsc
+
+
 FUNC rdmsr
     movl %edi, %ecx
     rdmsr

@@ -10,6 +10,8 @@ use super::fixed_allocator::{FixedAllocator, Regions::*};
 use super::allocate_memory;
 use common::PAGE_SIZE;
 
+const ALLOCATION_UNIT: usize = PAGE_SIZE * 2;  
+
 // Represents a single pool for a specific block size.
 struct Pool {
     block_size: usize,
@@ -37,7 +39,7 @@ impl FreeBlock {
     }
 }
 
-/// Maintains a list of pools for different block sizes.
+// Maintains a list of pools for different block sizes.
 struct PoolControlBlock {
     pools: List<Pool, FixedAllocator<ListNode<Pool>, {Region5 as usize}>>
 }
@@ -85,7 +87,7 @@ impl<T> PoolAllocator<T> {
 
 impl<T> super::Allocator<T> for PoolAllocator<T> {
     fn alloc(layout: Layout) -> Result<NonNull<T>, KError> {
-        // Due to out pool allocator's design, the alignment will be same as the size
+        // Due to our pool allocator's design, the alignment will be same as the size
         assert!(layout.size() >= size_of::<FreeBlock>() && layout.size() <= PAGE_SIZE
             && layout.align() <= layout.size() && layout.size() % layout.align() == 0
             && layout.size() == size_of::<T>());
@@ -107,8 +109,8 @@ impl<T> super::Allocator<T> for PoolAllocator<T> {
         }
 
         // No free slots, allocate a new block and push all slots to free_list
-        let slots_per_block = PAGE_SIZE / block_size;
-        let layout = Layout::from_size_align(2 * PAGE_SIZE, PAGE_SIZE).unwrap();
+        let slots_per_block = ALLOCATION_UNIT / block_size;
+        let layout = Layout::from_size_align(ALLOCATION_UNIT, PAGE_SIZE).unwrap();
         let base = allocate_memory(layout, PageDescriptor::VIRTUAL)?;
 
         // Push all slots to free_list

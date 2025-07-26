@@ -25,4 +25,5 @@ extern "C" {
     pub fn rdmsr(address: u32) -> u64;
     pub fn wrmsr(address: u32, data: u64);
     pub fn invlpg(address: u64);
+    pub fn rdtsc() -> u64;
 }

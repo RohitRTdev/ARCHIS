@@ -11,6 +11,7 @@ mod module;
 mod logger;
 mod error;
 mod cpu;
+mod devices;
 
 use core::alloc::Layout;
 
@@ -38,7 +39,7 @@ enum RemapType {
 #[derive(Debug)]
 struct RemapEntry {
     value: MemoryRegion,
-    map_type: RemapType
+    map_type: RemapType,
 }
 
 static INIT_FS: Once<BTreeMap<&'static str, &'static [u8]>> = Once::new();  
@@ -118,6 +119,7 @@ unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
     });   
 
     mem::setup_heap(); 
+    devices::init();
     logger::init();
     info!("Starting aris");
     cpu::init();

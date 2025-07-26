@@ -157,7 +157,6 @@ pub fn init() {
         CPUReg::<RFLAGS>::clear(RFLAGS::IOPL | RFLAGS::AC);
     }
 
-    // Currently facing some issues with this on real hardware. Will get back to this later
     //if features.mtrr {
     //    // Set video memory to WC caching type and disable remaining variable mtrr's
     //    let mtrr_cap = unsafe {
@@ -169,39 +168,47 @@ pub fn init() {
     //    let mut var_reg_offset = MTRRPHYMASK::ADDRESS;
 
     //    info!("Total MTRR variable counters = {}, WC support={}", var_reg_cnt, wc_support);
+    //    assert!(var_reg_cnt <= 8);
+
     //    if wc_support && var_reg_cnt > 0 {
-    //        let fb_cb = BOOT_INFO.get().unwrap();
-    //        let fb_size = fb_cb.framebuffer_desc.fb.size.next_power_of_two();
-    //        let fb_base = common::align_down(fb_cb.framebuffer_desc.fb.base_address, fb_size);
-    //        let mask = ((1 << features.phy_addr_width) - 1 - (fb_size - 1)) as u64 & !0xfff; 
+    //        // Find an unused mtrr
+    //        while var_reg_cnt > 0 {
+    //            unsafe {
+    //                if asm::rdmsr(var_reg_offset) & 0x1 == 0 {
+    //                    break;
+    //                }
+    //            }
+    //            var_reg_offset += 2;
+    //            var_reg_cnt -= 1;
+    //        } 
 
-    //        // Type 1 -> WC encoding + physical address
-    //        let vid_mtrr_data: u64 = (fb_base as u64 & !0xfff) | 0x1;
-    //        let vid_mtrr_mask_data: u64 = mask | MTRRPHYMASK::VALID;
+    //        if var_reg_cnt != 0 {
+    //            let fb_cb = BOOT_INFO.get().unwrap();
+    //            let fb_size = fb_cb.framebuffer_desc.fb.size.next_power_of_two();
+    //            let fb_base = common::align_down(fb_cb.framebuffer_desc.fb.base_address, fb_size);
+    //            let mask = ((1 << features.phy_addr_width) - 1 - (fb_size - 1)) as u64 & !0xfff; 
 
-    //        info!("Setting MTRRPHY0 with WC encoding, phy_data={:#X} and mask={:#X} -> fb_size={}, fb_base={:#X}", vid_mtrr_data, vid_mtrr_mask_data, fb_size, fb_base); 
-    //        unsafe {
-    //            asm::wrmsr(MTRRPHY::ADDRESS, vid_mtrr_data);
-    //            asm::wrmsr(MTRRPHYMASK::ADDRESS, vid_mtrr_mask_data);
+    //            // Type 1 -> WC encoding + physical address
+    //            let vid_mtrr_data: u64 = (fb_base as u64 & !0xfff) | 0x1;
+    //            let vid_mtrr_mask_data: u64 = mask | MTRRPHYMASK::VALID;
+
+    //            info!("Setting MTRRPHY{} with WC encoding, phy_data={:#X} and mask={:#X} -> fb_size={}, fb_base={:#X}", 8 - var_reg_cnt, vid_mtrr_data, vid_mtrr_mask_data, fb_size, fb_base); 
+    //            unsafe {
+    //                asm::wrmsr(var_reg_offset, vid_mtrr_data);
+    //                asm::wrmsr(var_reg_offset + 1, vid_mtrr_mask_data);
+    //            }
     //        }
-
-    //        var_reg_cnt -= 1;
-    //        var_reg_offset += 2;
+    //        else {
+    //            info!("Did not find unprogrammed variable mtrr. Skipping cache setting for frame buffer...");
+    //        }
     //    }
 
-    //    while var_reg_cnt > 0 {
-    //        unsafe {
-    //            // Disable all remaining mtrr's
-    //            asm::wrmsr(var_reg_offset, 0);
-    //        }
-    //        var_reg_offset += 2;
-    //        var_reg_cnt -= 1;
-    //    } 
-
     //    unsafe {
-    //        // Set default memory region range to WB
     //        let val = asm::rdmsr(MTRRDEF::ADDRESS);
-    //        asm::wrmsr(MTRRDEF::ADDRESS, val | MTRRDEF::MTRR_ENABLE | 0x6);
+    //        // If firmware has not setup default memory region type, then set it to WB
+    //        if val & MTRRDEF::MTRR_ENABLE == 0 {
+    //            asm::wrmsr(MTRRDEF::ADDRESS, val | MTRRDEF::MTRR_ENABLE | 0x6);
+    //        }
     //    }
     //}
 

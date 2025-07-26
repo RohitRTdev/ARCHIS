@@ -1,9 +1,8 @@
-mod serial_logger;
 mod framebuffer_logger;
 
 use core::fmt::Write;
-use serial_logger::SERIAL;
 use framebuffer_logger::FRAMEBUFFER_LOGGER;
+use crate::devices::SERIAL;
 use crate::sync::Spinlock;
 pub use framebuffer_logger::relocate_framebuffer;
 
@@ -36,9 +35,21 @@ macro_rules! println {
 }
 
 #[macro_export]
+macro_rules! level_print {
+    ($level: literal, $($arg:tt)*) => {
+        if crate::logger::LOGGER.lock().log_timestamp {
+            $crate::println!("[{}]-[{}]-[{}]: {}", $level, crate::devices::read_rtc(), crate::hal::read_timestamp(), format_args!($($arg)*));
+        } else {
+            $crate::println!("[{}]-[{}]: {}", $level, crate::devices::read_rtc(), format_args!($($arg)*));
+        }
+    };
+}
+
+
+#[macro_export]
 macro_rules! info {
     ($($arg:tt)*) => {
-        $crate::println!("[INFO]: {}", format_args!($($arg)*));
+        $crate::level_print!("INFO", $($arg)*);
     };
 }
 
@@ -46,7 +57,7 @@ macro_rules! info {
 #[macro_export]
 macro_rules! debug {
     ($($arg:tt)*) => {
-        $crate::println!("[DEBUG]: {}", format_args!($($arg)*));
+        $crate::level_print!("DEBUG", $($arg)*);
     };
 }
 
@@ -68,15 +79,24 @@ impl core::fmt::Write for KernelLogger {
     }
 } 
 
-pub struct KernelLogger(bool);
-pub static LOGGER: Spinlock<KernelLogger> = Spinlock::new(KernelLogger(false));
+pub struct KernelLogger {
+    pub panic_mode: bool,
+    pub log_timestamp: bool
+}
+
+pub static LOGGER: Spinlock<KernelLogger> = Spinlock::new(KernelLogger { panic_mode: false,
+                                                log_timestamp: false });
 
 pub fn init() {
-    serial_logger::init();
     framebuffer_logger::init();
 }
 
 pub fn set_panic_mode() {
-    LOGGER.lock().0 = true;
+    LOGGER.lock().panic_mode = true;
     FRAMEBUFFER_LOGGER.lock().clear_screen();
+}
+
+pub fn enable_timestamp() {
+    LOGGER.lock().log_timestamp = true;
+    info!("Enabled high resolution timestamp");
 }

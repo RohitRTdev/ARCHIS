@@ -23,11 +23,12 @@ pub struct CPUFeatures {
     pub smap: bool,
     pub pge: bool,
     pub mtrr: bool,
+    pub tsc_invariant: bool,
 
     pub phy_addr_width: u8
 }
 
-const FEATURE_MAP: [FeatureDescriptor; 9] = [
+const FEATURE_MAP: [FeatureDescriptor; 11] = [
     FeatureDescriptor {
         fn_num: 0x1,
         ext_fn_num: 0,
@@ -55,6 +56,22 @@ const FEATURE_MAP: [FeatureDescriptor; 9] = [
         reg_idx: 3,
         bit_idx: 9,
         is_required: FeatureState::Required("APIC")
+    },
+    FeatureDescriptor {
+        fn_num: 0x1,
+        ext_fn_num: 0,
+        reg_idx: 3,
+        bit_idx: 4,
+        is_required: FeatureState::Required("TSC")
+    },
+    FeatureDescriptor {
+        fn_num: 0x80000007,
+        ext_fn_num: 0,
+        reg_idx: 3,
+        bit_idx: 8,
+        is_required: FeatureState::NotRequired(|val| {
+            val.tsc_invariant = true;
+        })
     },
     FeatureDescriptor {
         fn_num: 0x7,
@@ -147,6 +164,6 @@ pub fn init() {
         )
     });
 
-
+    crate::logger::enable_timestamp();
     debug!("Features = {:?}", *CPU_FEATURES.get().unwrap().lock());
 }
