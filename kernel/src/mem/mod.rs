@@ -6,9 +6,11 @@ mod fixed_allocator;
 mod frame_allocator;
 mod virtual_allocator;
 mod heap_allocator;
+mod pool_allocator;
 pub use fixed_allocator::*;
 pub use frame_allocator::*;
 pub use virtual_allocator::*;
+pub use pool_allocator::*;
 
 // This is in canonical form
 #[cfg(target_arch="x86_64")]

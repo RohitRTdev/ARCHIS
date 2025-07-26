@@ -3,7 +3,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use common::{align_down, align_up, PAGE_SIZE};
 use crate::{ds::*, hal, info};
 use crate::sync::Spinlock;
-use crate::mem::{allocate_memory, get_virtual_address, FixedAllocator, MapFetchType, Regions::*};
+use crate::mem::{allocate_memory, get_virtual_address, FixedAllocator, MapFetchType, PageDescriptor, Regions::*};
 const INIT_STACK_SIZE: usize  = PAGE_SIZE * 2;
 const INIT_GUARD_PAGE_SIZE: usize = PAGE_SIZE;
 pub const TOTAL_STACK_SIZE: usize = INIT_STACK_SIZE + INIT_GUARD_PAGE_SIZE;
@@ -55,7 +55,7 @@ pub fn register_cpu() -> usize {
         // Allocate worker stack for the CPU
         let stack = unsafe {
             &*(allocate_memory(Layout::from_size_align(TOTAL_STACK_SIZE, PAGE_SIZE).unwrap()
-            , 0)
+            , PageDescriptor::VIRTUAL)
             .expect("Failed to allocate memory for CPU worker stack") as *mut Stack)
         };
 

@@ -12,6 +12,8 @@ mod logger;
 mod error;
 mod cpu;
 
+use core::alloc::Layout;
+
 use common::*;
 
 extern crate alloc;
@@ -22,7 +24,7 @@ use alloc::{collections::BTreeMap, string::String, vec::Vec};
 mod tests;
 
 use sync::{Once, Spinlock};
-use crate::mem::{FixedAllocator, Regions::*};
+use crate::mem::{Allocator, FixedAllocator, PoolAllocator, Regions::*};
 use crate::ds::*;
 
 static BOOT_INFO: Once<BootInfo> = Once::new();
@@ -66,6 +68,43 @@ fn kern_main() {
         debug!("String test after insertion = {}", s);
     }
 
+    struct Sample1 {
+        a: u32,
+        b: u64,
+        c: u8
+    };
+
+    struct Sample2 {
+        a: u32,
+        b: u64,
+        c: u8,
+        d: u64
+    };
+
+    let layout = Layout::new::<Sample1>();
+    let obj1 = PoolAllocator::<Sample1>::alloc(layout).unwrap();
+    debug!("Allocated Sample1 object at {:#?}", obj1);
+    for _ in 0..10 {
+        let obj = PoolAllocator::<Sample1>::alloc(layout).unwrap();
+        debug!("Allocated Sample1 object at {:#?}", obj);
+    }
+
+    let layout = Layout::new::<Sample2>();
+    let obj2 = PoolAllocator::<Sample2>::alloc(layout).unwrap();
+    let layout = Layout::new::<Sample1>();
+    unsafe {
+        PoolAllocator::<Sample1>::dealloc(obj1, layout);
+    }
+    let obj3 = PoolAllocator::<Sample1>::alloc(layout).unwrap();
+    let obj4 = PoolAllocator::<Sample1>::alloc(layout).unwrap();
+    debug!("obj2 = {:#?}, obj3 = {:#?}, obj4 = {:#?}", obj2, obj3, obj4);
+    let layout = Layout::new::<Sample2>();
+    unsafe {
+        PoolAllocator::<Sample2>::dealloc(obj2, layout);
+    }
+
+    let obj5 = PoolAllocator::<Sample2>::alloc(layout).unwrap();
+    debug!("obj5 = {:#?}", obj5);
     //hal::fire_interrupt();
 
     info!("Halting main core");
