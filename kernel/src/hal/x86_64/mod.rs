@@ -1,4 +1,4 @@
-use crate::info;
+use kernel_intf::info;
 use crate::mem::MapFetchType;
 use common::ptr_to_ref_mut;
 mod asm;

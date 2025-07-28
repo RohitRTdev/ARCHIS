@@ -1,7 +1,8 @@
 use core::marker::PhantomData;
 
 use super::{asm, features};
-use crate::{debug, info, BOOT_INFO};
+use kernel_intf::debug;
+use crate::devices::SERIAL;
 use common::en_flag;
 
 pub struct CR0;
@@ -148,6 +149,7 @@ fn log_registers() {
 
 pub fn init() {
     let features = *features::CPU_FEATURES.get().unwrap().lock();
+    
     unsafe {
         CPUReg::<CR0>::init(CR0::PE | CR0::ET | CR0::NE | CR0::PG | CR0::WP);
         CPUReg::<CR4>::init(CR4::PAE | en_flag!(features.pge, CR4::PGE) | CR4::PCE | en_flag!(features.umip, CR4::UMIP) 
@@ -211,7 +213,7 @@ pub fn init() {
     //        }
     //    }
     //}
-
+    
 #[cfg(debug_assertions)]
     log_registers();
 }

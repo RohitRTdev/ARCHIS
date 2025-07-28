@@ -1,5 +1,5 @@
 use crate::sync::{Once, Spinlock};
-use crate::{debug, info};
+use kernel_intf::{debug, info};
 use super::asm;
 
 enum FeatureState {
@@ -164,6 +164,5 @@ pub fn init() {
         )
     });
 
-    crate::logger::enable_timestamp();
     debug!("Features = {:?}", *CPU_FEATURES.get().unwrap().lock());
 }

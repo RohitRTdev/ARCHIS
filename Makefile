@@ -74,12 +74,12 @@ build_kernel_template:
 build_kernel: $(OUTPUT_DIR)
 	@if [ -f "$(KERN_PLACEHOLDER)" ]; then cargo clean; fi
 	@rm -f $(KERN_PLACEHOLDER)	
-	@MAKE build_kernel_template
+	@make build_kernel_template
 
 build_kernel_test: $(OUTPUT_DIR)
 	@if [ ! -f "$(KERN_PLACEHOLDER)" ]; then cargo clean; fi	
 	@echo -e $(GEN_MSG) > $(KERN_PLACEHOLDER) 
-	@MAKE build_kernel_template
+	@make build_kernel_template
 
 build_drivers: build_kernel
 	@echo "Building drivers..."

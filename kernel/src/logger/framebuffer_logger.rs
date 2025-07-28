@@ -1,7 +1,7 @@
-use crate::mem::MapFetchType;
+use crate::mem::{MapFetchType, PageDescriptor};
 use crate::sync::Spinlock;
 use crate::{RemapEntry, RemapType::*, BOOT_INFO, REMAP_LIST};
-use crate::debug;
+use kernel_intf::debug;
 use common::{ceil_div, MemoryRegion};
 
 const PSF_MAGIC: u32 = 0x864AB572;
@@ -280,7 +280,8 @@ pub fn init() {
         map_type: OffsetMapped(|new_fb_base| {
             debug!("Framebuffer relocated to new base:{:#X}", new_fb_base);
             // Do not change framebuffer address here. We will do it right before switching to new address space
-        })
+        }),
+        flags: PageDescriptor::MMIO
     }).unwrap();
 }
 

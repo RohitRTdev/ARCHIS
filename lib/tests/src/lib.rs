@@ -1,3 +1,5 @@
+#![no_std]
+
 // Call this macro anywhere you need to add unit-testing
 
 #[macro_export]

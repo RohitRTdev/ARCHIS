@@ -1,6 +1,6 @@
 use core::alloc::Layout;
 use core::ptr::NonNull;
-use crate::error::KError;
+use kernel_intf::KError;
 
 mod fixed_allocator;
 mod frame_allocator;

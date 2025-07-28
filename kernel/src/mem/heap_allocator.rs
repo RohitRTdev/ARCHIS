@@ -4,7 +4,7 @@ use core::mem::{size_of, align_of};
 use common::{align_up, PAGE_SIZE};
 use crate::mem::{allocate_memory, PageDescriptor};
 use crate::sync::Spinlock;
-use crate::{info, debug};
+use kernel_intf::{info, debug};
 
 pub struct ListNode {
     size: usize,
@@ -93,9 +93,9 @@ unsafe impl GlobalAlloc for Spinlock<LinkedListAllocator> {
 
         // Out of memory, request more from virtual allocator and retry
         let alloc_size = align_up(size, PAGE_SIZE);
-        match allocate_memory(Layout::from_size_align(alloc_size, PAGE_SIZE).unwrap(), PageDescriptor::VIRTUAL) {
+        match allocate_memory(Layout::from_size_align(alloc_size, PAGE_SIZE).unwrap(), PageDescriptor::VIRTUAL).as_ref() {
             Ok(mem) => {
-                allocator.add_free_region(mem as usize, alloc_size);
+                allocator.add_free_region(*mem as usize, alloc_size);
                 allocator.backing_memory += alloc_size;
                 if let Some(node_ptr) = allocator.find_fit(layout) {
                     allocator.use_list_node(node_ptr, layout)

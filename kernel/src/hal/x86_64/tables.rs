@@ -1,5 +1,6 @@
 use common::{en_flag, ptr_to_usize};
-use crate::{cpu, debug, hal::enable_interrupts, info, sync::{Once, Spinlock}};
+use crate::{cpu, hal::enable_interrupts, sync::{Once, Spinlock}};
+use kernel_intf::{debug, info};
 use super::{asm, MAX_INTERRUPT_VECTORS, handlers};
 
 const KERNEL_CODE_SELECTOR: usize = 0x8;

@@ -1,7 +1,8 @@
 use core::{alloc::Layout, ptr::NonNull};
 use std::{sync::{Arc, Mutex, OnceLock}};
 
-use crate::{ds::*, error::KError, mem};
+use crate::{ds::*, mem};
+use kernel_intf::KError;
 use common::test_log;
 
 tests::init_test_logger!(aris);

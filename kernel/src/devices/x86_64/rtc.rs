@@ -1,5 +1,5 @@
 use crate::hal::{write_port_u8, read_port_u8};
-use crate::devices::RtcTime;
+use kernel_intf::RtcTime;
 
 const CMOS_ADDRESS: u16 = 0x70;
 const CMOS_DATA: u16 = 0x71;
@@ -32,7 +32,7 @@ fn bcd_to_bin(val: u8) -> u8 {
 
 // We don't want compiler to think that this is a pure function
 #[inline(never)]
-pub fn read_rtc() -> RtcTime {
+pub fn read_realtime() -> RtcTime {
     // Wait until not updating
     while is_updating() {}
 
@@ -70,4 +70,9 @@ pub fn read_rtc() -> RtcTime {
         month,
         year
     }
+}
+
+#[no_mangle]
+extern "C" fn read_rtc() -> RtcTime {
+    read_realtime()
 }

@@ -9,12 +9,11 @@ mod mem;
 mod ds;
 mod module;
 mod logger;
-mod error;
 mod cpu;
 mod devices;
 
 use core::alloc::Layout;
-
+use kernel_intf::{info, debug};
 use common::*;
 
 extern crate alloc;
@@ -40,6 +39,7 @@ enum RemapType {
 struct RemapEntry {
     value: MemoryRegion,
     map_type: RemapType,
+    flags: u8
 }
 
 static INIT_FS: Once<BTreeMap<&'static str, &'static [u8]>> = Once::new();  
@@ -106,6 +106,11 @@ fn kern_main() {
 
     let obj5 = PoolAllocator::<Sample2>::alloc(layout).unwrap();
     debug!("obj5 = {:#?}", obj5);
+    
+
+#[cfg(feature = "acpi")]
+    acpica::init();
+    
     //hal::fire_interrupt();
 
     info!("Halting main core");
@@ -121,9 +126,9 @@ unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
     mem::setup_heap(); 
     devices::init();
     logger::init();
+    
     info!("Starting aris");
     cpu::init();
-
     module::early_init();
 
     debug!("{:?}", *BOOT_INFO.get().unwrap());

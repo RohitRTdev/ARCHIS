@@ -78,6 +78,8 @@ pub const SHT_RELA: u32 = 4;
 pub const SHT_DYNAMIC: u32 = 6;
 pub const SHT_DYNSYM: u32 = 11;
 
+pub const SHN_UNDEF: u16 = 0;
+
 pub const STT_OBJECT: u8 = 1;
 pub const STT_FUNC: u8 = 2;
 

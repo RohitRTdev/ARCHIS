@@ -1,7 +1,8 @@
 use core::alloc::Layout;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use common::{align_down, align_up, PAGE_SIZE};
-use crate::{ds::*, hal, info};
+use common::PAGE_SIZE;
+use kernel_intf::info;
+use crate::{ds::*, hal};
 use crate::sync::Spinlock;
 use crate::mem::{allocate_memory, get_virtual_address, FixedAllocator, MapFetchType, PageDescriptor, Regions::*};
 const INIT_STACK_SIZE: usize  = PAGE_SIZE * 2;

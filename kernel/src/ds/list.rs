@@ -1,4 +1,4 @@
-use crate::error::KError;
+use kernel_intf::KError;
 use crate::mem::Allocator;
 use core::alloc::Layout;
 use core::mem;

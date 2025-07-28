@@ -79,7 +79,7 @@ fn load_aux_tables(reloc_sections: &mut Vec<MapRegion>, symtab: &mut Option<MapR
     }
 }
 
-fn apply_relocation(load_base: usize, kernel_size: usize, reloc_sections: &Vec<MapRegion>) {
+fn apply_relocation(load_base: usize, kernel_size: usize, reloc_sections: &Vec<MapRegion>, dyn_tab: &Option<MapRegion>) {
     // Necessary, since it could be zero after removing symbol table from list
     if reloc_sections.len() == 0 {
         return;
@@ -102,10 +102,9 @@ fn apply_relocation(load_base: usize, kernel_size: usize, reloc_sections: &Vec<M
 
         // Here, we are assuming that linker assigned base address of elf as 0
         for entry in entries {
-            // Bootloader will only patch up the reloc entries, plt relocations and global relocations will be enabled by kernel
+            let address = load_base + entry.r_offset as usize;
             match info(entry.r_info) {
                 R_X86_64_RELATIVE => {
-                    let address = load_base + entry.r_offset as usize;
                     let value = load_base as i64 + entry.r_addend;
                     assert!(address < load_base + kernel_size);
                     unsafe {
@@ -121,6 +120,19 @@ fn apply_relocation(load_base: usize, kernel_size: usize, reloc_sections: &Vec<M
                     glob_relocations += 1;
                 },
                 R_JUMP_SLOT => {
+                    assert!(dyn_tab.is_some());
+                    let dyn_entries = unsafe {
+                        let tab = dyn_tab.as_ref().unwrap();
+                        core::slice::from_raw_parts(tab.dest_addr as *const Elf64Sym, tab.src_size / tab.dest_size)
+                    };
+
+                    let sym_idx = (entry.r_info >> 32) as usize;
+
+                    let value = load_base + dyn_entries[sym_idx].st_value as usize;
+
+                    unsafe {
+                        *(address as *mut u64) = value as u64;
+                    }
                     jmp_relocations += 1;
                 },
                 _=> {}
@@ -334,7 +346,7 @@ pub fn load_kernel_arch(kernel_base: *const u8, hdr: &Elf64Ehdr) -> ModuleInfo {
     
     if reloc_sections.len() > 0 {
         load_aux_tables(&mut reloc_sections, &mut symtab, &mut symstr, &mut dynsymtab, &mut dynstr, load_base as usize + main_shn_size + aux_padding, aux_alignment);
-        apply_relocation(load_base as usize, main_shn_size, &reloc_sections);
+        apply_relocation(load_base as usize, main_shn_size, &reloc_sections, &dynsymtab);
     }
 
     // Fill up all output information

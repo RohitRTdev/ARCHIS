@@ -2,8 +2,8 @@ use crate::{mem::{fixed_allocator::{FixedAllocator, Regions::*}, PageDescriptor,
 use crate::sync::{Once, Spinlock};
 use crate::hal::{self, PageMapper};
 use crate::ds::*;
-use crate::error::KError;
-use crate::{info, debug};
+use kernel_intf::KError;
+use kernel_intf::{info, debug};
 use crate::RemapType::*;
 use core::alloc::Layout;
 use core::ptr::NonNull;
@@ -149,7 +149,7 @@ impl VirtMemConBlk {
     }
 
     fn allocate(&mut self, layout: Layout, flags: u8) -> Result<*mut u8, KError> {
-        if layout.size() >= self.avl_memory {
+        if layout.size() >= self.avl_memory || layout.size() > self.total_memory {
             return Err(KError::OutOfMemory);
         }
 
@@ -181,6 +181,7 @@ impl VirtMemConBlk {
             start_virt_address: virt_addr as usize, flags})
             .expect(ERROR_MESSAGE);
 
+        self.avl_memory -= num_pages * PAGE_SIZE;
         Ok(virt_addr)
     }
 
@@ -218,7 +219,7 @@ impl VirtMemConBlk {
         self.page_mapper.unmap_memory(addr as usize, num_size);
         
         self.coalesce_block(addr as usize, num_pages);
-
+        self.avl_memory += num_size;
 
         Ok(())
     }
@@ -270,7 +271,7 @@ impl VirtMemConBlk {
     // Allowed to map memory only if the address is not already allocated
     // In case user wants to map new physical address to existing virtual address, then first unmap the memory
     // and then map the new physical address 
-    fn map_memory(&mut self, phys_addr: usize, virt_addr: usize, size: usize, is_user: bool) -> Result<(), KError> {
+    fn map_memory(&mut self, phys_addr: usize, virt_addr: usize, size: usize, flags: u8) -> Result<(), KError> {
         if size == 0 {
             return Ok(())
         }
@@ -290,7 +291,8 @@ impl VirtMemConBlk {
             && (item.flags & PageDescriptor::NO_ALLOC != 0 || item.flags == 0)
         });
         
-        let flags = en_flag!(is_user, PageDescriptor::USER) | PageDescriptor::VIRTUAL; 
+        // Ensure that resulting block is described as virtual memory
+        let flags = flags | PageDescriptor::VIRTUAL; 
         if let Some(desc) = blk {
             let top = PageDescriptor {
                 num_pages: ceil_div(virt_addr - desc.start_virt_address, PAGE_SIZE),
@@ -435,7 +437,19 @@ pub fn get_virtual_address(phys_addr: usize, fetch_type: MapFetchType) -> Option
     }
 }
 
-// Later, we'll add function for map_memory and here we also need to add type of memory we're unmapping (kernel or user)
+pub fn map_memory(phys_addr: usize, virt_addr: usize, size: usize, flags: u8) -> Result<(), KError> {
+    if likely(ACTIVE_VIRTUAL_CON_BLK.is_init()) {
+        unsafe {
+            (*ACTIVE_VIRTUAL_CON_BLK.get().unwrap().lock().as_ptr()).
+            map_memory(phys_addr, virt_addr, size, flags)
+        }
+    }
+    else {
+        Ok(())
+    }
+}
+
+// Here we also need to add type of memory we're unmapping (kernel or user)
 // This is important, since if it's kernel memory, we need to unmap that memory in all address spaces
 pub fn unmap_memory(virt_addr: *mut u8, size: usize) -> Result<(), KError> {
     if likely(ACTIVE_VIRTUAL_CON_BLK.is_init()) {
@@ -446,6 +460,25 @@ pub fn unmap_memory(virt_addr: *mut u8, size: usize) -> Result<(), KError> {
     else {
         Ok(())
     }
+}
+#[no_mangle]
+extern "C" fn map_memory_ffi(phys_addr: usize, virt_addr: usize, size: usize, flags: u8) -> KError {
+    KError::map_error(map_memory(phys_addr, virt_addr, size, flags))
+}
+
+#[no_mangle]
+extern "C" fn unmap_memory_ffi(virt_addr: *mut u8, size: usize) -> KError {
+    KError::map_error(unmap_memory(virt_addr, size)) 
+}
+
+#[no_mangle]
+extern "C" fn allocate_memory_ffi(size: usize, align: usize, flags: u8) -> KError {
+    KError::map_error(allocate_memory(Layout::from_size_align(size, align).unwrap(), flags))
+}
+
+#[no_mangle]
+extern "C" fn deallocate_memory_ffi(addr: *mut u8, size: usize, align: usize, flags: u8) -> KError {
+    KError::map_error(deallocate_memory(addr, Layout::from_size_align(size, align).unwrap(), flags))
 }
 
 pub fn virtual_allocator_init() {
@@ -463,7 +496,7 @@ pub fn virtual_allocator_init() {
         item.value.size, item.value.base_address);
         kernel_addr_space.map_memory(
             item.value.base_address, item.value.base_address, 
-            item.value.size, false).unwrap();
+            item.value.size, item.flags).unwrap();
     });
 
     // Now map remaining set of regions onto upper half of memory
@@ -477,7 +510,7 @@ pub fn virtual_allocator_init() {
         info!("Mapping region of size:{} with physical address:{:#X} to virtual address:{:#X}", 
         item.value.size, item.value.base_address, virt_addr);
 
-        kernel_addr_space.map_memory(item.value.base_address, virt_addr, item.value.size, false).unwrap();
+        kernel_addr_space.map_memory(item.value.base_address, virt_addr, item.value.size, item.flags).unwrap();
         
         // Update user of new location
         if let OffsetMapped(f) = &item.map_type {

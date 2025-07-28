@@ -1,4 +1,4 @@
-use crate::debug;
+use kernel_intf::debug;
 use crate::cpu;
 use crate::sync::Spinlock;
 use super::*;

@@ -1,10 +1,11 @@
 use super::asm;
-use crate::debug;
+use kernel_intf::debug;
 
 #[inline(always)]
-pub fn read_timestamp() -> u64 {
+#[no_mangle]
+pub extern "C" fn read_timestamp() -> usize {
     unsafe {
-        asm::rdtsc()
+        asm::rdtsc() as usize
     }
 }
 

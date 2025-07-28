@@ -3,7 +3,7 @@ use core::sync::atomic::{Ordering, AtomicUsize};
 use crate::mem::MapFetchType;
 use crate::{hal::x86_64::features::CPU_FEATURES, mem};
 use crate::hal::VirtAddr;
-use crate::info;
+use kernel_intf::info;
 use common::{ceil_div, en_flag, PAGE_SIZE};
 use super::asm;
 struct PTE;
@@ -13,6 +13,7 @@ impl PTE {
     pub const RW: u64 = 1 << 1;
     pub const U: u64 = 1 << 2;
     pub const PWT: u64 = 1 << 3;
+    pub const PCD: u64 = 1 << 4;
     pub const G: u64 = 1 << 8;
     pub const PHY_ADDR_MASK: u64 = 0x000fffff_fffff000;
 }
@@ -76,7 +77,8 @@ impl PageMapper {
         for i in 0..num_pages {
             let va = virt_addr + i * PAGE_SIZE;
             let pa = phys_addr + i * PAGE_SIZE;
-            self.map_page(va as u64, pa as u64, flags & mem::PageDescriptor::USER != 0);
+            self.map_page(va as u64, pa as u64, flags & mem::PageDescriptor::USER != 0, 
+            flags & mem::PageDescriptor::MMIO != 0);
         }
     }
 
@@ -120,7 +122,7 @@ impl PageMapper {
         // Unmap the page tables also incase they become empty?
     }
 
-    fn map_page(&mut self, virt_addr: u64, phys_addr: u64, is_user: bool) {
+    fn map_page(&mut self, virt_addr: u64, phys_addr: u64, is_user: bool, is_mmio: bool) {
         let (pml4_idx, pdpt_idx, pd_idx, pt_idx) = Self::split_indices(virt_addr);
 
         let pml_base = if !self.is_current {
@@ -136,7 +138,7 @@ impl PageMapper {
         let pt = self.get_or_alloc_table(pd, pd_idx, PageLevel::PT, pml4_idx, pdpt_idx, pd_idx);
 
         pt[pt_idx] = (phys_addr & PTE::PHY_ADDR_MASK) | en_flag!(is_user, PTE::U) | 
-        en_flag!(!is_user && CPU_FEATURES.get().unwrap().lock().pge, PTE::G) 
+        en_flag!(is_mmio, PTE::PCD) | en_flag!(is_mmio, PTE::PWT) | en_flag!(!is_user && CPU_FEATURES.get().unwrap().lock().pge, PTE::G) 
         | PTE::RW | PTE::P; 
         
         if self.is_current {

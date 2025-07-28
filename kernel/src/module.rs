@@ -6,7 +6,7 @@ use common::{MemoryRegion, ModuleInfo, FileDescriptor};
 use crate::{RemapEntry, RemapType::*, BOOT_INFO, REMAP_LIST};
 use crate::ds::{List, ListNode};
 use crate::sync::Spinlock;
-use crate::{info, debug};
+use kernel_intf::{info, debug};
 use crate::mem::{self, FixedAllocator, MapFetchType, Regions::*};
 
 pub struct ModuleDescriptor {
@@ -82,7 +82,8 @@ pub fn early_init() {
                 }
 
                 debug!("Updated kernel module info = {:?}", mod_cb.info);
-            })
+            }),
+            flags: 0
         }).unwrap();
 
         // Relocate init fs
@@ -114,7 +115,8 @@ pub fn early_init() {
                         core::str::from_utf8_unchecked(ptr)
                     };
 
-                })
+                }),
+                flags: 0
             }).unwrap();
         }
 
@@ -122,9 +124,10 @@ pub fn early_init() {
         remap_list.add_node(RemapEntry { 
             value: MemoryRegion { 
                 base_address: info.init_fs.start, 
-                size: info.init_fs.size 
+                size: info.init_fs.size
             }, 
-            map_type: IdentityMapped 
+            map_type: IdentityMapped,
+            flags: 0
         }).unwrap();
     }
 
@@ -165,6 +168,18 @@ pub fn complete_handoff() {
         let info = |bitmap: u64| {
             (bitmap & 0xffffffff) as u32
         };
+        
+        let stringizer = |str_idx: usize| {
+            use core::ffi::CStr;
+
+            let str_base = unsafe {
+                (mod_cb.info.dyn_str.unwrap().base_address as *const u8).add(str_idx)
+            };
+
+            unsafe {
+                CStr::from_ptr(str_base as *const i8).to_str().unwrap()
+            }
+        };
 
         for rlc_shn in reloc_sections {
             let num_rel_entries = rlc_shn.size / core::mem::size_of::<Elf64Rela>();
@@ -188,6 +203,10 @@ pub fn complete_handoff() {
                         };
 
                         let sym_idx = (entry.r_info >> 32) as usize;
+
+                        if dyn_entries[sym_idx].st_shndx == SHN_UNDEF {
+                            panic!("Could not find definition for symbol: {}", stringizer(dyn_entries[sym_idx].st_name as usize));
+                        }
 
                         let value = load_base + dyn_entries[sym_idx].st_value as usize;
 

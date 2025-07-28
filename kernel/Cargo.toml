@@ -16,6 +16,8 @@ stack_down = []
 [dependencies]
 common.workspace = true
 rustc-demangle = "*"
+acpica = {path = "../lib/acpica"}
+kernel_intf = {path = "../lib/kernel_intf"}
 
 # Used for testing
 [dev-dependencies]
