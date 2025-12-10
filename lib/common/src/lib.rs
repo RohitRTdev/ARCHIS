@@ -64,7 +64,9 @@ pub struct BootInfo {
     pub kernel_desc: ModuleInfo,
     pub framebuffer_desc: FBInfo,
     pub memory_map_desc: ArrayTable,
-    pub init_fs: ArrayTable
+    pub init_fs: ArrayTable,
+#[cfg(feature = "acpi")]
+    pub rsdp: usize
 }
 
 #[repr(C)]

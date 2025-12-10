@@ -8,3 +8,6 @@ crate-type = ["lib"]
 
 [dependencies]
 num-traits = { version = "*", default-features = false }
+
+[features]
+acpi = []

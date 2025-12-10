@@ -11,6 +11,7 @@ OUTPUT_IMAGE = $(OUTPUT_DIR)/archis_os.iso
 PLATFORM = acpi
 BOOTLOADER = uefi
 KERNEL_OPTIONS = --features acpi,stack_down
+BLR_OPTIONS = --features acpi
 
 ifeq ($(OS),Windows_NT)
     RUN_DOCKER_SCRIPT = @./scripts/docker.bat

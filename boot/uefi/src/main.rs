@@ -84,6 +84,32 @@ fn setup_memory_map() -> ArrayTable {
     ArrayTable {start: base.as_ptr() as usize, size: total_entries * size_of::<MemoryDesc>(), entry_size: size_of::<MemoryDesc>()}
 }
 
+#[cfg(feature = "acpi")]
+fn get_rsdp() -> usize {
+    const ACPI_GUID: &str = "8868e871-e4f1-11d3-bc22-0080c73c8881";  
+
+    let tab = uefi::table::system_table_raw().unwrap();    
+    let config = unsafe {
+        core::slice::from_raw_parts(tab.as_ref().configuration_table, tab.as_ref().number_of_configuration_table_entries)
+    };
+
+    let mut rsdp = None;
+    for table in config {
+        let ascii_data = table.vendor_guid.to_ascii_hex_lower();
+        if str::from_utf8(&ascii_data).unwrap() == ACPI_GUID {
+            info!("Found ACPI rev:2.0 table at address:{:#X}", table.vendor_table as usize);
+            rsdp = Some(table.vendor_table as usize);
+            break;
+        }
+    }
+
+    if rsdp.is_none() {
+        panic!("No ACPI-2.0 table found!! Cannot proceed..");
+    }
+
+    rsdp.unwrap() 
+}
+
 
 #[entry]
 fn main() -> Status {
@@ -101,13 +127,20 @@ fn main() -> Status {
 
     debug!("{:?}", kern_info);
 
+#[cfg(feature = "acpi")]
+    let rsdp = get_rsdp();
+
+
     info!("Fetching GPU and memmap info before transferring control to aris");
     let fb_info = display::get_primary_gpu_framebuffer();
     let mem_info = setup_memory_map();
     let fs_info = ArrayTable {start: file_table.descriptors.as_ptr() as usize, 
         size: size_of::<FileDescriptor>() * file_table.length, entry_size: size_of::<FileDescriptor>()};
 
-    let boot_info = BootInfo {kernel_desc: kern_info, framebuffer_desc: fb_info, memory_map_desc: mem_info, init_fs: fs_info};
+    let boot_info = BootInfo {kernel_desc: kern_info, framebuffer_desc: fb_info, memory_map_desc: mem_info, init_fs: fs_info,
+#[cfg(feature = "acpi")]
+        rsdp
+    };
 
     unsafe {
         jump_to_kernel(&boot_info);

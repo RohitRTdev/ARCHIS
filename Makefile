@@ -55,7 +55,7 @@ build_blr: $(OUTPUT_DIR)
 	}
 	@echo "Building bootloader..." 
 	@(cd $(BLR_CRATE_PATH) && \
-		cargo build $(BUILD_OPTIONS) \
+		cargo build $(BUILD_OPTIONS) $(BLR_OPTIONS) \
 		-Z build-std=core,alloc \
 		--target $(BLR_TARGET) \
 	)

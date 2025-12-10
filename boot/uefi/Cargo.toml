@@ -8,3 +8,7 @@ common.workspace = true
 log.workspace = true
 uefi = { version = "0.35.0", features = [ "alloc", "global_allocator" ] }
 blr = {path = "../blr"}
+
+[features]
+default = []
+acpi = ["common/acpi"]
