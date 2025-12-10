@@ -24,7 +24,7 @@ use alloc::{collections::BTreeMap, string::String, vec::Vec};
 mod tests;
 
 use sync::{Once, Spinlock};
-use crate::mem::{Allocator, FixedAllocator, PoolAllocator, Regions::*};
+use crate::mem::{Allocator, PoolAllocator, Regions::*};
 use crate::ds::*;
 
 static BOOT_INFO: Once<BootInfo> = Once::new();
@@ -43,32 +43,11 @@ struct RemapEntry {
 }
 
 static INIT_FS: Once<BTreeMap<&'static str, &'static [u8]>> = Once::new();  
-static REMAP_LIST: Spinlock<List<RemapEntry, FixedAllocator<ListNode<RemapEntry>, {Region3 as usize}>>> = Spinlock::new(List::new());
-
-fn kern_main() {
-    info!("Starting main kernel init");
-    {
-        let mut list = Vec::new();
-        list.push(1);
-        list.push(3);
-        list.push(23);
-        list.push(23);
-        list.push(23);
-        list.push(23);
-        list.push(23);
-        list.push(23);
-        debug!("List={:?}", list);
-        list.remove(3);
-        list.remove(2);
-        debug!("List={:?}", list);
+static REMAP_LIST: Spinlock<FixedList<RemapEntry, {Region3 as usize}>> = Spinlock::new(List::new());
 
 
-        let mut s = String::from("Heap allocated string test!!");
-        debug!("String test = {}", s);
-        s.insert_str(4, " string");
-        debug!("String test after insertion = {}", s);
-    }
-
+#[test]
+fn pool_alloc_test() {
     struct Sample1 {
         a: u32,
         b: u64,
@@ -106,8 +85,12 @@ fn kern_main() {
 
     let obj5 = PoolAllocator::<Sample2>::alloc(layout).unwrap();
     debug!("obj5 = {:#?}", obj5);
-    
+}
 
+
+fn kern_main() {
+    info!("Starting main kernel init");
+    
 #[cfg(feature = "acpi")]
     acpica::init();
     

@@ -12,8 +12,8 @@ use core::ptr::NonNull;
 pub struct PhyMemConBlk {
     total_memory: usize,
     avl_memory: usize,
-    free_block_list: List<PageDescriptor, FixedAllocator<ListNode<PageDescriptor>, {Region0 as usize}>>,
-    alloc_block_list: List<PageDescriptor, FixedAllocator<ListNode<PageDescriptor>, {Region0 as usize}>>, 
+    free_block_list: FixedList<PageDescriptor, {Region0 as usize}>,
+    alloc_block_list: FixedList<PageDescriptor, {Region0 as usize}>, 
 }
 
 pub static PHY_MEM_CB: Once<Spinlock<PhyMemConBlk>> = Once::new();
@@ -179,11 +179,11 @@ pub fn frame_allocator_init() {
                 
                 init_mem_cb.avl_memory += desc.val.size;
             },
-            MemType::Allocated | MemType::Runtime => {
+            MemType::Allocated | MemType::Identity => {
                 init_mem_cb.alloc_block_list.add_node(PageDescriptor { num_pages: common::ceil_div(desc.val.size, PAGE_SIZE), 
                     start_phy_address: desc.val.base_address, start_virt_address: 0, flags: 0 }).unwrap();
             
-                    if desc.mem_type == MemType::Runtime {
+                    if desc.mem_type == MemType::Identity {
                         REMAP_LIST.lock().add_node(RemapEntry { 
                             value: desc.val,
                             map_type: IdentityMapped, flags: 0}).unwrap();

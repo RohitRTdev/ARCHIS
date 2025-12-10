@@ -41,7 +41,7 @@ pub struct ModuleInfo {
 pub enum MemType {
     Free,
     Allocated,
-    Runtime
+    Identity
 }
 
 #[repr(C)]

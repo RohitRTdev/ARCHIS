@@ -11,6 +11,7 @@ Tools required
 * Docker
 * Make
 * Clang
+* llvm-ar
 * Standard GNU tools
 
 If you're on windows, simply download MSYS2, and use pacman (MSYS2 default package manager) to download the required tools. 

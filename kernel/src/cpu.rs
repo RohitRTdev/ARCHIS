@@ -37,7 +37,7 @@ static KERN_INIT_STACK: Stack = Stack {
 };
 
 static CPU_ID: AtomicUsize = AtomicUsize::new(0);
-static CPU_LIST: Spinlock<List<CPUControlBlock, FixedAllocator<ListNode<CPUControlBlock>, {Region4 as usize}>>> = Spinlock::new(List::new());
+static CPU_LIST: Spinlock<FixedList<CPUControlBlock, {Region4 as usize}>> = Spinlock::new(List::new());
 
 pub fn init() {
     hal::disable_interrupts();

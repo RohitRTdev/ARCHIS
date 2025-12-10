@@ -22,13 +22,13 @@ pub enum MapFetchType {
 pub struct VirtMemConBlk {
     total_memory: usize,
     avl_memory: usize,
-    free_block_list: List<PageDescriptor, FixedAllocator<ListNode<PageDescriptor>, {Region0 as usize}>>,
-    alloc_block_list: List<PageDescriptor, FixedAllocator<ListNode<PageDescriptor>, {Region0 as usize}>>,
+    free_block_list: FixedList<PageDescriptor, {Region0 as usize}>,
+    alloc_block_list: FixedList<PageDescriptor, {Region0 as usize}>,
     page_mapper: PageMapper,
     proc_id: usize
 }
 
-static ADDRESS_SPACES: Once<Spinlock<List<VirtMemConBlk, FixedAllocator<ListNode<VirtMemConBlk>, {Region1 as usize}>>>> = Once::new();
+static ADDRESS_SPACES: Once<Spinlock<FixedList<VirtMemConBlk, {Region1 as usize}>>> = Once::new();
 
 // We can't use Arc or something similar here since we don't yet have heap allocation
 static ACTIVE_VIRTUAL_CON_BLK: Once<Spinlock<NonNull<ListNode<VirtMemConBlk>>>> = Once::new();
@@ -463,22 +463,22 @@ pub fn unmap_memory(virt_addr: *mut u8, size: usize) -> Result<(), KError> {
 }
 #[no_mangle]
 extern "C" fn map_memory_ffi(phys_addr: usize, virt_addr: usize, size: usize, flags: u8) -> KError {
-    KError::map_error(map_memory(phys_addr, virt_addr, size, flags))
+    map_memory(phys_addr, virt_addr, size, flags).into()
 }
 
 #[no_mangle]
 extern "C" fn unmap_memory_ffi(virt_addr: *mut u8, size: usize) -> KError {
-    KError::map_error(unmap_memory(virt_addr, size)) 
+    unmap_memory(virt_addr, size).into() 
 }
 
 #[no_mangle]
 extern "C" fn allocate_memory_ffi(size: usize, align: usize, flags: u8) -> KError {
-    KError::map_error(allocate_memory(Layout::from_size_align(size, align).unwrap(), flags))
+    allocate_memory(Layout::from_size_align(size, align).unwrap(), flags).into()
 }
 
 #[no_mangle]
 extern "C" fn deallocate_memory_ffi(addr: *mut u8, size: usize, align: usize, flags: u8) -> KError {
-    KError::map_error(deallocate_memory(addr, Layout::from_size_align(size, align).unwrap(), flags))
+    deallocate_memory(addr, Layout::from_size_align(size, align).unwrap(), flags).into()
 }
 
 pub fn virtual_allocator_init() {

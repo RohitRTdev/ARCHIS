@@ -67,7 +67,7 @@ fn fixed_allocator_test() {
 #[test]
 fn list_alloc_test() {
     let _guard = get_test_lock().lock().unwrap();
-    let mut structure: List<Sample, mem::FixedAllocator<ListNode<Sample>, {mem::Regions::Region0 as usize}>> = List::new();
+    let mut structure: FixedList<Sample, {mem::Regions::Region0 as usize}> = List::new();
     mem::clear_heap();
     mem::setup_heap();
     test_log!("Starting list_alloc_test");

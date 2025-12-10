@@ -1,8 +1,6 @@
 #include "acpi.h"
 
-// Declare the Rust function that will print the final string
-// (You must provide this function in your Rust code with #[no_mangle])
-extern void acpi_archis_print_str(const char* s);
+extern void AcpiOsPrintStr(const char* s);
 
 #define PRINTF_BUF_SIZE 512
 
@@ -33,12 +31,9 @@ static void itoa_hex(unsigned int value, char *buf) {
     *buf = 0;
 }
 
-void AcpiOsPrintf(const char *fmt, ...)
-{
+void AcpiOsVprintf(const char *fmt, va_list args) {
     char buf[PRINTF_BUF_SIZE];
     char *out = buf;
-    va_list args;
-    va_start(args, fmt);
 
     for (; *fmt && (out - buf) < PRINTF_BUF_SIZE - 1; ++fmt) {
         if (*fmt == '%') {
@@ -74,5 +69,12 @@ void AcpiOsPrintf(const char *fmt, ...)
     *out = 0;
     va_end(args);
 
-    acpi_archis_print_str(buf);
+    AcpiOsPrintStr(buf);
+}
+
+void AcpiOsPrintf(const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    AcpiOsVprintf(fmt, args);
+    va_end(args);
 }

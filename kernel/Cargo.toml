@@ -10,8 +10,8 @@ crate-type = ["cdylib"]
 
 [features]
 default = []
-acpi = []
 stack_down = []
+acpi = ["acpica/acpi"]
 
 [dependencies]
 common.workspace = true

@@ -5,8 +5,8 @@ use crate::mem::PageDescriptor;
 use crate::sync::Spinlock;
 use kernel_intf::KError;
 use kernel_intf::debug;
-use crate::ds::{List, ListNode};
-use super::fixed_allocator::{FixedAllocator, Regions::*};
+use crate::ds::{FixedList, List};
+use super::fixed_allocator::Regions::*;
 use super::allocate_memory;
 use common::PAGE_SIZE;
 
@@ -41,7 +41,7 @@ impl FreeBlock {
 
 // Maintains a list of pools for different block sizes.
 struct PoolControlBlock {
-    pools: List<Pool, FixedAllocator<ListNode<Pool>, {Region5 as usize}>>
+    pools: FixedList<Pool, {Region5 as usize}>
 }
 
 impl PoolControlBlock {

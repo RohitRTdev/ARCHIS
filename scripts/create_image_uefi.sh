@@ -13,7 +13,7 @@ BLR_MNT_POINT="/mnt/esp"
 echo "Creating empty image file"
 dd if=/dev/zero of=$IMG bs=1M count=$SIZE_MB > /dev/null 2>&1
 
-# === CREATE GPT TABLE AND PARTITIONS ===
+# CREATE GPT TABLE AND PARTITIONS
 echo "Creating GPT partition (ESP+System)"
 parted $IMG --script -- \
   mklabel gpt \
@@ -22,15 +22,15 @@ parted $IMG --script -- \
   mkpart primary fat32 ${EFI_SIZE_MB}MiB 100%
 
 LOOPp0=$(losetup -f)
-losetup --offset 1048576 --sizelimit $((${EFI_SIZE_MB}*1024*1024)) ${LOOPp0} $IMG
+losetup --offset 1048576 --sizelimit $(((${EFI_SIZE_MB}-1)*1024*1024)) ${LOOPp0} $IMG
 LOOPp1=$(losetup -f)
 losetup --offset $((${EFI_SIZE_MB}*1024*1024)) ${LOOPp1} $IMG
 
 echo "Formatting partitions as FAT32"
-# === FORMAT EFI PARTITION ===
+# FORMAT EFI PARTITION
 mkfs.vfat -F32 -n $EFI_LABEL ${LOOPp0} > /dev/null
 
-# === FORMAT ROOT PARTITION ===
+# FORMAT ROOT PARTITION
 mkfs.vfat -F32 -n $ROOT_LABEL ${LOOPp1} > /dev/null
 
 install_kernel_image() {
@@ -48,15 +48,15 @@ install_kernel_image() {
     cp "$src"/bootx64.efi "$dst_blr/efi/boot/" || echo "Bootloader not found..."
 }
 
-# === CREATE MOUNTPOINTS ===
-mkdir -p /mnt/esp
-mkdir -p /mnt/kernel
-mount ${LOOPp0} /mnt/esp
-mount ${LOOPp1} /mnt/kernel
+# CREATE MOUNTPOINTS
+mkdir -p $BLR_MNT_POINT
+mkdir -p $KERNEL_MNT_POINT
+mount ${LOOPp0} $BLR_MNT_POINT
+mount ${LOOPp1} $KERNEL_MNT_POINT
 
 install_kernel_image
 
-# === CLEANUP ===
+# CLEANUP
 umount $BLR_MNT_POINT 
 umount $KERNEL_MNT_POINT
 losetup -d $LOOPp0
@@ -66,6 +66,6 @@ rmdir $KERNEL_MNT_POINT
 
 echo "Setting partition UUID"
 
-# === SET CUSTOM PARTITION UUID ===
+# SET CUSTOM PARTITION UUID
 echo -e "x\nc\n2\n${ROOT_UUID}\nw\ny\n" | gdisk $IMG > /dev/null 2>&1
 echo "Bootable GPT image '$IMG' generated."

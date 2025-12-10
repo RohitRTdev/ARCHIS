@@ -12,11 +12,12 @@ pub enum KError {
     OutOfMemory
 }
 
-impl KError {
-    pub fn map_error<T>(e: Result<T, KError>) -> KError {
+impl<T> From<Result<T, KError>> for KError {
+    fn from(e: Result<T, KError>) -> Self {
         e.err().unwrap_or(KError::Success)
     }
 }
+
 
 impl fmt::Display for KError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

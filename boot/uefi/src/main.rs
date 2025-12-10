@@ -55,8 +55,9 @@ fn setup_memory_map() -> ArrayTable {
                 MemoryType::CONVENTIONAL | MemoryType::PERSISTENT_MEMORY => {
                     MemType::Free
                 },   
-                MemoryType::RUNTIME_SERVICES_CODE | MemoryType::RUNTIME_SERVICES_DATA => {
-                    MemType::Runtime
+                MemoryType::RUNTIME_SERVICES_CODE | MemoryType::RUNTIME_SERVICES_DATA 
+                | MemoryType::ACPI_NON_VOLATILE | MemoryType::ACPI_RECLAIM => {
+                    MemType::Identity
                 },
                 _ => {
                     MemType::Allocated
@@ -69,7 +70,7 @@ fn setup_memory_map() -> ArrayTable {
                 size: desc.page_count as usize * PAGE_SIZE as usize
             },
             mem_type: if desc.att == MemoryAttribute::RUNTIME {
-                    MemType::Runtime
+                    MemType::Identity
                 }
                 else {
                     mem_type

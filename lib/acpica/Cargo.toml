@@ -7,6 +7,9 @@ build = "build.rs"
 [lib]
 crate-type = ["lib"]
 
+[features]
+acpi = []
+
 [dependencies]
 kernel_intf = {path = "../kernel_intf"}
 

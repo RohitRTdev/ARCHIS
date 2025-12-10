@@ -1,11 +1,14 @@
 use kernel_intf::KError;
-use crate::mem::Allocator;
+use crate::mem::{Allocator, FixedAllocator, PoolAllocator};
 use core::alloc::Layout;
 use core::mem;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::marker::PhantomData;
 use core::fmt::{self, Debug};
+
+pub type FixedList<T, const REGION: usize> = List<T, FixedAllocator<ListNode<T>, REGION>>;
+pub type DynList<T> = List<T, PoolAllocator<ListNode<T>>>;
 
 pub struct ListIter<'a, T> {
     current: Option<&'a ListNode<T>>,

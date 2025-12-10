@@ -4,17 +4,17 @@ use alloc::{collections::BTreeMap};
 use common::{elf::*, ArrayTable, PAGE_SIZE};
 use common::{MemoryRegion, ModuleInfo, FileDescriptor};
 use crate::{RemapEntry, RemapType::*, BOOT_INFO, REMAP_LIST};
-use crate::ds::{List, ListNode};
+use crate::ds::{FixedList, List};
 use crate::sync::Spinlock;
 use kernel_intf::{info, debug};
-use crate::mem::{self, FixedAllocator, MapFetchType, Regions::*};
+use crate::mem::{self, MapFetchType, Regions::*};
 
 pub struct ModuleDescriptor {
     pub name: &'static str,
     pub info: ModuleInfo
 }
 
-pub static MODULE_LIST: Spinlock<List<ModuleDescriptor, FixedAllocator<ListNode<ModuleDescriptor>, {Region2 as usize}>>> = Spinlock::new(List::new());
+pub static MODULE_LIST: Spinlock<FixedList<ModuleDescriptor, {Region2 as usize}>> = Spinlock::new(List::new());
 
 
 static FILE_INDEX: AtomicUsize = AtomicUsize::new(0);
