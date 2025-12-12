@@ -48,4 +48,7 @@ extern "C" fn serial_print_ffi(s: *const u8, len: usize) {
 pub fn init() {
     kernel_intf::init_logger();
     framebuffer_logger::init();
+    
+    // We assume RTC always exists for PC-AT systems
+    kernel_intf::enable_timestamp();
 }

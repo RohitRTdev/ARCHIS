@@ -1,48 +1,48 @@
-use crate::types::{ACPI_PHYSICAL_ADDRESS, ACPI_SIZE};
-use core::ptr;
+use crate::types::{AcpiTable, AcpiTableHeader};
 
-
+// These are helper table functions that can be used before/after acpica init
 fn fetch_acpi_table_core(rsdt_ptr: *const u8, signature: &str) -> Option<*const u8> {
     if rsdt_ptr.is_null() {
         return None;
     }
 
     let signature = signature.as_bytes();
-    // RSDT header: first 36 bytes are ACPI_TABLE_HEADER
+    // RSDT header: first 36 bytes are AcpiTableHeader
     // After that, it's an array of u32 physical addresses to other tables
-    let header_len = 36;
+    let header_len = size_of::<AcpiTableHeader>();
     let length = unsafe {
-        *(rsdt_ptr.add(4) as *const u32) as usize // Total table length
+        *(rsdt_ptr.add(4) as *const u32) as usize 
     };
     let entries = (length - header_len) / 4;
 
     for i in 0..entries {
         let table_addr = unsafe {
-            *(rsdt_ptr.add(header_len + i * 4) as *const u32) as usize
+            *(rsdt_ptr.add(header_len + i * 4) as *const u32) as *const u8
         };
-        let table_ptr = table_addr as *const u8;
-        if table_ptr.is_null() {
+
+        // Not sure if this can happen, but just a safeguard
+        if table_addr.is_null() {
             continue;
         }
-        // Check signature
+
+        // The first 4 bytes of a table is it's signature
         let table_sig = unsafe {
-            core::slice::from_raw_parts(table_ptr, 4)
+            core::slice::from_raw_parts(table_addr, 4)
         };
+
+        // We identity map the ACPI tables for now, so nothing more to do here
         if table_sig == signature {
-            // SAFETY: Caller must ensure the physical memory is mapped and valid for T
-            return Some(table_ptr);
+            return Some(table_addr);
         }
     }
     None
 
 }
 
-
-
-pub fn fetch_acpi_table<ACPI_TABLE_HPET>(rsdt_ptr: *const u8) -> Option<&'static ACPI_TABLE_HPET> {
-    fetch_acpi_table_core(rsdt_ptr, "HPET").and_then(|table_ptr| {
+pub fn fetch_acpi_table<T: AcpiTable>(rsdt_ptr: *const u8) -> Option<&'static T> {
+    fetch_acpi_table_core(rsdt_ptr, T::TABLE_NAME).and_then(|table_ptr| {
         unsafe {
-            Some(&*(table_ptr as *const ACPI_TABLE_HPET))
+            Some(&*(table_ptr as *const T))
         }
     })
 }

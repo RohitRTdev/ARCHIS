@@ -20,7 +20,7 @@ pub struct ACPI_PREDEFINED_NAMES {
 }
 
 #[repr(C, packed)]
-pub struct ACPI_TABLE_HEADER {
+pub struct AcpiTableHeader {
     signature: [u8; ACPI_NAMESEG_SIZE],      
     length: u32,                            
     revision: u8, 
@@ -33,29 +33,28 @@ pub struct ACPI_TABLE_HEADER {
 }
 
 #[repr(C)]
-pub struct ACPI_PCI_ID {
+pub struct AcpiPciId {
     segment: u16,
     bus: u16,
     device: u16,
     function: u16
 }
 
-#[repr(C, packed)]
-pub struct ACPI_TABLE_HPET {
-    pub header: ACPI_TABLE_HEADER,   // Standard ACPI table header
-    pub event_timer_block_id: u32,   // Hardware ID of the timer block
-    pub address: ACPI_GENERIC_ADDRESS, // Base address of HPET registers
-    pub hpet_number: u8,             // HPET sequence number
-    pub min_tick: u16,               // Minimum clock tick in periodic mode
-    pub flags: u8                   // Flags (bit 0: LegacyReplacement)
+#[derive(Debug)]
+#[repr(usize)]
+pub enum AcpiAddressType {
+    SYSTEM_MEMORY,
+    SYSTEM_IO,
+    PCI_CONFIG
 }
 
 #[repr(C, packed)]
-pub struct ACPI_GENERIC_ADDRESS {
+pub struct AcpiGenericAddress {
     pub space_id: u8,
     pub bit_width: u8,
     pub bit_offset: u8,
-    pub access_width: u8
+    pub access_width: u8,
+    pub address: u64
 }
 
 extern "C" {
@@ -72,3 +71,22 @@ pub const ACPI_NAMESEG_SIZE: usize = 4;
 pub const ACPI_OEM_ID_SIZE: usize = 6;
 pub const ACPI_OEM_TABLE_ID_SIZE: usize = 8;
 
+
+// ACPI TABLES
+pub trait AcpiTable {
+    const TABLE_NAME: &'static str;
+}
+
+#[repr(C, packed)]
+pub struct AcpiTableHpet {
+    pub header: AcpiTableHeader,   
+    pub event_timer_block_id: u32,   
+    pub address: AcpiGenericAddress, 
+    pub hpet_number: u8,             
+    pub min_tick: u16,               
+    pub flags: u8                   
+}
+
+impl AcpiTable for AcpiTableHpet {
+    const TABLE_NAME: &'static str = "HPET"; 
+}

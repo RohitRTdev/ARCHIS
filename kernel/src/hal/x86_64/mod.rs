@@ -9,9 +9,11 @@ mod page_mapper;
 mod tables;
 mod handlers;
 mod cpu;
+mod timer;
 pub use cpu::*;
 pub use utils::*;
 pub use page_mapper::*;
+pub use timer::*;
 
 const MAX_INTERRUPT_VECTORS: usize = 256;
 
@@ -120,7 +122,8 @@ pub fn init() -> ! {
 
     features::init();
     cpu_regs::init();
-
+    timer::init();
+    
     crate::mem::init();
 
     let stack_base = crate::mem::get_virtual_address(crate::cpu::get_current_stack_base(), MapFetchType::Kernel)

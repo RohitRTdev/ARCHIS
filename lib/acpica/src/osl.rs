@@ -1,17 +1,18 @@
 use core::ptr;
-use core::ffi::{c_char, c_void};
+use core::ffi::{c_char, c_void, CStr};
 use kernel_intf::info;
 
 use crate::types::*;
 
 #[no_mangle]
 extern "C" fn AcpiOsInitialize() -> ACPI_STATUS {
-    info!("ACPI OS Initialize called");
+    info!("ACPICA initialize");
     AE_OK
 }
 
 #[no_mangle]
 extern "C" fn AcpiOsTerminate() -> ACPI_STATUS {
+    info!("ACPICA terminate");
     AE_OK
 }
 
@@ -34,7 +35,7 @@ extern "C" fn AcpiOsPredefinedOverride(predefined_obj: *const ACPI_PREDEFINED_NA
 }
 
 #[no_mangle]
-extern "C" fn AcpiOsTableOverride (existing_table: *mut ACPI_TABLE_HEADER, new_table: *mut *const ACPI_TABLE_HEADER) -> ACPI_STATUS {
+extern "C" fn AcpiOsTableOverride (existing_table: *mut AcpiTableHeader, new_table: *mut *const AcpiTableHeader) -> ACPI_STATUS {
     if existing_table.is_null() {
         return AE_ERROR;
     }
@@ -47,7 +48,7 @@ extern "C" fn AcpiOsTableOverride (existing_table: *mut ACPI_TABLE_HEADER, new_t
 }
 
 #[no_mangle]
-extern "C" fn AcpiOsPhysicalTableOverride (existing_table: *const ACPI_TABLE_HEADER, new_address: *mut ACPI_PHYSICAL_ADDRESS, 
+extern "C" fn AcpiOsPhysicalTableOverride (existing_table: *const AcpiTableHeader, new_address: *mut ACPI_PHYSICAL_ADDRESS, 
     new_table_length: *mut ACPI_SIZE) -> ACPI_STATUS {
     if existing_table.is_null() {
         return AE_ERROR;
@@ -63,6 +64,11 @@ extern "C" fn AcpiOsPhysicalTableOverride (existing_table: *const ACPI_TABLE_HEA
 
 #[no_mangle]
 extern "C" fn AcpiOsCreateCache (cache_name: *const c_char, object_size: u16, max_depth: u16, return_cache: *mut *mut c_void) -> ACPI_STATUS {
+    let s = unsafe {
+        CStr::from_ptr(cache_name as *const i8).to_str().unwrap()
+    };
+    
+    info!("ACPICA: Create cache:{}, object_size:{}", s, object_size);
     if cache_name.is_null() || return_cache.is_null() {
         return AE_ERROR;
     }
@@ -94,6 +100,7 @@ extern "C" fn AcpiOsPurgeCache (cache: *mut c_void) -> ACPI_STATUS {
 
 #[no_mangle]
 extern "C" fn AcpiOsAcquireObject (cache: *mut c_void) -> *mut c_void {
+    info!("ACPICA: Acquire object:{:#X}", cache as usize);
     if cache.is_null() {
         return ptr::null_mut();
     }
@@ -355,7 +362,7 @@ extern "C" fn AcpiOsWritePort(port: u16, value: u32, width: u32) -> ACPI_STATUS 
 }
 
 #[no_mangle]
-extern "C" fn AcpiOsReadPciConfiguration(handle: ACPI_PCI_ID, reg: u32, value: *mut u64, width: u32) -> ACPI_STATUS {
+extern "C" fn AcpiOsReadPciConfiguration(handle: AcpiPciId, reg: u32, value: *mut u64, width: u32) -> ACPI_STATUS {
     if value.is_null() || width == 0 {
         return AE_ERROR;
     }
@@ -364,7 +371,7 @@ extern "C" fn AcpiOsReadPciConfiguration(handle: ACPI_PCI_ID, reg: u32, value: *
 }
 
 #[no_mangle]
-extern "C" fn AcpiOsWritePciConfiguration(handle: ACPI_PCI_ID, reg: u32, value: u64, width: u32) -> ACPI_STATUS {
+extern "C" fn AcpiOsWritePciConfiguration(handle: AcpiPciId, reg: u32, value: u64, width: u32) -> ACPI_STATUS {
     if width == 0 {
         return AE_ERROR;
     }
@@ -377,6 +384,12 @@ extern "C" fn AcpiOsPrintStr(s: *const u8) {
     if s.is_null() {
         return;
     }
+
+    let s = unsafe {
+        CStr::from_ptr(s as *const i8).to_str().unwrap()
+    };
+
+    info!("ACPICA: {}", s);     
 }
 
 #[no_mangle]

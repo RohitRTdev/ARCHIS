@@ -490,7 +490,7 @@ pub fn virtual_allocator_init() {
     // In case, identity mapped region straddles the kernel upper half, the checks within function will halt kernel
     // We can take it up later
     remap_list.iter().filter(|item| {
-        item.map_type == IdentityMapped
+        matches!(item.map_type, IdentityMapped)
     }).for_each(|item| {
         info!("Identity mapping region of size:{} with physical address:{:#X}", 
         item.value.size, item.value.base_address);
@@ -501,7 +501,7 @@ pub fn virtual_allocator_init() {
 
     // Now map remaining set of regions onto upper half of memory
     remap_list.iter().filter(|item| {
-        item.map_type != IdentityMapped
+        !matches!(item.map_type, IdentityMapped)
     }).for_each(|item| {
         let layout = Layout::from_size_align(item.value.size, PAGE_SIZE).unwrap();
         let virt_addr = kernel_addr_space.allocate(layout, PageDescriptor::VIRTUAL | PageDescriptor::NO_ALLOC)

@@ -29,7 +29,7 @@ use crate::ds::*;
 
 static BOOT_INFO: Once<BootInfo> = Once::new();
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 enum RemapType {
     IdentityMapped,
     OffsetMapped(fn(usize))
@@ -48,9 +48,6 @@ static REMAP_LIST: Spinlock<FixedList<RemapEntry, {Region3 as usize}>> = Spinloc
 fn kern_main() {
     info!("Starting main kernel init");
     
-#[cfg(feature = "acpi")]
-    acpica::init();
-    
     //hal::fire_interrupt();
 
     info!("Halting main core");
@@ -64,8 +61,9 @@ unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
     });   
 
     mem::setup_heap(); 
-    devices::init();
+    devices::early_init();
     logger::init();
+    devices::init();
     
     info!("Starting aris");
     cpu::init();
