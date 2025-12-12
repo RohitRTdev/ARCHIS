@@ -19,10 +19,11 @@ pub struct ACPI_PREDEFINED_NAMES {
     val: *mut c_char
 }
 
+#[derive(Debug, Clone, Copy)]
 #[repr(C, packed)]
 pub struct AcpiTableHeader {
     signature: [u8; ACPI_NAMESEG_SIZE],      
-    length: u32,                            
+    pub length: u32,                            
     revision: u8, 
     checksum: u8,  
     oem_id: [u8; ACPI_OEM_ID_SIZE],
@@ -48,6 +49,7 @@ pub enum AcpiAddressType {
     PCI_CONFIG
 }
 
+#[derive(Debug, Clone, Copy)]
 #[repr(C, packed)]
 pub struct AcpiGenericAddress {
     pub space_id: u8,
@@ -77,6 +79,7 @@ pub trait AcpiTable {
     const TABLE_NAME: &'static str;
 }
 
+#[derive(Debug)]
 #[repr(C, packed)]
 pub struct AcpiTableHpet {
     pub header: AcpiTableHeader,   

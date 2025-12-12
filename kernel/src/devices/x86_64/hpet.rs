@@ -39,7 +39,6 @@ pub fn init() {
     let hpet_tab = acpica::fetch_acpi_table::<AcpiTableHpet>(
         BOOT_INFO.get().unwrap().rsdp as *const u8).expect("No HPET ACPI table found!");
 
-    
     assert_eq!(hpet_tab.address.space_id, AcpiAddressType::SYSTEM_MEMORY as u8, "HPET block address space not in system memory");
 
     let timer_block_base = hpet_tab.address.address as usize;

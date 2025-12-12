@@ -2,7 +2,7 @@ use crate::mem::{MapFetchType, PageDescriptor};
 use crate::sync::Spinlock;
 use crate::{RemapEntry, RemapType::*, BOOT_INFO, REMAP_LIST};
 use kernel_intf::debug;
-use common::{ceil_div, MemoryRegion};
+use common::{ceil_div, MemoryRegion, PAGE_SIZE};
 
 const PSF_MAGIC: u32 = 0x864AB572;
 
@@ -21,6 +21,18 @@ struct PSFHeader {
 
 // Include PSF data as part of kernel binary
 static FONT_DATA: &[u8] = include_bytes!("../../../resources/zap-ext-light20.psf");
+
+const FRAMEBUFFER_MAX_SIZE: usize = PAGE_SIZE * PAGE_SIZE;
+
+#[repr(C)]
+#[cfg_attr(target_arch="x86_64", repr(align(4096)))]
+struct Framebuffer {
+    buffer: [u8; FRAMEBUFFER_MAX_SIZE]
+}
+
+static FRAMEBUFFER: Framebuffer = Framebuffer { 
+    buffer: [0; FRAMEBUFFER_MAX_SIZE]
+};
 
 pub struct FramebufferLogger {
     fb_base: *mut u8,
@@ -136,6 +148,7 @@ impl FramebufferLogger {
     pub fn clear_screen(&mut self) {
         unsafe {
             self.fb_base.write_bytes(0, self.height * self.stride * 4);
+            (FRAMEBUFFER.buffer.as_ptr() as *mut u8).write_bytes(0, self.height * self.stride * 4);
         }
         
         self.current_x = 0;
@@ -227,7 +240,9 @@ impl FramebufferLogger {
         if offset < self.height * self.stride * 4 {
             unsafe {
                 let pixel_ptr = self.fb_base.add(offset) as *mut u32;
+                let buffer_ptr = FRAMEBUFFER.buffer.as_ptr().add(offset) as *mut u32;
                 core::ptr::write_volatile(pixel_ptr, color);
+                core::ptr::write(buffer_ptr, color);
             }
         }
     }
@@ -238,11 +253,27 @@ impl FramebufferLogger {
         let fb_size = self.height * self.stride * 4;
         
         unsafe {
-            core::ptr::copy(
-                self.fb_base.add(line_size),
+            // Copy from scratch buffer to real framebuffer
+            core::ptr::copy_nonoverlapping(
+                FRAMEBUFFER.buffer.as_ptr().add(line_size),
                 self.fb_base,
                 fb_size - line_size
             );
+            
+            // Scroll the scratch buffer
+            core::ptr::copy(
+                FRAMEBUFFER.buffer.as_ptr().add(line_size),
+                FRAMEBUFFER.buffer.as_ptr() as *mut u8,
+                fb_size - line_size
+            );
+
+            // Clear the bottom line in scratch buffer
+            core::ptr::write_bytes(
+                FRAMEBUFFER.buffer.as_ptr().add(fb_size - line_size) as *mut u8,
+                0,
+                line_size
+            );
+
             // Clear the bottom line
             core::ptr::write_bytes(
                 self.fb_base.add(fb_size - line_size),

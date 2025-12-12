@@ -101,7 +101,7 @@ pub struct KernelLogger {
     pub lock: crate::Lock
 }
 
-pub static mut LOGGER: KernelLogger = KernelLogger { panic_mode: false, log_timestamp: false, lock: crate::Lock { lock: core::ptr::null_mut(), int_status: false } };
+pub static mut LOGGER: KernelLogger = KernelLogger { panic_mode: false, log_timestamp: false, lock: crate::Lock { lock: 0, int_status: false } };
 
 pub fn init_logger() {
     unsafe {

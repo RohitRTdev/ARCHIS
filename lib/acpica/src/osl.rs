@@ -204,38 +204,6 @@ extern "C" fn AcpiOsWaitEventsComplete()
 {}
 
 #[no_mangle]
-extern "C" fn AcpiOsCreateMutex(out_handle: *mut *mut c_void) -> ACPI_STATUS {
-    AE_OK
-}
-
-#[no_mangle]
-extern "C" fn AcpiOsDeleteMutex(handle: *mut c_void) -> ACPI_STATUS {
-    if handle.is_null() {
-        return AE_ERROR;
-    }
-
-    AE_OK
-}
-
-#[no_mangle]
-extern "C" fn AcpiOsAcquireMutex(handle: *mut c_void, timeout: u16) -> ACPI_STATUS {
-    if handle.is_null() {
-        return AE_ERROR;
-    }
-
-    AE_OK
-}
-
-#[no_mangle]
-extern "C" fn AcpiOsReleaseMutex(handle: *mut c_void) -> ACPI_STATUS {
-    if handle.is_null() {
-        return AE_ERROR;
-    }
-
-    AE_OK
-}
-
-#[no_mangle]
 extern "C" fn AcpiOsCreateSemaphore(max_units: u32, initial_units: u32, out_handle: *mut *mut c_void) -> ACPI_STATUS {
     if out_handle.is_null() {
         return AE_ERROR;

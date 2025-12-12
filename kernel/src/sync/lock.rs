@@ -1,15 +1,17 @@
 use core::cell::{RefCell, RefMut};
 use core::ops::{Deref, DerefMut};
 
-use core::ptr::NonNull;
 #[cfg(test)]
 use std::sync::{Mutex, MutexGuard};
 
 use kernel_intf::Lock;
-use core::alloc::Layout;
-use crate::devices::SERIAL;
 use crate::hal;
-use crate::mem::{Allocator, FixedAllocator, Regions::*};
+use common::ptr_to_ref_mut;
+
+// This assumption is used by Lock variable in kernel_intf
+const _: () = {
+    assert!(core::mem::size_of::<hal::Spinlock>() == 8);
+};
 
 pub struct SpinlockGuard<'a, T> {
 #[cfg(not(test))]
@@ -79,25 +81,20 @@ impl<T> Spinlock<T> {
     }
 }
 
-
-// We're using fixed allocator since spinlocks will be required from early boot process
 #[no_mangle]
 extern "C" fn create_spinlock(lock: &mut Lock) {
     let val = hal::Spinlock::new();
-    let ptr = FixedAllocator::<hal::Spinlock, {Region6 as usize}>::alloc(Layout::new::<hal::Spinlock>()).unwrap();
 
     unsafe {
-        ptr.write(val);
+        ptr_to_ref_mut::<_, hal::Spinlock>(&lock.lock).write(val);
     }
-
-    lock.lock = ptr.as_ptr() as *mut u8;
 }
 
 #[no_mangle]
 extern "C" fn acquire_spinlock(lock: &mut Lock) {
     unsafe {
         let stat = hal::disable_interrupts();
-        (*(lock.lock as *mut hal::Spinlock)).lock(); 
+        (*ptr_to_ref_mut::<_, hal::Spinlock>(&lock.lock)).lock(); 
         
         lock.int_status = stat;
     }
@@ -106,15 +103,8 @@ extern "C" fn acquire_spinlock(lock: &mut Lock) {
 #[no_mangle]
 extern "C" fn release_spinlock(lock: &mut Lock) {
     unsafe {
-        (*(lock.lock as *mut hal::Spinlock)).unlock(); 
+        (*ptr_to_ref_mut::<_, hal::Spinlock>(&lock.lock)).unlock(); 
         hal::enable_interrupts(lock.int_status);
-    }
-}
-        
-#[no_mangle]
-extern "C" fn delete_spinlock(lock: &mut Lock) {
-    unsafe {
-        FixedAllocator::<hal::Spinlock, {Region6 as usize}>::dealloc(NonNull::new(lock.lock as *mut hal::Spinlock).unwrap(), Layout::new::<hal::Spinlock>());
     }
 }
         

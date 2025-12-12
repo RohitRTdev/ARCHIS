@@ -53,7 +53,7 @@ impl fmt::Display for RtcTime {
 
 #[repr(C)]
 pub struct Lock {
-    pub lock: *mut u8,
+    pub lock: u64,
     pub int_status: bool
 }
 
@@ -63,7 +63,6 @@ extern "C" {
     pub fn create_spinlock(lock: &mut Lock);
     pub fn acquire_spinlock(lock: &mut Lock);
     pub fn release_spinlock(lock: &mut Lock);
-    pub fn delete_spinlock(lock: &mut Lock);
     pub fn clear_screen();
     pub fn read_rtc() -> RtcTime;
     pub fn read_timestamp() -> usize;
