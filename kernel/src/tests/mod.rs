@@ -19,7 +19,6 @@ fn get_test_lock() -> &'static Arc<Mutex<bool>> {
     TEST_LOCK.get_or_init(|| Arc::new(Mutex::new(false)))
 }
 
-
 #[test]
 fn fixed_allocator_test() {
     // Certain tests such as this needs to be run in isolation

@@ -1,6 +1,7 @@
 use kernel_intf::info;
 use crate::mem::MapFetchType;
-use common::ptr_to_ref_mut;
+use core::sync::atomic::Ordering;
+use core::cell::UnsafeCell;
 mod asm;
 mod utils;
 mod features;
@@ -37,30 +38,23 @@ pub fn enable_interrupts(int_status: bool) {
 pub use asm::read_port_u8;
 pub use asm::write_port_u8;
 
-pub struct Spinlock(u64);
+pub struct Spinlock(UnsafeCell<u64>);
 
 impl Spinlock {
     pub const fn new() -> Self {
-        Self(0)
+        Self(UnsafeCell::new(0))
     }
 
     pub fn lock(&self) {
         unsafe {
-            asm::acquire_lock(ptr_to_ref_mut(&self.0));
+            asm::acquire_lock(self.0.get());
         }
     }
     
     pub fn unlock(&self) {
         unsafe {
-            ptr_to_ref_mut::<_, u64>(&self.0).write(0);
-        }
-    }
-
-    // Returns true if already locked, otherwise returns false and acquires lock
-    // This is useful when you want to acquire the lock but not busy-wait
-    pub fn try_lock(&self) -> bool {
-        unsafe {
-            asm::try_acquire_lock(ptr_to_ref_mut::<_, u64>(&self.0)) != 0
+            // In x86_64, writes follow release semantics (Since no earlier load/store is reordered with a later store)
+            self.0.get().write(0);
         }
     }
 } 
@@ -141,3 +135,12 @@ pub fn init() -> ! {
         crate::mem::get_virtual_address(tables::kern_addr_space_start as *const () as usize, MapFetchType::Kernel).expect("kern_addr_space_start virtual address not found!"));
 }
 
+// This function should only be called once during init
+// Tells hal that kernel is ready to handle timer interrupts
+pub fn register_timer_fn(handler: fn(*const u8)) {
+    unsafe {
+        handlers::KERNEL_TIMER_FN = Some(handler);
+    }
+
+    lapic::enable_timer(timer::BASE_COUNT.load(Ordering::Acquire) as u32);
+}

@@ -1,6 +1,7 @@
 use kernel_intf::{debug, info};
 use core::sync::atomic::{AtomicUsize, Ordering};
 use crate::cpu::{self, general_interrupt_handler};
+use super::{lapic, timer};
 use crate::sync::Spinlock;
 use crate::mem::on_page_fault;
 use super::lapic::{eoi, get_error};
@@ -11,13 +12,16 @@ use crate::devices::ioapic::add_redirection_entry;
 
 const PAGE_FAULT_VECTOR: usize = 14;
 pub const SPURIOUS_VECTOR: usize = 32;
-const TIMER_VECTOR: usize = 33;
+pub const TIMER_VECTOR: usize = 33;
 pub const ERROR_VECTOR: usize = 34;
 const USER_VECTOR_START: usize = 35;
 
 static NEXT_AVAILABLE_VECTOR: AtomicUsize = AtomicUsize::new(USER_VECTOR_START);
 
-const EXCEPTION_VECTOR_RANGE: usize = 32; 
+const EXCEPTION_VECTOR_RANGE: usize = 32;
+pub static mut KERNEL_TIMER_FN: Option<fn(*const u8)> = None;
+static mut GLOBAL_CONTEXT: *const u8 = 0 as *const u8;
+
 static VECTOR_TABLE: Spinlock<[fn(usize); MAX_INTERRUPT_VECTORS]> = Spinlock::new([default_handler; MAX_INTERRUPT_VECTORS]);
 const UNDEFINED_STRING: &'static str = "Undefined";
 const EXCP_STRINGS: [&'static str; EXCEPTION_VECTOR_RANGE] = [
@@ -80,6 +84,10 @@ pub struct CPUContext {
 
 #[no_mangle]
 extern "C" fn global_interrupt_handler(vector: u64, cpu_context: *const CPUContext) {
+    unsafe {
+        GLOBAL_CONTEXT = cpu_context as *const u8;
+    }
+
     let saved_base = cpu::get_panic_base();
     cpu::set_panic_base(unsafe {
         asm::fetch_rbp() as usize
@@ -131,8 +139,17 @@ fn spurious_handler(_vector: usize) {
     debug!("Detected spurious interrupt!");
 }
 
+// It's fine to handle these without locks since CPU won't interrupt during this call
+// This is true since we are already in interrupt and further interrupts are masked by current design
 fn timer_handler(_vector: usize) {
+    unsafe {
+        if let Some(handler) = KERNEL_TIMER_FN {
+            handler(GLOBAL_CONTEXT);
+        }
+    }
 
+    // Reload the timer
+    lapic::setup_timer_value(timer::BASE_COUNT.load(Ordering::Acquire) as u32);
 }
 
 fn error_handler(_vector: usize) {

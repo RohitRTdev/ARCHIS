@@ -186,7 +186,7 @@ fn parse_madt(madt: &AcpiTableMadt) {
 }
 
 
-
+#[cfg(feature="acpi")]
 pub fn early_init() {
     
     let madt_tab = acpica::fetch_acpi_table::<AcpiTableMadt>(

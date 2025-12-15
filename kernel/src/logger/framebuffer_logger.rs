@@ -1,3 +1,4 @@
+use core::cell::UnsafeCell;
 use crate::mem::{MapFetchType, PageDescriptor};
 use crate::sync::Spinlock;
 use crate::{RemapEntry, RemapType::*, BOOT_INFO, REMAP_LIST};
@@ -27,11 +28,13 @@ const FRAMEBUFFER_MAX_SIZE: usize = PAGE_SIZE * PAGE_SIZE;
 #[repr(C)]
 #[cfg_attr(target_arch="x86_64", repr(align(4096)))]
 struct Framebuffer {
-    buffer: [u8; FRAMEBUFFER_MAX_SIZE]
+    buffer: UnsafeCell<[u8; FRAMEBUFFER_MAX_SIZE]>
 }
 
+unsafe impl Sync for Framebuffer{}
+
 static FRAMEBUFFER: Framebuffer = Framebuffer { 
-    buffer: [0; FRAMEBUFFER_MAX_SIZE]
+    buffer: UnsafeCell::new([0; FRAMEBUFFER_MAX_SIZE])
 };
 
 pub struct FramebufferLogger {
@@ -147,9 +150,24 @@ impl FramebufferLogger {
     
     pub fn clear_screen(&mut self) {
         unsafe {
-            self.fb_base.write_bytes(0, self.height * self.stride * 4);
-            (FRAMEBUFFER.buffer.as_ptr() as *mut u8).write_bytes(0, self.height * self.stride * 4);
+            #[cfg(debug_assertions)]
+            {
+                self.fb_base.write_bytes(0, self.height * self.stride * 4);
+            }
+
+            #[cfg(not(debug_assertions))] 
+            {
+                let fb = self.fb_base as *mut u32;
+                for i in 0..self.height * self.stride {
+                    core::ptr::write_volatile(fb.add(i), 0);
+                }
+
+            }
+
+            ((*FRAMEBUFFER.buffer.get()).as_ptr() as *mut u8).write_bytes(0, self.height * self.stride * 4);
         }
+        
+        core::sync::atomic::fence(core::sync::atomic::Ordering::Release);        
         
         self.current_x = 0;
         self.current_y = 0;
@@ -233,6 +251,8 @@ impl FramebufferLogger {
                 }
             }
         }
+        
+        core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
     }
     
     fn set_pixel(&mut self, x: usize, y: usize, color: u32) {
@@ -240,7 +260,7 @@ impl FramebufferLogger {
         if offset < self.height * self.stride * 4 {
             unsafe {
                 let pixel_ptr = self.fb_base.add(offset) as *mut u32;
-                let buffer_ptr = FRAMEBUFFER.buffer.as_ptr().add(offset) as *mut u32;
+                let buffer_ptr = (*FRAMEBUFFER.buffer.get()).as_ptr().add(offset) as *mut u32;
                 core::ptr::write_volatile(pixel_ptr, color);
                 core::ptr::write(buffer_ptr, color);
             }
@@ -252,52 +272,46 @@ impl FramebufferLogger {
         let line_size = self.font_header.height as usize * self.stride * 4; // stride in pixels, *4 for bytes
         let fb_size = self.height * self.stride * 4;
 
-        #[cfg(debug_assertions)]
+        //#[cfg(debug_assertions)]
         unsafe {
-            // Copy from scratch buffer to real framebuffer
-            core::ptr::copy_nonoverlapping(
-                FRAMEBUFFER.buffer.as_ptr().add(line_size),
-                self.fb_base,
-                fb_size - line_size
-            );
-            
             // Scroll the scratch buffer
             core::ptr::copy(
-                FRAMEBUFFER.buffer.as_ptr().add(line_size),
-                FRAMEBUFFER.buffer.as_ptr() as *mut u8,
-                fb_size - line_size
-            );
-
-            // Clear the bottom line in scratch buffer
-            core::ptr::write_bytes(
-                FRAMEBUFFER.buffer.as_ptr().add(fb_size - line_size) as *mut u8,
-                0,
-                line_size
-            );
-
-            // Clear the bottom line
-            core::ptr::write_bytes(
-                self.fb_base.add(fb_size - line_size),
-                0,
-                line_size
-            );
-        }
-
-        #[cfg(not(debug_assertions))]
-        unsafe {
-            core::ptr::copy (
-                self.fb_base.add(line_size),
-                self.fb_base,
+                (*FRAMEBUFFER.buffer.get()).as_ptr().add(line_size),
+                (*FRAMEBUFFER.buffer.get()).as_ptr() as *mut u8,
                 fb_size - line_size
             );
             
+            // Clear the bottom line in scratch buffer
             core::ptr::write_bytes(
-                self.fb_base.add(fb_size - line_size),
+                (*FRAMEBUFFER.buffer.get()).as_ptr().add(fb_size - line_size) as *mut u8,
                 0,
                 line_size
             );
+
+            // Copy scratch buffer to real fb
+            #[cfg(debug_assertions)]
+            {
+                core::ptr::copy_nonoverlapping(
+                    (*FRAMEBUFFER.buffer.get()).as_ptr(),
+                    self.fb_base,
+                    fb_size
+                );
+            }
+
+            #[cfg(not(debug_assertions))]
+            {
+                let src = (*FRAMEBUFFER.buffer.get()).as_ptr() as *const u32;
+                let dst = self.fb_base as *mut u32;
+
+                for i in 0..fb_size / 4 {
+                    let v = core::ptr::read(src.add(i));
+                    core::ptr::write_volatile(dst.add(i), v);
+                }
+            }
         }
-        
+
+        core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
+
         self.current_y -= self.font_header.height as usize;
     }
     

@@ -160,6 +160,7 @@ pub fn complete_handoff() {
             core::slice::from_raw_parts(rlc_tab_desc.start as *const MemoryRegion, rlc_tab_desc.size / rlc_tab_desc.entry_size)
         };
 
+        // This is the old unmapped kernel address
         kernel_base = boot_info.kernel_desc.base;
         total_size = boot_info.kernel_desc.total_size;
         load_base = mod_cb.info.base;

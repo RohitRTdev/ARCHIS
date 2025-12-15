@@ -1,9 +1,11 @@
+#![allow(static_mut_refs)]
+
 use core::alloc::Layout;
 use core::marker::PhantomData;
 use core::mem;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use common::{ceil_div, ptr_to_usize, MemoryRegion, PAGE_SIZE};
+use common::{ceil_div, MemoryRegion, PAGE_SIZE};
 use kernel_intf::KError;
 use crate::sync::Spinlock;
 use kernel_intf::{info, debug};
@@ -47,7 +49,7 @@ struct HeapWrapper {
     lock: Spinlock<core::marker::PhantomData<bool>>
 }
 
-static HEAP: HeapWrapper = HeapWrapper { 
+static mut HEAP: HeapWrapper = HeapWrapper { 
     heap0: [0; BOOT_REGION_SIZE0],
     heap1: [0; BOOT_REGION_SIZE1],
     heap2: [0; BOOT_REGION_SIZE2],
@@ -58,43 +60,43 @@ static HEAP: HeapWrapper = HeapWrapper {
     lock: Spinlock::new(core::marker::PhantomData)
 };
 
-static HEAP_PTR: AtomicUsize = AtomicUsize::new(0);
+static OLD_HEAP_PTR: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(test)]
 pub fn get_heap(reg: Regions) -> (*const u8, *const u8) {
-    let _guard = HEAP.lock.lock();
-    let (heap, bitmap_offset) = match reg {
-        Regions::Region0 => {
-            (HEAP.heap0.as_ptr() as *mut u8, 0)
-        }
-        Regions::Region1 => {
-            (HEAP.heap1.as_ptr() as *mut u8, BOOT_REGION_SIZE0 >> 3)
-        }
-        Regions::Region2 => {
-            (HEAP.heap2.as_ptr() as *mut u8, (BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1) >> 3)
-        }
-        Regions::Region3 => {
-            (HEAP.heap3.as_ptr() as *mut u8, (BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2) >> 3)
-        }
-        Regions::Region4 => {
-            (HEAP.heap4.as_ptr() as *mut u8, (BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2 + BOOT_REGION_SIZE3) >> 3)
-        }
-        Regions::Region5 => {
-            (HEAP.heap5.as_ptr() as *mut u8, (BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2 + BOOT_REGION_SIZE3 + BOOT_REGION_SIZE4) >> 3)
-        }
-    };
-    
-    let bm = unsafe {
-        HEAP.bitmap.as_ptr().add(bitmap_offset)
-    };
+    unsafe {
+        let _guard = HEAP.lock.lock();
+        let (heap, bitmap_offset) = match reg {
+            Regions::Region0 => {
+                (HEAP.heap0.as_ptr() as *mut u8, 0)
+            }
+            Regions::Region1 => {
+                (HEAP.heap1.as_ptr() as *mut u8, BOOT_REGION_SIZE0 >> 3)
+            }
+            Regions::Region2 => {
+                (HEAP.heap2.as_ptr() as *mut u8, (BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1) >> 3)
+            }
+            Regions::Region3 => {
+                (HEAP.heap3.as_ptr() as *mut u8, (BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2) >> 3)
+            }
+            Regions::Region4 => {
+                (HEAP.heap4.as_ptr() as *mut u8, (BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2 + BOOT_REGION_SIZE3) >> 3)
+            }
+            Regions::Region5 => {
+                (HEAP.heap5.as_ptr() as *mut u8, (BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2 + BOOT_REGION_SIZE3 + BOOT_REGION_SIZE4) >> 3)
+            }
+        };
+        
+        let bm = HEAP.bitmap.as_ptr().add(bitmap_offset);
 
-    (heap, bm)
+        (heap, bm)
+    }
 }
 
 #[cfg(test)]
 pub fn clear_heap() {
-    let _guard = HEAP.lock.lock();
     unsafe {
+        let _guard = HEAP.lock.lock();
         (&HEAP.bitmap as *const u8 as *mut u8).write_bytes(0, BITMAP_SIZE);
     }
 }
@@ -110,7 +112,9 @@ impl<T, const REGION: usize> FixedAllocator<T, REGION>
 where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
     fn fetch_hdr_and_base() -> (*mut u8, *mut u8) {
         // We can safely borrow heap as mutable, since we're ensuring synchronization with lock
-        let heap_start = HEAP_PTR.load(Ordering::Relaxed) as *mut u8;
+        let heap_start = unsafe {
+            HEAP.heap0.as_mut_ptr()
+        };
         let (heap_base, bitmap_offset) = match REGION {
             0 => {
                 (heap_start, 0)
@@ -130,17 +134,13 @@ where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
             5 => {
                 (unsafe {heap_start.add(BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2 + BOOT_REGION_SIZE3 + BOOT_REGION_SIZE4)}, (BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2 + BOOT_REGION_SIZE3 + BOOT_REGION_SIZE4) >> 3)
             }
-            6 => {
-                (unsafe {heap_start.add(BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2 + BOOT_REGION_SIZE3 + BOOT_REGION_SIZE4 + BOOT_REGION_SIZE5)}, (BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2 + BOOT_REGION_SIZE3 + BOOT_REGION_SIZE4 + BOOT_REGION_SIZE5) >> 3)
-            }
 
             // This will never happen
-            _ => {(core::ptr::null_mut(),0)}
+            _ => {(core::ptr::null_mut(), 0)}
         };
         
         let bitmap_base = unsafe {
-            HEAP.bitmap.as_ptr().add(bitmap_offset)
-            as *mut u8
+            HEAP.bitmap.as_mut_ptr().add(bitmap_offset)
         };
 
         (heap_base, bitmap_base)
@@ -179,7 +179,9 @@ for FixedAllocator<T, REGION>
 where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
 
     fn alloc(layout: Layout) -> Result<NonNull<T>, KError> {
-        let _sync = HEAP.lock.lock();
+        let _sync = unsafe {
+            HEAP.lock.lock()
+        };
         
         let (base, hdr_base) = Self::fetch_hdr_and_base();
         let slot_size = mem::size_of::<T>();
@@ -248,13 +250,23 @@ where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
     }
 
     unsafe fn dealloc(address: NonNull<T>, layout: Layout) {
-        let _sync = HEAP.lock.lock();
+        let _sync = unsafe {
+            HEAP.lock.lock()
+        };
         let (base, hdr_base) = Self::fetch_hdr_and_base();
+
+        let mut address = address.as_ptr().addr();
+        let old_heap_ptr = OLD_HEAP_PTR.load(Ordering::Relaxed);
+        
+        // The allocation was made prior to kernel address space init. Translate those addresses here
+        if address >= old_heap_ptr && address < old_heap_ptr + size_of::<HeapWrapper>() {
+            address = HEAP.heap0.as_ptr().addr() + address - old_heap_ptr;
+        }
 
         let total_size = layout.size();
         let slot_size = mem::size_of::<T>();
         let mut slots = ceil_div(total_size, slot_size);
-        let mut slot_offset = (address.as_ptr() as usize - base as usize) / slot_size;
+        let mut slot_offset = (address - base as usize) / slot_size;
         let num_slots = Self::calculate_total_slots(); 
 
         debug_assert!(slot_offset < num_slots, 
@@ -279,7 +291,7 @@ where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
 }
 
 pub fn map_kernel_memory(base: usize, total_size: usize) {
-    let heap_start = HEAP_PTR.load(Ordering::Relaxed);  
+    let heap_start = OLD_HEAP_PTR.load(Ordering::Relaxed);  
     let size_top = heap_start - base;
     let mut kernel_end = heap_start + size_of::<HeapWrapper>();
 
@@ -311,7 +323,7 @@ pub fn map_kernel_memory(base: usize, total_size: usize) {
 pub fn unmap_kernel_memory(base: usize, total_size: usize) {
     info!("Unmapping kernel identity mapped region");
 
-    let heap_start = HEAP_PTR.load(Ordering::Relaxed);
+    let heap_start = OLD_HEAP_PTR.load(Ordering::Relaxed);
     let size_top = heap_start - base;
     let kernel_end = heap_start + size_of::<HeapWrapper>();
     let size_end = total_size - size_of::<HeapWrapper>() - size_top;
@@ -325,13 +337,13 @@ pub fn unmap_kernel_memory(base: usize, total_size: usize) {
 
 // This function should be called before using fixed allocator routines
 pub fn setup_heap() {
-    HEAP_PTR.store(ptr_to_usize(&HEAP), Ordering::SeqCst);
+    OLD_HEAP_PTR.store((&raw const HEAP).addr() , Ordering::Relaxed);
 }
 
 pub fn fixed_allocator_init() {
     REMAP_LIST.lock().add_node(RemapEntry { 
         value: MemoryRegion { 
-            base_address: HEAP_PTR.load(Ordering::Relaxed),
+            base_address: OLD_HEAP_PTR.load(Ordering::Relaxed),
             size: mem::size_of::<HeapWrapper>()
         }, 
         map_type: IdentityMapped,

@@ -2,7 +2,7 @@ use crate::mem::{MapFetchType, PageDescriptor, allocate_memory, get_virtual_addr
 
 use super::asm::{rdmsr, wrmsr};
 use super::cpu::register_cpu;
-use super::handlers::{SPURIOUS_VECTOR, ERROR_VECTOR};
+use super::handlers::{SPURIOUS_VECTOR, ERROR_VECTOR, TIMER_VECTOR};
 use kernel_intf::info;
 use common::PAGE_SIZE;
 use core::alloc::Layout;
@@ -11,12 +11,16 @@ const APIC_BASE_OFFSET: u32 = 0x1b;
 const APIC_ID_OFFSET: u32 = 0x802;
 const APIC_EOI_OFFSET: u32 = 0x80b;
 const TASK_REG_OFFSET: u32 = 0x808;
+const TIMER_LVT: u32 = 0x832;
 const THERMAL_LVT: u32 = 0x833;
 const PERF_CNTR_LVT: u32 = 0x834;
 const LINT0_LVT: u32 = 0x835;
 const LINT1_LVT: u32 = 0x836;
 const ERROR_LVT: u32 = 0x837;
 const ERROR_STS_OFFSET: u32 = 0x828;
+const INITIAL_CNT_OFFSET: u32 = 0x838;
+const CURRENT_CNT_OFFSET: u32 = 0x839;
+const DIVIDE_CNT_OFFSET: u32 = 0x83e;
 const SPURIOUS_ENTRY_OFFSET: u32 = 0x80f;
 
 static mut X2APIC_ENABLED: bool = false;
@@ -127,4 +131,36 @@ pub fn get_error() -> u64 {
     // This write is required to get latest error status
     lapic_write(ERROR_STS_OFFSET, 0);
     lapic_read(ERROR_STS_OFFSET)
+}
+
+// This initial setup is required for measuring the timer frequency
+pub fn init_timer() {
+    // Setup timer in periodic mode. Masked initially
+    lapic_write(TIMER_LVT, (1 << 17) | (1 << 16) | TIMER_VECTOR as u64);
+
+    // Divide by 1
+    lapic_write(DIVIDE_CNT_OFFSET, 0b1011);
+    lapic_write(INITIAL_CNT_OFFSET, 0xffffffff);
+}
+
+pub fn get_timer_value() -> u32 {
+    lapic_read(CURRENT_CNT_OFFSET) as u32
+}
+
+// This is the setup we will use at scheduler level
+pub fn setup_timer() {
+    // Enable timer in one-shot mode. Keep interrupt masked
+    lapic_write(TIMER_LVT, (1 << 16) | TIMER_VECTOR as u64);
+
+    // Divide by 128 (Max divide factor)
+    lapic_write(DIVIDE_CNT_OFFSET, 0b1010);
+}
+
+pub fn enable_timer(init_count: u32) {
+    lapic_write(TIMER_LVT, TIMER_VECTOR as u64);
+    setup_timer_value(init_count);
+}
+
+pub fn setup_timer_value(init_count: u32) {
+    lapic_write(INITIAL_CNT_OFFSET, init_count as u64);
 }

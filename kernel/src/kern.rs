@@ -11,6 +11,7 @@ mod module;
 mod logger;
 mod cpu;
 mod devices;
+mod sched;
 
 use kernel_intf::{info, debug};
 use common::*;
@@ -66,7 +67,7 @@ fn kern_main() {
         info!("Notified of keypress via vector {}. Scancode={}", vec, scancode);
     }, true, true);
     
-    //hal::fire_interrupt();
+    sched::init();
 
     info!("Main core going to sleep");
     hal::sleep();
@@ -79,7 +80,7 @@ unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
         *boot_info
     });   
 
-    mem::setup_heap(); 
+    mem::setup_heap();
     logger::init();
 
     info!("Starting aris");

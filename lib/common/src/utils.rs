@@ -17,7 +17,7 @@ pub fn align_up(a: usize, alignment: usize) -> usize {
 
 #[inline(always)]
 pub fn ptr_to_usize<T>(r: &T) -> usize {
-    r as *const T as usize
+    (r as *const T).addr()
 }
 
 #[inline(always)]
