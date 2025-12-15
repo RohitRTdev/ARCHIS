@@ -1,7 +1,7 @@
 use common::{en_flag, ptr_to_usize};
 use crate::{cpu, hal::enable_interrupts, sync::{Once, Spinlock}};
 use kernel_intf::{debug, info};
-use super::{asm, MAX_INTERRUPT_VECTORS, handlers};
+use super::{asm, MAX_INTERRUPT_VECTORS, handlers, lapic, timer};
 
 const KERNEL_CODE_SELECTOR: usize = 0x8;
 
@@ -174,7 +174,10 @@ pub extern "C" fn kern_addr_space_start() {
         }
     }
 
+    lapic::init();
+    timer::init();
     handlers::init();
+
     enable_interrupts(true);
     crate::kern_main();
 } 

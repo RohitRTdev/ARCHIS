@@ -90,6 +90,18 @@ pub struct AcpiTableHpet {
     pub flags: u8                   
 }
 
+#[derive(Debug)]
+#[repr(C, packed)]
+pub struct AcpiTableMadt {
+    pub header: AcpiTableHeader,
+    pub con_addr: u32,
+    pub flags: u32
+}
+
 impl AcpiTable for AcpiTableHpet {
     const TABLE_NAME: &'static str = "HPET"; 
+}
+
+impl AcpiTable for AcpiTableMadt {
+    const TABLE_NAME: &'static str = "APIC"; 
 }

@@ -1,30 +1,9 @@
 mod framebuffer_logger;
 
-use core::ffi::CStr;
 use framebuffer_logger::FRAMEBUFFER_LOGGER;
-use crate::devices::SERIAL;
-use crate::hal;
+use crate::devices::uart;
 pub use framebuffer_logger::relocate_framebuffer;
 
-static SCREEN_LOCK: hal::Spinlock = hal::Spinlock::new();
-
-#[no_mangle]
-extern "C" fn acquire_screen_lock() -> bool {
-    let stat = hal::disable_interrupts();
-    SCREEN_LOCK.lock();
-
-    stat
-}
-
-#[no_mangle]
-extern "C" fn release_screen_lock(int_status: bool) {
-    SCREEN_LOCK.unlock();
-
-    hal::enable_interrupts(int_status);
-}
-
-
-// Make sure that screen lock is held before call
 #[no_mangle]
 extern "C" fn clear_screen() {
     FRAMEBUFFER_LOGGER.lock().clear_screen();
@@ -39,7 +18,7 @@ extern "C" fn serial_print_ffi(s: *const u8, len: usize) {
     }; 
 
     // Write to serial
-    SERIAL.lock().write(s);
+    uart::SERIAL.lock().write(s);
     
     // Write to framebuffer
     FRAMEBUFFER_LOGGER.lock().write(s);
@@ -47,6 +26,7 @@ extern "C" fn serial_print_ffi(s: *const u8, len: usize) {
 
 pub fn init() {
     kernel_intf::init_logger();
+    uart::init();
     framebuffer_logger::init();
     
     // We assume RTC always exists for PC-AT systems

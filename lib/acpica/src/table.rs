@@ -1,3 +1,4 @@
+use core::ptr::read_unaligned;
 use crate::types::{AcpiTable, AcpiTableHeader};
 
 // These are helper table functions that can be used before/after acpica init
@@ -10,21 +11,21 @@ fn fetch_acpi_table_core(rsdp_ptr: *const u8, signature: &str) -> Option<*const 
     let sig = signature.as_bytes();
 
     unsafe {
-        let xsdt = *(rsdp_ptr.add(24) as *const u64) as usize;
+        let xsdt = read_unaligned(rsdp_ptr.add(24) as *const u64) as usize;
         assert!(xsdt != 0, "XSDT not found with firmware provided RSDP!");
 
         let header = xsdt as *const AcpiTableHeader;
 
         // Number of entries: (total_length − header_size) / 8
         let header_len = core::mem::size_of::<AcpiTableHeader>();
-        let entry_count = ((*header).length as usize - header_len) / 8;
+        let entry_count = (read_unaligned(core::ptr::addr_of!((*header).length)) as usize - header_len) / 8;
 
         // Pointer to first 64-bit entry
-        let entries_ptr = (xsdt + header_len) as *const u64;
+        let entries_base = xsdt + header_len;
 
         for i in 0..entry_count {
-            let table = *entries_ptr.add(i);
-
+            let entry_addr = entries_base + i * 8;
+            let table = read_unaligned(entry_addr as *const u64);
             // Not sure if this might happen. Just for Safeguard
             if table == 0 {
                 continue;

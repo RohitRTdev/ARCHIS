@@ -1,17 +1,16 @@
 mod rtc;
-pub use rtc::*;
 
-mod uart;
-pub use uart::*;
+pub mod uart;
 
 mod hpet;
 pub use hpet::*;
 
-pub fn early_init() {
-    uart::init();
-}
+pub mod ioapic;
 
 pub fn init() {
 #[cfg(feature = "acpi")]
-    hpet::init();
+    {
+        hpet::init();
+        ioapic::early_init();
+    }
 }

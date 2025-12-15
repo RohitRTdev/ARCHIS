@@ -58,11 +58,11 @@ fn load_aux_tables(reloc_sections: &mut Vec<MapRegion>, symtab: &mut Option<MapR
     // Now map the symbol table and relocation sections
     test_log!("Loading reloc sections and symbol table");
     let mut current_load_ptr = aux_base as *mut u8;
-    for (idx, shn) in reloc_sections.iter_mut().enumerate() {
+    for (_idx, shn) in reloc_sections.iter_mut().enumerate() {
         unsafe {
             copy_nonoverlapping(shn.src_addr as *const u8, current_load_ptr, shn.src_size);
             shn.dest_addr = current_load_ptr as usize;
-            test_log!("Loaded location:{} from {:#X} to {:#X} of size: {}", idx, shn.src_addr, current_load_ptr as usize, shn.src_size);
+            test_log!("Loaded location:{} from {:#X} to {:#X} of size: {}", _idx, shn.src_addr, current_load_ptr as usize, shn.src_size);
             
             current_load_ptr = current_load_ptr.add(shn.src_size);
             current_load_ptr = current_load_ptr.add(current_load_ptr.align_offset(aux_alignment));

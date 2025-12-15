@@ -3,7 +3,7 @@ use crate::{ds::*, RemapEntry, RemapType::*, BOOT_INFO, REMAP_LIST};
 use crate::sync::{Once, Spinlock};
 use kernel_intf::KError;
 use kernel_intf::info;
-use super::{FixedAllocator, Regions::*};
+use super::Regions::*;
 use super::PageDescriptor;
 use core::alloc::Layout;
 use core::ptr::NonNull;

@@ -1,6 +1,7 @@
 use crate::sync::{Once, Spinlock};
 use kernel_intf::{debug, info};
 use super::asm;
+use super::lapic::enable_x2apic;
 
 enum FeatureState {
     Required(&'static str),
@@ -24,11 +25,12 @@ pub struct CPUFeatures {
     pub pge: bool,
     pub mtrr: bool,
     pub tsc_invariant: bool,
+    pub x2apic: bool,
 
     pub phy_addr_width: u8
 }
 
-const FEATURE_MAP: [FeatureDescriptor; 11] = [
+const FEATURE_MAP: [FeatureDescriptor; 12] = [
     FeatureDescriptor {
         fn_num: 0x1,
         ext_fn_num: 0,
@@ -56,6 +58,16 @@ const FEATURE_MAP: [FeatureDescriptor; 11] = [
         reg_idx: 3,
         bit_idx: 9,
         is_required: FeatureState::Required("APIC")
+    },
+    FeatureDescriptor {
+        fn_num: 0x1,
+        ext_fn_num: 0,
+        reg_idx: 2,
+        bit_idx: 21,
+        is_required: FeatureState::NotRequired(|val| {
+            val.x2apic = true;
+            enable_x2apic();
+        })
     },
     FeatureDescriptor {
         fn_num: 0x1,

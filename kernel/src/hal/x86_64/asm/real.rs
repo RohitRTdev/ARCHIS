@@ -11,6 +11,7 @@ extern "C" {
     pub fn fetch_rbp() -> u64;
     pub fn fetch_rsp() -> u64;
     pub fn halt() -> !;
+    pub fn sleep() -> !;
 
     pub fn init_address_space(pml4_phys: u64, stack_address: u64, branch_addr: u64);
     pub fn setup_table(gdt_address: u64, idt_address: u64);
@@ -21,6 +22,7 @@ extern "C" {
     pub fn write_rflags(val: u64);
     pub fn read_rflags() -> u64;
     pub fn read_cr0() -> u64;
+    pub fn read_cr2() -> u64;
     pub fn read_cr4() -> u64;
     pub fn rdmsr(address: u32) -> u64;
     pub fn wrmsr(address: u32, data: u64);

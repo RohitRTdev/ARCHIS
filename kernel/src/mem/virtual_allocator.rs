@@ -8,7 +8,7 @@ use crate::RemapType::*;
 use core::alloc::Layout;
 use core::ptr::NonNull;
 use core::hint::likely;
-use common::{ceil_div, en_flag, PAGE_SIZE};
+use common::{ceil_div, PAGE_SIZE};
 use super::PHY_MEM_CB;
 
 const ERROR_MESSAGE: &'static str = "System in bad state. Critical memory failure";
@@ -604,4 +604,8 @@ pub fn virtual_allocator_test() {
     allocator.free_block_list.iter().zip(nodes).for_each(|(blk, address)| {
         assert_eq!(blk.start_virt_address, address);
     });
+}
+
+pub fn on_page_fault(fault_address: usize) {
+    panic!("Page fault exception!\nFault address:{:#X}", fault_address);
 }

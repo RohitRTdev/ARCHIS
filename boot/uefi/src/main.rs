@@ -1,4 +1,4 @@
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 #![no_main]
 
 mod loader;
@@ -10,7 +10,10 @@ use uefi::{mem::memory_map::MemoryMap, prelude::*};
 use uefi::boot::{MemoryAttribute, MemoryType};
 use log::{info, debug};
 use core::mem;
+
+#[cfg(not(test))]
 use core::panic::PanicInfo;
+
 use core::alloc::Layout;
 use uefi::{Identify, proto::media::fs::SimpleFileSystem};
 use blr::{KERNEL_FILE, ROOT_FILES, load_kernel, jump_to_kernel};

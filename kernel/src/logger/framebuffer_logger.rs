@@ -251,7 +251,8 @@ impl FramebufferLogger {
         // Scroll the screen up by one line (font height only)
         let line_size = self.font_header.height as usize * self.stride * 4; // stride in pixels, *4 for bytes
         let fb_size = self.height * self.stride * 4;
-        
+
+        #[cfg(debug_assertions)]
         unsafe {
             // Copy from scratch buffer to real framebuffer
             core::ptr::copy_nonoverlapping(
@@ -275,6 +276,21 @@ impl FramebufferLogger {
             );
 
             // Clear the bottom line
+            core::ptr::write_bytes(
+                self.fb_base.add(fb_size - line_size),
+                0,
+                line_size
+            );
+        }
+
+        #[cfg(not(debug_assertions))]
+        unsafe {
+            core::ptr::copy (
+                self.fb_base.add(line_size),
+                self.fb_base,
+                fb_size - line_size
+            );
+            
             core::ptr::write_bytes(
                 self.fb_base.add(fb_size - line_size),
                 0,

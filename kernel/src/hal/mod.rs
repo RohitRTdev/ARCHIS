@@ -10,3 +10,9 @@ pub fn halt() -> ! {
     disable_interrupts();
     loop{}    
 }
+
+#[cfg(test)]
+pub fn sleep() -> ! {
+    enable_interrupts(true);
+    loop{}    
+}

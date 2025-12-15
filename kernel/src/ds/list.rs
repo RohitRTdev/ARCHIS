@@ -231,7 +231,7 @@ impl<T, A: Allocator<ListNode<T>>> List<T, A> {
         }
     }
 
-    pub fn iter_mut(&mut self) -> ListIterMut<T> {
+    pub fn iter_mut(&mut self) -> ListIterMut<'_, T> {
         if let Some(head) = self.head {
             ListIterMut {
                 current: Some(head),

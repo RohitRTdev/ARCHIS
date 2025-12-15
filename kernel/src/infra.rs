@@ -1,5 +1,6 @@
 use core::panic::PanicInfo;
 use core::ffi::CStr;
+use core::sync::atomic::{AtomicBool, Ordering};
 use common::elf::*;
 use rustc_demangle::demangle;
 use crate::cpu;
@@ -8,12 +9,22 @@ use crate::sync::Spinlock;
 use crate::hal;
 use crate::module::*;
 
+static EARLY_PANIC_PHASE: AtomicBool = AtomicBool::new(true);
 static GLOBAL_PANIC_LOCK: Spinlock<bool> = Spinlock::new(false);
 const STACK_UNWIND_DEPTH: usize = 16;
 
 pub fn common_panic_handler(mod_name: &str, info: &PanicInfo) -> ! {
     let panic_cb = GLOBAL_PANIC_LOCK.lock();
     kernel_intf::set_panic_mode();
+
+    if EARLY_PANIC_PHASE.load(Ordering::Acquire) {
+        println!("Kernel panic!!");
+        println!("Message: {}", info.message());
+        println!("Module: {}", mod_name);
+        
+        hal::halt();
+    }
+
     let stack_base = cpu::get_panic_base(); 
     let mut unwind_list: [usize; STACK_UNWIND_DEPTH] = [0; STACK_UNWIND_DEPTH];
 
@@ -92,6 +103,9 @@ fn symbol_trace(addr: usize) -> Option<(&'static str, &'static str, usize)> {
     None
 }
 
+pub fn disable_early_panic_phase() {
+    EARLY_PANIC_PHASE.store(false, Ordering::Release);
+}
 
 #[cfg(not(test))]
 #[panic_handler]

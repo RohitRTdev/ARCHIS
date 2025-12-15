@@ -10,10 +10,11 @@ mod tables;
 mod handlers;
 mod cpu;
 mod timer;
+mod lapic;
 pub use cpu::*;
 pub use utils::*;
 pub use page_mapper::*;
-pub use timer::*;
+pub use handlers::*;
 
 const MAX_INTERRUPT_VECTORS: usize = 256;
 
@@ -72,6 +73,14 @@ pub fn halt() -> ! {
     }
 }
 
+#[cfg(not(test))]
+#[inline(always)]
+pub fn sleep() -> ! {
+    unsafe {
+        asm::sleep()
+    }
+}
+
 #[cfg(debug_assertions)]
 #[inline(always)]
 pub fn get_current_stack_base() -> usize {
@@ -122,7 +131,6 @@ pub fn init() -> ! {
 
     features::init();
     cpu_regs::init();
-    timer::init();
     
     crate::mem::init();
 
@@ -130,6 +138,6 @@ pub fn init() -> ! {
     .expect("Unexpected error. Stack virtual address not found!");
 
     switch_to_new_address_space(page_mapper::get_kernel_pml4(), stack_base,
-        crate::mem::get_virtual_address(tables::kern_addr_space_start as usize, MapFetchType::Kernel).expect("kern_addr_space_start virtual address not found!"));
+        crate::mem::get_virtual_address(tables::kern_addr_space_start as *const () as usize, MapFetchType::Kernel).expect("kern_addr_space_start virtual address not found!"));
 }
 

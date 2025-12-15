@@ -12,12 +12,17 @@ FUNC sti
     ret
 ENDF sti
 
-
 FUNC halt
     cli
     hlt
+    jmp halt
 ENDF halt
 
+FUNC sleep
+    sti
+    hlt
+    jmp sleep
+ENDF sleep
 
 FUNC int
     int $14

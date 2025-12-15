@@ -58,8 +58,6 @@ pub struct Lock {
 }
 
 extern "C" {
-    pub fn acquire_screen_lock() -> bool;
-    pub fn release_screen_lock(int_status: bool);
     pub fn create_spinlock(lock: &mut Lock);
     pub fn acquire_spinlock(lock: &mut Lock);
     pub fn release_spinlock(lock: &mut Lock);

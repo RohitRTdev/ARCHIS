@@ -24,13 +24,12 @@ FUNC rdtsc
     ret
 ENDF rdtsc
 
-
 FUNC rdmsr
     movl %edi, %ecx
     rdmsr
-    shlq $32, %rdi
+    shlq $32, %rdx
     movl %eax, %eax
-    orq %rdi, %rax
+    orq %rdx, %rax
     ret
 ENDF rdmsr
 
@@ -44,6 +43,11 @@ FUNC read_cr0
     movq %cr0, %rax
     ret
 ENDF read_cr0
+
+FUNC read_cr2
+    movq %cr2, %rax
+    ret
+ENDF read_cr2
 
 FUNC read_cr4
     movq %cr4, %rax

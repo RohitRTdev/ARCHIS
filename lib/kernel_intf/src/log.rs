@@ -11,11 +11,9 @@ macro_rules! println {
         {
             use core::fmt::Write;
             unsafe {
-                let stat = $crate::acquire_screen_lock();
                 $crate::acquire_spinlock(&mut $crate::LOGGER.lock);
                 LOGGER.lock().write_fmt(::core::format_args!("\n")).unwrap();
                 $crate::release_spinlock(&mut $crate::LOGGER.lock);
-                $crate::release_screen_lock(stat);
             }
         }
     };
@@ -29,7 +27,6 @@ macro_rules! println {
             unsafe {
                 use core::fmt::Write;
 
-                let stat = $crate::acquire_screen_lock();
                 $crate::acquire_spinlock(&mut $crate::LOGGER.lock);
                 
                 $crate::LOGGER.write_fmt(::core::format_args!($($arg)*))
@@ -37,7 +34,6 @@ macro_rules! println {
                 .unwrap();
                 
                 $crate::release_spinlock(&mut $crate::LOGGER.lock);
-                $crate::release_screen_lock(stat);
             }
         }
     };
@@ -111,12 +107,10 @@ pub fn init_logger() {
 
 pub fn set_panic_mode() {
     unsafe {
-        let stat = crate::acquire_screen_lock();
         crate::acquire_spinlock(&mut crate::LOGGER.lock);    
         crate::LOGGER.panic_mode = true;
         crate::release_spinlock(&mut crate::LOGGER.lock);
         crate::clear_screen();
-        crate::release_screen_lock(stat);
     }
 }
 

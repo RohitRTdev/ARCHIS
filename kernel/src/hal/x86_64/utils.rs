@@ -1,7 +1,6 @@
 use super::asm;
 use kernel_intf::debug;
 
-#[inline(always)]
 #[no_mangle]
 pub extern "C" fn read_timestamp() -> usize {
     unsafe {

@@ -16,8 +16,7 @@ pub enum Regions {
     Region2,
     Region3,
     Region4,
-    Region5,
-    Region6
+    Region5
 }
 
 // It's important that regions are declared in descending order of their size (in order to avoid padding while laying out heap)
@@ -27,8 +26,7 @@ const BOOT_REGION_SIZE2: usize = PAGE_SIZE;
 const BOOT_REGION_SIZE3: usize = PAGE_SIZE;
 const BOOT_REGION_SIZE4: usize = PAGE_SIZE;
 const BOOT_REGION_SIZE5: usize = PAGE_SIZE;
-const BOOT_REGION_SIZE6: usize = PAGE_SIZE;
-const TOTAL_BOOT_MEMORY: usize = BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2 + BOOT_REGION_SIZE3 + BOOT_REGION_SIZE4 + BOOT_REGION_SIZE5 + BOOT_REGION_SIZE6;
+const TOTAL_BOOT_MEMORY: usize = BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2 + BOOT_REGION_SIZE3 + BOOT_REGION_SIZE4 + BOOT_REGION_SIZE5;
 
 // Here we simply divide given memory into slots each of size 8 bytes
 // 8 is chosen to represent an average DS size
@@ -45,7 +43,6 @@ struct HeapWrapper {
     heap3: [u8; BOOT_REGION_SIZE3],
     heap4: [u8; BOOT_REGION_SIZE4],
     heap5: [u8; BOOT_REGION_SIZE5],
-    heap6: [u8; BOOT_REGION_SIZE6],
     bitmap: [u8; BITMAP_SIZE],
     lock: Spinlock<core::marker::PhantomData<bool>>
 }
@@ -57,7 +54,6 @@ static HEAP: HeapWrapper = HeapWrapper {
     heap3: [0; BOOT_REGION_SIZE3],
     heap4: [0; BOOT_REGION_SIZE4],
     heap5: [0; BOOT_REGION_SIZE5],
-    heap6: [0; BOOT_REGION_SIZE6],
     bitmap: [0; BITMAP_SIZE],
     lock: Spinlock::new(core::marker::PhantomData)
 };
@@ -85,9 +81,6 @@ pub fn get_heap(reg: Regions) -> (*const u8, *const u8) {
         }
         Regions::Region5 => {
             (HEAP.heap5.as_ptr() as *mut u8, (BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2 + BOOT_REGION_SIZE3 + BOOT_REGION_SIZE4) >> 3)
-        }
-        Regions::Region6 => {
-            (HEAP.heap5.as_ptr() as *mut u8, (BOOT_REGION_SIZE0 + BOOT_REGION_SIZE1 + BOOT_REGION_SIZE2 + BOOT_REGION_SIZE3 + BOOT_REGION_SIZE4 + BOOT_REGION_SIZE5) >> 3)
         }
     };
     
@@ -172,9 +165,6 @@ where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
             }
             5 => {
                 BOOT_REGION_SIZE5 / mem::size_of::<T>()
-            }
-            6 => {
-                BOOT_REGION_SIZE6 / mem::size_of::<T>()
             }
             _ => {
                 0

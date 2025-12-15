@@ -2,6 +2,7 @@ use core::alloc::Layout;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use common::PAGE_SIZE;
 use kernel_intf::info;
+use crate::infra::disable_early_panic_phase;
 use crate::{ds::*, hal};
 use crate::sync::Spinlock;
 use crate::mem::{allocate_memory, get_virtual_address, FixedAllocator, MapFetchType, PageDescriptor, Regions::*};
@@ -40,7 +41,6 @@ static CPU_ID: AtomicUsize = AtomicUsize::new(0);
 static CPU_LIST: Spinlock<FixedList<CPUControlBlock, {Region4 as usize}>> = Spinlock::new(List::new());
 
 pub fn init() {
-    hal::disable_interrupts();
     register_cpu();
 }
 
@@ -71,6 +71,7 @@ pub fn register_cpu() -> usize {
 
     CPU_LIST.lock().add_node(cb).expect("Failed to add CPU control block to the list");
 
+    disable_early_panic_phase();
     cpu_id
 }
 
