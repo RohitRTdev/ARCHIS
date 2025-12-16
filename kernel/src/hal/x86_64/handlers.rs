@@ -140,7 +140,7 @@ fn spurious_handler(_vector: usize) {
 }
 
 // It's fine to handle these without locks since CPU won't interrupt during this call
-// This is true since we are already in interrupt and further interrupts are masked by current design
+// This is true since we are already in interrupt handler and further interrupts are masked by current design
 fn timer_handler(_vector: usize) {
     unsafe {
         if let Some(handler) = KERNEL_TIMER_FN {

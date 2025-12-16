@@ -58,8 +58,6 @@ fn fixed_allocator_test() {
     let (heap1, r1_bm) = mem::get_heap(mem::Regions::Region1);
     assert_eq!(ptr1.as_ptr() as *const u8, heap1);
     assert_eq!(unsafe {*r1_bm}, 0x0f);
-
-    mem::clear_heap();
 }
 
 
