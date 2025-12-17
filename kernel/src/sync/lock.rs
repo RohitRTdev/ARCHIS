@@ -1,4 +1,4 @@
-use core::cell::{RefCell, RefMut};
+use core::cell::UnsafeCell;
 use core::ops::{Deref, DerefMut};
 
 #[cfg(test)]
@@ -19,20 +19,20 @@ pub struct SpinlockGuard<'a, T> {
 #[cfg(test)]
     _lock: MutexGuard<'a, u32>,
     int_status: bool,
-    data: RefMut<'a, T>
+    data: *mut T
 }
 
 impl<T> Deref for SpinlockGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        &*self.data
+        unsafe {&*self.data}
     }
 }
 
 impl<T> DerefMut for SpinlockGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut *self.data
+        unsafe {&mut *self.data}
     }
 }
 
@@ -49,10 +49,10 @@ pub struct Spinlock<T> {
     pub lock: hal::Spinlock,
 #[cfg(test)]
     pub lock: Mutex<u32>,
-    data: RefCell<T>
+    data: UnsafeCell<T>
 }
 
-unsafe impl<T> Sync for Spinlock<T>{}
+unsafe impl<T: Send> Sync for Spinlock<T>{}
 
 
 impl<T> Spinlock<T> {
@@ -63,7 +63,7 @@ impl<T> Spinlock<T> {
             lock: hal::Spinlock::new(),
 #[cfg(test)]
             lock: Mutex::new(0),
-            data: RefCell::new(data)
+            data: UnsafeCell::new(data)
         }
     }
 
@@ -71,13 +71,13 @@ impl<T> Spinlock<T> {
     pub fn lock(&self) -> SpinlockGuard<'_, T> {
         let int_status = hal::disable_interrupts();
         self.lock.lock();
-        SpinlockGuard { lock: &self.lock, int_status, data: self.data.borrow_mut()}
+        SpinlockGuard { lock: &self.lock, int_status, data: self.data.get()}
     }
 
 #[cfg(test)]
     pub fn lock(&self) -> SpinlockGuard<'_, T> {        
         let guard = self.lock.lock().unwrap();
-        SpinlockGuard { _lock: guard, int_status: false, data: self.data.borrow_mut()}
+        SpinlockGuard { _lock: guard, int_status: false, data: self.data.get()}
     }
 }
 

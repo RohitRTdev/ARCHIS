@@ -41,10 +41,10 @@ impl PageMapper {
     pub fn new(is_kernel_pml4: bool) -> Self {
         let layout = Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap();
         let pml4 = mem::allocate_memory(layout, mem::PageDescriptor::VIRTUAL)
-                                .expect("Page base table allocation failed!") as usize;
+                                .expect("Page base table allocation failed!");
         
-        let pml4_phy = mem::get_physical_address(pml4).unwrap();
-        info!("Creating new address space with pml4 virtual address:{:#X} and physical address:{:#X}", pml4, pml4_phy);
+        let pml4_phy = mem::get_physical_address(pml4.addr()).unwrap();
+        info!("Creating new address space with pml4 virtual address:{:#X} and physical address:{:#X}", pml4.addr(), pml4_phy);
 
         // Initialize the page table (Recursive mapping)
         unsafe {

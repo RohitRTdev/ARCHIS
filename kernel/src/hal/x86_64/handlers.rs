@@ -1,6 +1,6 @@
 use kernel_intf::{debug, info};
-use core::sync::atomic::{AtomicUsize, Ordering};
-use crate::cpu::{self, general_interrupt_handler};
+use core::sync::atomic::{AtomicUsize, AtomicPtr, Ordering};
+use crate::cpu::{self, PerCpu, MAX_CPUS, general_interrupt_handler};
 use super::{lapic, timer};
 use crate::sync::Spinlock;
 use crate::mem::on_page_fault;
@@ -19,8 +19,13 @@ const USER_VECTOR_START: usize = 35;
 static NEXT_AVAILABLE_VECTOR: AtomicUsize = AtomicUsize::new(USER_VECTOR_START);
 
 const EXCEPTION_VECTOR_RANGE: usize = 32;
-pub static mut KERNEL_TIMER_FN: Option<fn(*const u8)> = None;
-static mut GLOBAL_CONTEXT: *const u8 = 0 as *const u8;
+
+// This is set at init time and then never changed
+pub static mut KERNEL_TIMER_FN: Option<fn()> = None;
+
+static PER_CPU_GLOBAL_CONTEXT: PerCpu<AtomicPtr<u8>> = PerCpu::new_with(
+    [const {AtomicPtr::new(core::ptr::null_mut())}; MAX_CPUS]
+);
 
 static VECTOR_TABLE: Spinlock<[fn(usize); MAX_INTERRUPT_VECTORS]> = Spinlock::new([default_handler; MAX_INTERRUPT_VECTORS]);
 const UNDEFINED_STRING: &'static str = "Undefined";
@@ -83,10 +88,8 @@ pub struct CPUContext {
 }
 
 #[no_mangle]
-extern "C" fn global_interrupt_handler(vector: u64, cpu_context: *const CPUContext) {
-    unsafe {
-        GLOBAL_CONTEXT = cpu_context as *const u8;
-    }
+extern "C" fn global_interrupt_handler(vector: u64, cpu_context: *const CPUContext) -> *const CPUContext {
+    PER_CPU_GLOBAL_CONTEXT.local().store(cpu_context as *mut u8, Ordering::Relaxed);
 
     let saved_base = cpu::get_panic_base();
     cpu::set_panic_base(unsafe {
@@ -100,6 +103,8 @@ extern "C" fn global_interrupt_handler(vector: u64, cpu_context: *const CPUConte
     }
 
     cpu::set_panic_base(saved_base);
+
+    PER_CPU_GLOBAL_CONTEXT.local().load(Ordering::Relaxed) as *const CPUContext
 }
 
 fn default_handler(idx: usize) {
@@ -144,12 +149,12 @@ fn spurious_handler(_vector: usize) {
 fn timer_handler(_vector: usize) {
     unsafe {
         if let Some(handler) = KERNEL_TIMER_FN {
-            handler(GLOBAL_CONTEXT);
+            handler();
         }
     }
 
     // Reload the timer
-    lapic::setup_timer_value(timer::BASE_COUNT.load(Ordering::Acquire) as u32);
+    lapic::setup_timer_value(timer::BASE_COUNT.load(Ordering::Relaxed) as u32);
 }
 
 fn error_handler(_vector: usize) {
@@ -162,4 +167,12 @@ fn page_fault_handler(_vector: usize) {
     };
 
     on_page_fault(fault_address as usize);
+}
+
+pub fn fetch_context() -> *const u8 {
+    PER_CPU_GLOBAL_CONTEXT.local().load(Ordering::Acquire)
+}
+
+pub fn switch_context(new_context: *const u8) {
+    PER_CPU_GLOBAL_CONTEXT.local().store(new_context as *mut u8, Ordering::Release);
 }

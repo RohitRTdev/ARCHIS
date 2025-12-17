@@ -2,10 +2,11 @@ use core::alloc::Layout;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use common::PAGE_SIZE;
 use kernel_intf::info;
+use crate::hal::get_core;
 use crate::infra::disable_early_panic_phase;
 use crate::{ds::*, hal};
 use crate::sync::Spinlock;
-use crate::mem::{allocate_memory, get_virtual_address, FixedAllocator, MapFetchType, PageDescriptor, Regions::*};
+use crate::mem::{allocate_memory, get_virtual_address, MapFetchType, PageDescriptor, Regions::*};
 const INIT_STACK_SIZE: usize  = PAGE_SIZE * 2;
 const INIT_GUARD_PAGE_SIZE: usize = PAGE_SIZE;
 pub const TOTAL_STACK_SIZE: usize = INIT_STACK_SIZE + INIT_GUARD_PAGE_SIZE;
@@ -37,6 +38,8 @@ static KERN_INIT_STACK: Stack = Stack {
     _guard_page: [0; PAGE_SIZE]
 };
 
+pub const MAX_CPUS: usize = 64; 
+
 static CPU_ID: AtomicUsize = AtomicUsize::new(0);
 static CPU_LIST: Spinlock<FixedList<CPUControlBlock, {Region4 as usize}>> = Spinlock::new(List::new());
 
@@ -57,13 +60,13 @@ pub fn register_cpu() -> usize {
         let stack = unsafe {
             &*(allocate_memory(Layout::from_size_align(TOTAL_STACK_SIZE, PAGE_SIZE).unwrap()
             , PageDescriptor::VIRTUAL)
-            .expect("Failed to allocate memory for CPU worker stack") as *mut Stack)
+            .expect("Failed to allocate memory for CPU worker stack") as *const Stack)
         };
 
         CPUControlBlock {
             id: cpu_id,
             worker_stack: stack,
-            panic_base: get_stack_base(stack.stack.as_ptr() as usize)
+            panic_base: get_stack_base(stack.stack.as_ptr().addr())
         }
     };
 
@@ -122,12 +125,48 @@ pub fn relocate_cpu_init_stack() {
     if let Some(cb) = cpu_list.iter_mut().find(|cb| cb.id == 0) {
         // Update the stack address for the current CPU
         cb.worker_stack = unsafe {
-            &*(get_virtual_address(cb.worker_stack as *const _ as usize, MapFetchType::Kernel)
+            &*(get_virtual_address((cb.worker_stack as *const Stack).addr(), MapFetchType::Kernel)
             .expect("Failed to get virtual address for CPU init stack") as *const Stack)
         };
 
-        info!("Relocated CPU init stack for main cpu to {:#X}", cb.worker_stack.stack.as_ptr() as usize);
+        info!("Relocated CPU init stack for main cpu to {:#X}", cb.worker_stack.stack.as_ptr().addr());
     } else {
         panic!("Unable to find CPU control block for main cpu!!");
+    }
+}
+
+// Usual cacheline size
+#[repr(align(64))]
+pub struct PerCpu<T: Sync> {
+    pub data: [T; MAX_CPUS],
+}
+
+unsafe impl<T: Sync> Sync for PerCpu<T> {}
+
+impl<T: Copy + Sync> PerCpu<T> {
+    pub const fn new(init: T) -> Self {
+        Self {
+            data: [init; MAX_CPUS],
+        }
+    }
+}
+
+impl<T: Sync> PerCpu<T> {
+    pub const fn new_with(init: [T; MAX_CPUS]) -> Self {
+        Self { data: init }
+    }
+}
+
+impl<T: Sync> PerCpu<T> {
+    #[inline(always)]
+    pub fn local(&self) -> &T {
+        let cpu = get_core();
+        &self.data[cpu]
+    }
+
+    // Caller must ensure correctness.
+    #[inline(always)]
+    pub unsafe fn get(&self, cpu: usize) -> &T {
+        &self.data[cpu]
     }
 }

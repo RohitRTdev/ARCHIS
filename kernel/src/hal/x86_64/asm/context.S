@@ -20,12 +20,15 @@ FUNC interrupt_context_save
     pushq %r15
 
     // rdi = vector
-    // rsi = pointer to interrupt frame (including registers)
-    movq 120(%rsp), %rdi     // vector (15 regs * 8)
-    leaq 0(%rsp), %rsi       // context pointer
+    // rsi = pointer to context
+    movq 120(%rsp), %rdi     
+    leaq 0(%rsp), %rsi       
 
     call global_interrupt_handler
 
+    // Restore the returned cpu context
+    // Note that the returned value *must* point to valid context
+    movq %rax, %rsp
     jmp switch_context
 ENDF interrupt_context_save
 

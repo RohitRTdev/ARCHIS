@@ -133,7 +133,6 @@ fn main() -> Status {
 #[cfg(feature = "acpi")]
     let rsdp = get_rsdp();
 
-
     info!("Fetching GPU and memmap info before transferring control to aris");
     let fb_info = display::get_primary_gpu_framebuffer();
     let mem_info = setup_memory_map();

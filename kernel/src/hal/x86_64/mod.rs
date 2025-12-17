@@ -137,7 +137,7 @@ pub fn init() -> ! {
 
 // This function should only be called once during init
 // Tells hal that kernel is ready to handle timer interrupts
-pub fn register_timer_fn(handler: fn(*const u8)) {
+pub fn register_timer_fn(handler: fn()) {
     unsafe {
         handlers::KERNEL_TIMER_FN = Some(handler);
     }

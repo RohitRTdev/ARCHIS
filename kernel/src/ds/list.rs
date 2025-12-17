@@ -48,6 +48,8 @@ pub struct List<T, A: Allocator<ListNode<T>>> {
     _marker: PhantomData<A>
 }
 
+unsafe impl<T, A: Allocator<ListNode<T>>> Send for List<T, A>{}
+
 impl<T, A: Allocator<ListNode<T>>> Deref for ListNodeGuard<T, A> {
     type Target = T;
     fn deref(&self) -> &Self::Target {

@@ -48,6 +48,8 @@ pub struct FramebufferLogger {
     font_glyphs: *const u8
 }
 
+unsafe impl Send for FramebufferLogger {}
+
 pub static FRAMEBUFFER_LOGGER: Spinlock<FramebufferLogger> = Spinlock::new(FramebufferLogger {
     fb_base: core::ptr::null_mut(),
     width: 0,

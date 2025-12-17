@@ -1,14 +1,16 @@
-use crate::{mem::{fixed_allocator::{FixedAllocator, Regions::*}, PageDescriptor, KERNEL_HALF_OFFSET, KERNEL_HALF_OFFSET_RAW}, REMAP_LIST};
+use crate::{REMAP_LIST, cpu::PerCpu, mem::{KERNEL_HALF_OFFSET, KERNEL_HALF_OFFSET_RAW, PageDescriptor, fixed_allocator::Regions::*}};
 use crate::sync::{Once, Spinlock};
 use crate::hal::{self, PageMapper};
 use crate::ds::*;
+use crate::cpu::MAX_CPUS;
 use kernel_intf::KError;
 use kernel_intf::{info, debug};
 use crate::RemapType::*;
 use core::alloc::Layout;
 use core::ptr::NonNull;
 use core::hint::likely;
-use common::{ceil_div, PAGE_SIZE};
+use core::sync::atomic::{AtomicPtr, Ordering};
+use common::{PAGE_SIZE, ceil_div, ptr_to_ref_mut};
 use super::PHY_MEM_CB;
 
 const ERROR_MESSAGE: &'static str = "System in bad state. Critical memory failure";
@@ -30,8 +32,10 @@ pub struct VirtMemConBlk {
 
 static ADDRESS_SPACES: Once<Spinlock<FixedList<VirtMemConBlk, {Region1 as usize}>>> = Once::new();
 
-// We can't use Arc or something similar here since we don't yet have heap allocation
-static ACTIVE_VIRTUAL_CON_BLK: Once<Spinlock<NonNull<ListNode<VirtMemConBlk>>>> = Once::new();
+// We cannot use Arc or something similar since this is activated prior to heap initialization
+static PER_CPU_ACTIVE_VCB: PerCpu<AtomicPtr<ListNode<VirtMemConBlk>>> = PerCpu::new_with(
+    [const {AtomicPtr::new(core::ptr::null_mut())}; MAX_CPUS]
+);
 
 impl VirtMemConBlk {
     #[cfg(target_arch="x86_64")]
@@ -382,10 +386,21 @@ impl VirtMemConBlk {
     }
 }
 
+fn get_active_vcb() -> Option<NonNull<ListNode<VirtMemConBlk>>> {
+    let vcb = PER_CPU_ACTIVE_VCB.local().load(Ordering::Acquire);
+
+    if vcb.is_null() {
+        return None;
+    }
+
+    Some(NonNull::new(vcb).unwrap())
+}
+
 // Central API to call into both physical and virtual allocator
 pub fn allocate_memory(layout: Layout, flags: u8) -> Result<*mut u8, KError> {
-    if (flags & PageDescriptor::VIRTUAL != 0) && ACTIVE_VIRTUAL_CON_BLK.is_init() {
-        let allocator = ACTIVE_VIRTUAL_CON_BLK.get().unwrap().lock();
+    let active_vcb = get_active_vcb();
+    if (flags & PageDescriptor::VIRTUAL != 0) && active_vcb.is_some() {
+        let allocator = active_vcb.unwrap();
         unsafe {
             (*allocator.as_ptr()).allocate(layout, flags)
         }
@@ -397,8 +412,9 @@ pub fn allocate_memory(layout: Layout, flags: u8) -> Result<*mut u8, KError> {
 }
 
 pub fn deallocate_memory(addr: *mut u8, layout: Layout, flags: u8) -> Result<(), KError> {
-    if (flags & PageDescriptor::VIRTUAL != 0) && ACTIVE_VIRTUAL_CON_BLK.is_init() {
-        let allocator = ACTIVE_VIRTUAL_CON_BLK.get().unwrap().lock();
+    let active_vcb = get_active_vcb();
+    if (flags & PageDescriptor::VIRTUAL != 0) && active_vcb.is_some() {
+        let allocator = active_vcb.unwrap();
         unsafe {
             (*allocator.as_ptr()).deallocate(addr, layout)
         }
@@ -409,9 +425,10 @@ pub fn deallocate_memory(addr: *mut u8, layout: Layout, flags: u8) -> Result<(),
 }
 
 pub fn get_physical_address(virt_addr: usize) -> Option<usize> {
-    if likely(ACTIVE_VIRTUAL_CON_BLK.is_init()) {
+    let active_vcb = get_active_vcb();
+    if likely(active_vcb.is_some()) {
         unsafe {
-            (*ACTIVE_VIRTUAL_CON_BLK.get().unwrap().lock().as_ptr()).get_phys_address(virt_addr)
+            (*active_vcb.unwrap().as_ptr()).get_phys_address(virt_addr)
         }
     }
     else {
@@ -426,9 +443,10 @@ pub fn get_physical_address(virt_addr: usize) -> Option<usize> {
 // Kernel -> If present, fetch the lowest address that is > KERNEL_HALF_OFFSET
 // Any -> Fetch the lowest virtual address region
 pub fn get_virtual_address(phys_addr: usize, fetch_type: MapFetchType) -> Option<usize> {
-    if likely(ACTIVE_VIRTUAL_CON_BLK.is_init()) {
+    let active_vcb = get_active_vcb();
+    if likely(active_vcb.is_some()) {
         unsafe {
-            (*ACTIVE_VIRTUAL_CON_BLK.get().unwrap().lock().as_ptr()).get_virt_address(phys_addr, fetch_type)
+            (*active_vcb.unwrap().as_ptr()).get_virt_address(phys_addr, fetch_type)
         }
     }
     else {
@@ -438,9 +456,10 @@ pub fn get_virtual_address(phys_addr: usize, fetch_type: MapFetchType) -> Option
 }
 
 pub fn map_memory(phys_addr: usize, virt_addr: usize, size: usize, flags: u8) -> Result<(), KError> {
-    if likely(ACTIVE_VIRTUAL_CON_BLK.is_init()) {
+    let active_vcb = get_active_vcb();
+    if likely(active_vcb.is_some()) {
         unsafe {
-            (*ACTIVE_VIRTUAL_CON_BLK.get().unwrap().lock().as_ptr()).
+            (*active_vcb.unwrap().as_ptr()).
             map_memory(phys_addr, virt_addr, size, flags)
         }
     }
@@ -452,9 +471,10 @@ pub fn map_memory(phys_addr: usize, virt_addr: usize, size: usize, flags: u8) ->
 // Here we also need to add type of memory we're unmapping (kernel or user)
 // This is important, since if it's kernel memory, we need to unmap that memory in all address spaces
 pub fn unmap_memory(virt_addr: *mut u8, size: usize) -> Result<(), KError> {
-    if likely(ACTIVE_VIRTUAL_CON_BLK.is_init()) {
+    let active_vcb = get_active_vcb();
+    if likely(active_vcb.is_some()) {
         unsafe {
-            (*ACTIVE_VIRTUAL_CON_BLK.get().unwrap().lock().as_ptr()).unmap_memory(virt_addr, size)
+            (*active_vcb.unwrap().as_ptr()).unmap_memory(virt_addr, size)
         }
     }
     else {
@@ -527,9 +547,11 @@ pub fn virtual_allocator_init() {
         Spinlock::new(l)
     }); 
 
-    ACTIVE_VIRTUAL_CON_BLK.call_once(|| {
-        Spinlock::new(NonNull::from(ADDRESS_SPACES.get().unwrap().lock().first().unwrap()))
-    });    
+    // The pointer referenced here will never be moved (Atleast, not the kernel base address space (The first address space))
+    PER_CPU_ACTIVE_VCB.local().store(
+        ptr_to_ref_mut(ADDRESS_SPACES.get().unwrap().lock().first().unwrap()),
+        Ordering::Release
+    );    
 }
 
 

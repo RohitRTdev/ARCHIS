@@ -16,6 +16,8 @@ pub struct LinkedListAllocator {
     backing_memory: usize
 }
 
+unsafe impl Send for LinkedListAllocator {}
+
 impl LinkedListAllocator {
     pub const fn new() -> Self {
         Self {
