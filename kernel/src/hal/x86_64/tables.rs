@@ -180,7 +180,7 @@ pub extern "C" fn kern_addr_space_start() {
     timer::init();
     handlers::init();
     
-    mem::unmap_kernel_memory(kernel_base, total_size);
+    //mem::unmap_kernel_memory(kernel_base, total_size);
 
     enable_interrupts(true);
     crate::kern_main();

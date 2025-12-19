@@ -8,7 +8,7 @@ use core::ptr::NonNull;
 use kernel_intf::{KError, debug, info};
 
 // This is in milliseconds
-pub const QUANTUM: usize = 10;
+pub const QUANTUM: usize = 5;
 const INIT_QUANTA: usize = 10;
     
 static TASK_ID: AtomicUsize = AtomicUsize::new(0);
@@ -126,6 +126,45 @@ pub fn add_cur_task_to_wait_queue() {
         (**sched_cb.running_task.unwrap().as_ptr()).lock().status = TaskStatus::WAITING;
     }
 }
+
+pub fn signal_waiting_task(task_id: usize) {
+    let mut sched_cb = SCHEDULER_CON_BLK.local().lock();
+
+    let mut waiting_task = None;
+    for task in sched_cb.waiting_tasks.iter() {
+        if task.lock().get_id() == task_id {
+            waiting_task = Some(NonNull::from(task));
+            break;
+        }
+    }
+
+    // This happens when signal task is called even before the waiting task gets a chance to be put into the wait queue
+    if waiting_task.is_none() {
+        let mut task = unsafe {
+            (*sched_cb.running_task.unwrap().as_ptr()).lock()
+        };
+
+        // Let task run again with high priority
+        task.status = TaskStatus::RUNNING;
+        task.quanta = INIT_QUANTA;
+        return;
+    }
+
+    let signal_task = unsafe {
+        ListNode::into_inner(sched_cb.waiting_tasks.remove_node(waiting_task.unwrap()))
+    };
+
+    let mut task = unsafe {
+        (**signal_task.as_ptr()).lock()
+    };
+
+    task.status = TaskStatus::ACTIVE;
+
+    // Give this task the highest priority
+    sched_cb.active_tasks.insert_node_at_head(signal_task);
+}
+
+
 
 // Select the ready/active task at head of queue
 // Run the task if it has non-zero quanta left

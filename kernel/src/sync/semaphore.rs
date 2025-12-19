@@ -1,13 +1,15 @@
+use core::ptr::NonNull;
 use super::Spinlock;
 use crate::{ds::*, sched};
+use acpica::init;
 use alloc::sync::Arc;
 use kernel_intf::{KError, debug};
 use crate::sched::Task;
 
 struct KSemInner {
+    max_count: usize,
     counter: isize,
-    blocked_list: DynList<Arc<Spinlock<Task>>>,
-    running_list: DynList<Arc<Spinlock<Task>>>
+    blocked_list: DynList<Arc<Spinlock<Task>>>
 }
 
 pub struct KSem {
@@ -18,16 +20,15 @@ unsafe impl Sync for KSem {}
 unsafe impl Send for KSem {}
 
 impl KSem {
-    pub const fn new(init_count: isize) -> Self {
+    pub const fn new(init_count: isize, max_count: usize) -> Self {
         Self {
             inner: Spinlock::new(KSemInner {
+                max_count,
                 counter: init_count,
-                blocked_list: List::new(),
-                running_list: List::new()
+                blocked_list: List::new()
             }) 
         }
     }
-
 
     pub fn wait(&self) -> Result<(), KError> {
         {
@@ -37,18 +38,10 @@ impl KSem {
             
             let cur_task = sched::get_current_task();
 
-            let task_id = cur_task.lock().get_id();
-
             if count <= 0 {
                 // Block task
                 inner.blocked_list.add_node(cur_task)?;
-
-                debug!("Placing task id:{} into wait queue", task_id);
                 sched::add_cur_task_to_wait_queue();
-            }
-            else {
-                debug!("Placing task id:{} into running queue", task_id);
-                return inner.running_list.add_node(cur_task);
             }
         }
 
@@ -59,6 +52,24 @@ impl KSem {
     }
 
     pub fn signal(&self) {
+        {
+            let mut inner = self.inner.lock();
+            inner.counter = (inner.max_count as isize).min(inner.counter + 1);
 
+            if inner.counter >= 0 {
+                let wait_count = inner.blocked_list.get_nodes();
+                
+                // Remove head task from blocked list
+                if wait_count > 0 {
+                    let wait_task_ptr = NonNull::from(inner.blocked_list.first().unwrap());
+                    let node = unsafe {
+                        inner.blocked_list.remove_node(wait_task_ptr)
+                    };
+                    
+                    let id = node.lock().get_id();
+                    sched::signal_waiting_task(id);
+                } 
+            }
+        }
     }
 }

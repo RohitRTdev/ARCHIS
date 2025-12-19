@@ -60,13 +60,8 @@ fn kern_main() {
     info!("Starting main kernel init");
 
     // Sample invocation to test out interrupt subsystem
-    //clear_keyboard_output_buffer();
-    //install_interrupt_handler(1, |vec| {
-    //    let scancode = unsafe {
-    //        read_port_u8(0x60)
-    //    };
-    //    info!("Notified of keypress via vector {}. Scancode={}", vec, scancode);
-    //}, true, true);
+    clear_keyboard_output_buffer();
+    install_interrupt_handler(1, key_notifier, true, true);
     
     sched::init();
     sched::create_task(producer).unwrap();
@@ -97,10 +92,9 @@ unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
 }
 
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, Ordering};
 static DATA_QUEUE: Spinlock<Vec<u8>> = Spinlock::new(Vec::new());
-static WRITE_FLAG: AtomicBool = AtomicBool::new(false);
-static WRITE_EVENT: KSem = KSem::new(1);
+static WRITE_EVENT: KSem = KSem::new(0, 1);
+static KEYBOARD_EVENT: KSem = KSem::new(0, 1);
 
 const SCANCODE_SET1_TO_ASCII: [Option<u8>; 58] = [
     /* 0x00 */ None,
@@ -166,76 +160,61 @@ const SCANCODE_SET1_TO_ASCII: [Option<u8>; 58] = [
     /* 0x39 */ Some(b' ')
 ];
 
+fn key_notifier(_: usize) {
+    KEYBOARD_EVENT.signal();
+}
+
 fn producer() -> ! {
     info!("Starting producer task");
     clear_keyboard_output_buffer();
     DATA_QUEUE.lock().reserve(256);
-    sched::yield_cpu();
-    WRITE_EVENT.wait().unwrap();
 
-    debug!("Continuing with producer task");
-    loop{
-        delay_ns(1_000_000_000);
-        info!("Active={}, waiting={}", sched::get_num_active_tasks(), sched::get_num_waiting_tasks());
+    unsafe {
+        loop {
+            KEYBOARD_EVENT.wait().unwrap();
+
+            while read_port_u8(0x64) & 0x01 != 0 {
+                let value = read_port_u8(0x60);
+                DATA_QUEUE.lock().push(value);
+            }
+
+            WRITE_EVENT.signal();
+        }
     }
-    //unsafe {
-    //    loop {
-    //         
-    //        while read_port_u8(0x64) & 0x01 == 0 {
-    //            core::hint::spin_loop();
-    //        }
-    //        
-    //        while read_port_u8(0x64) & 0x01 != 0 {
-    //            let value = read_port_u8(0x60);
-    //            DATA_QUEUE.lock().push(value);
-    //        }
-
-    //        WRITE_FLAG.store(true, Ordering::Release);
-    //    }
-    //}
 }
 
 fn consumer() -> ! {
     info!("Starting consumer task");
-    WRITE_EVENT.wait().unwrap();
+    info!("Primitive terminal... You may type");
 
-    debug!("Continuing with consumer task");
-    loop{
-        delay_ns(1_000_000_000);
-        info!("Active={}, waiting={}", sched::get_num_active_tasks(), sched::get_num_waiting_tasks());
+    loop {
+        WRITE_EVENT.wait().unwrap();
+        {
+            let mut data = DATA_QUEUE.lock();
+            let mut idx = 0;
+            while idx < data.len() {
+                let scancode = data[idx];
+                idx += 1;
+
+                // Ignore key releases
+                if scancode & 0x80 != 0 {
+                    continue;
+                }
+
+                // Ignore extended scancodes
+                if scancode == 0xE0 {
+                    continue;
+                }
+
+                if let Some(ascii) = SCANCODE_SET1_TO_ASCII
+                    .get(scancode as usize)
+                    .and_then(|v| *v) {
+                    kernel_intf::print!("{}", ascii as char);
+                }
+            }
+
+            data.clear();
+        }   
     }
-    //loop {
-    //    while WRITE_FLAG.load(Ordering::Acquire) == false {
-    //        core::hint::spin_loop();
-    //    }
-
-    //    {
-    //        let mut data = DATA_QUEUE.lock();
-    //        let mut idx = 0;
-    //        while idx < data.len() {
-    //            let scancode = data[idx];
-    //            idx += 1;
-
-    //            // Ignore key releases
-    //            if scancode & 0x80 != 0 {
-    //                continue;
-    //            }
-
-    //            // Ignore extended scancodes
-    //            if scancode == 0xE0 {
-    //                continue;
-    //            }
-
-    //            if let Some(ascii) = SCANCODE_SET1_TO_ASCII
-    //                .get(scancode as usize)
-    //                .and_then(|v| *v) {
-    //                kernel_intf::print!("{}", ascii as char);
-    //            }
-    //        }
-
-    //        data.clear();
-    //        WRITE_FLAG.store(false, Ordering::Release);
-    //    }   
-    //}
 }
 
