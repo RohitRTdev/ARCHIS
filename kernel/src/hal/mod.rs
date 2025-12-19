@@ -16,3 +16,7 @@ pub fn sleep() -> ! {
     enable_interrupts(true);
     loop{}    
 }
+
+#[cfg(test)]
+#[inline(always)]
+pub fn yield_cpu() {}

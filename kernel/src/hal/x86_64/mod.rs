@@ -76,6 +76,14 @@ pub fn sleep() -> ! {
     }
 }
 
+#[cfg(not(test))]
+#[inline(always)]
+pub fn yield_cpu() {
+    unsafe {
+        asm::fire_yield_interrupt();
+    }
+}
+
 #[cfg(debug_assertions)]
 #[inline(always)]
 pub fn get_current_stack_base() -> usize {
@@ -111,13 +119,6 @@ pub fn unwind_stack(max_depth: usize, stack_base: usize, address: &mut [usize]) 
     }
 
     depth
-}
-
-#[inline(always)]
-pub fn fire_interrupt() {
-    unsafe {
-        asm::int();
-    }
 }
 
 pub fn init() -> ! {

@@ -24,7 +24,12 @@ FUNC sleep
     jmp sleep
 ENDF sleep
 
-FUNC int
-    int $14
+FUNC yield_cpu
+    hlt
     ret
-ENDF int
+ENDF yield_cpu
+
+FUNC fire_yield_interrupt
+    int $33 
+    ret
+ENDF fire_yield_interrupt

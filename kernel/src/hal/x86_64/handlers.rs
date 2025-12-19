@@ -12,9 +12,10 @@ use crate::devices::ioapic::add_redirection_entry;
 
 const PAGE_FAULT_VECTOR: usize = 14;
 pub const SPURIOUS_VECTOR: usize = 32;
-pub const TIMER_VECTOR: usize = 33;
-pub const ERROR_VECTOR: usize = 34;
-const USER_VECTOR_START: usize = 35;
+pub const YIELD_VECTOR: usize = 33;
+pub const TIMER_VECTOR: usize = 34;
+pub const ERROR_VECTOR: usize = 35;
+const USER_VECTOR_START: usize = 36;
 
 static NEXT_AVAILABLE_VECTOR: AtomicUsize = AtomicUsize::new(USER_VECTOR_START);
 
@@ -110,7 +111,7 @@ extern "C" fn global_interrupt_handler(vector: u64, cpu_context: *const CPUConte
 
     VECTOR_TABLE.lock()[vector as usize](vector as usize);
 
-    if vector as usize > SPURIOUS_VECTOR {
+    if vector as usize > YIELD_VECTOR {
         eoi();
     }
 
@@ -137,6 +138,7 @@ pub fn init() {
     }
 
     vec_tbl[SPURIOUS_VECTOR] = spurious_handler;
+    vec_tbl[YIELD_VECTOR] = yield_handler;
     vec_tbl[TIMER_VECTOR] = timer_handler;
     vec_tbl[ERROR_VECTOR] = error_handler;
 
@@ -168,6 +170,15 @@ fn timer_handler(_vector: usize) {
 
     // Reload the timer
     lapic::setup_timer_value(timer::BASE_COUNT.load(Ordering::Relaxed) as u32);
+}
+
+// Do the same thing as timer handler, except we don't reload the timer register and we won't send EOI
+fn yield_handler(_vector: usize) {
+    unsafe {
+        if let Some(handler) = KERNEL_TIMER_FN {
+            handler();
+        }
+    }
 }
 
 fn error_handler(_vector: usize) {

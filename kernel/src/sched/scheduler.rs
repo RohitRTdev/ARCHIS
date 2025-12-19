@@ -13,10 +13,11 @@ const INIT_QUANTA: usize = 10;
     
 static TASK_ID: AtomicUsize = AtomicUsize::new(0);
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum TaskStatus {
     RUNNING,
-    ACTIVE
+    ACTIVE,
+    WAITING
 }
 
 #[derive(Debug)]
@@ -44,10 +45,15 @@ impl Task {
             panic_base: 0
         }))
     }
+
+    pub fn get_id(&self) -> usize {
+        self.id
+    }
 }
 
 pub struct TaskQueue {
     active_tasks: DynList<Arc<Spinlock<Task>>>,
+    waiting_tasks: DynList<Arc<Spinlock<Task>>>,
     running_task: Option<NonNull<ListNode<Arc<Spinlock<Task>>>>>
 }
 
@@ -57,6 +63,7 @@ impl TaskQueue {
     const fn new() -> Self {
         TaskQueue {
             active_tasks: List::new(),
+            waiting_tasks: List::new(),
             running_task: None
         }
     }
@@ -65,6 +72,32 @@ impl TaskQueue {
 static SCHEDULER_CON_BLK: PerCpu<Spinlock<TaskQueue>> = PerCpu::new_with(
     [const {Spinlock::new(TaskQueue::new())}; MAX_CPUS]
 );
+
+// Shouldn't call this function from idle task (for now)
+pub fn get_current_task() -> Arc<Spinlock<Task>> {
+    let cb = SCHEDULER_CON_BLK.local().lock().running_task;
+    assert!(cb.is_some());
+    
+    Arc::clone(unsafe {
+        &**cb.unwrap().as_ptr()
+    })
+}
+
+pub fn get_num_active_tasks() -> usize {
+    // +1 since we need to account for the running task
+    SCHEDULER_CON_BLK.local().lock().active_tasks.get_nodes() + 1
+}
+
+pub fn get_num_waiting_tasks() -> usize {
+    SCHEDULER_CON_BLK.local().lock().waiting_tasks.get_nodes()
+}
+
+pub fn yield_cpu() {
+    // Remove all remaining run time
+    get_current_task().lock().quanta = 0;
+
+    hal::yield_cpu();
+}
 
 pub fn init() {
     let init_task = Task::new();
@@ -84,6 +117,16 @@ pub fn init() {
     register_timer_fn(schedule);
 }
 
+pub fn add_cur_task_to_wait_queue() {
+    let sched_cb = SCHEDULER_CON_BLK.local().lock();
+
+    // We will add support for idle task later
+    assert!(sched_cb.running_task.is_some());    
+    unsafe {
+        (**sched_cb.running_task.unwrap().as_ptr()).lock().status = TaskStatus::WAITING;
+    }
+}
+
 // Select the ready/active task at head of queue
 // Run the task if it has non-zero quanta left
 fn schedule() {
@@ -97,18 +140,14 @@ fn schedule() {
         };
 
         task_info.quanta = task_info.quanta.saturating_sub(1);
-        //info!("Called schedule on task:{} with quanta: {}", task_info.id, task_info.quanta);
-
+        
         // Switch to new task
-        if task_info.quanta == 0 {
-            //info!("About to schedule switch out of task:{}", task_info.id);
+        if task_info.status == TaskStatus::WAITING || task_info.quanta == 0 {
             // First choose new task
             // We create NonNull here so that the node can later be removed
             let head_task = sched_cb.active_tasks.first().and_then(|item| {
                 Some(NonNull::from(item))
             });
-            
-            //info!("head_task:{:?}", head_task);
 
             if head_task.is_some() {
                 let mut head_task_info = unsafe {
@@ -121,15 +160,22 @@ fn schedule() {
                 
                 let prev_context = fetch_context();
                 task_info.context = prev_context;
-                task_info.status = TaskStatus::ACTIVE;
+                if task_info.status != TaskStatus::WAITING {
+                    task_info.status = TaskStatus::ACTIVE; 
+                }
 
                 // This ensures that list doesn't delete the node. It simply removes it from the list 
                 let head_task = unsafe {
                     ListNode::into_inner(sched_cb.active_tasks.remove_node(head_task.unwrap()))
                 };
 
-                //info!("head_task_info:{:?}", &*head_task_info);
-                sched_cb.active_tasks.insert_node_at_tail(current_task);
+                if task_info.status == TaskStatus::WAITING {
+                    sched_cb.waiting_tasks.insert_node_at_tail(current_task);
+                }
+                else {
+                    sched_cb.active_tasks.insert_node_at_tail(current_task);
+                }
+
                 sched_cb.running_task = Some(head_task);
 
                 set_panic_base(head_task_info.panic_base);
@@ -137,6 +183,7 @@ fn schedule() {
             }
             else {
                 // No other task to run. Continue with this task
+                assert!(task_info.status != TaskStatus::WAITING, "Idle task not supported right now");
                 task_info.quanta = INIT_QUANTA;
             }
         }

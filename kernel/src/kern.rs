@@ -25,9 +25,10 @@ mod tests;
 
 use sync::{Once, Spinlock};
 use cpu::install_interrupt_handler;
-use crate::hal::{disable_interrupts, enable_interrupts, read_port_u8};
+use crate::hal::{delay_ns, disable_interrupts, enable_interrupts, read_port_u8};
 use crate::mem::Regions::*;
 use crate::ds::*;
+use crate::sync::KSem;
 
 static BOOT_INFO: Once<BootInfo> = Once::new();
 
@@ -99,6 +100,8 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 static DATA_QUEUE: Spinlock<Vec<u8>> = Spinlock::new(Vec::new());
 static WRITE_FLAG: AtomicBool = AtomicBool::new(false);
+static WRITE_EVENT: KSem = KSem::new(1);
+
 const SCANCODE_SET1_TO_ASCII: [Option<u8>; 58] = [
     /* 0x00 */ None,
     /* 0x01 */ Some(0x1B), // Esc
@@ -167,57 +170,72 @@ fn producer() -> ! {
     info!("Starting producer task");
     clear_keyboard_output_buffer();
     DATA_QUEUE.lock().reserve(256);
+    sched::yield_cpu();
+    WRITE_EVENT.wait().unwrap();
 
-    unsafe {
-        loop {
-            while read_port_u8(0x64) & 0x01 == 0 {
-                core::hint::spin_loop();
-            }
-            
-            while read_port_u8(0x64) & 0x01 != 0 {
-                let value = read_port_u8(0x60);
-                DATA_QUEUE.lock().push(value);
-            }
-
-            WRITE_FLAG.store(true, Ordering::Release);
-        }
+    debug!("Continuing with producer task");
+    loop{
+        delay_ns(1_000_000_000);
+        info!("Active={}, waiting={}", sched::get_num_active_tasks(), sched::get_num_waiting_tasks());
     }
+    //unsafe {
+    //    loop {
+    //         
+    //        while read_port_u8(0x64) & 0x01 == 0 {
+    //            core::hint::spin_loop();
+    //        }
+    //        
+    //        while read_port_u8(0x64) & 0x01 != 0 {
+    //            let value = read_port_u8(0x60);
+    //            DATA_QUEUE.lock().push(value);
+    //        }
+
+    //        WRITE_FLAG.store(true, Ordering::Release);
+    //    }
+    //}
 }
 
 fn consumer() -> ! {
     info!("Starting consumer task");
-    loop {
-        while WRITE_FLAG.load(Ordering::Acquire) == false {
-            core::hint::spin_loop();
-        }
+    WRITE_EVENT.wait().unwrap();
 
-        {
-            let mut data = DATA_QUEUE.lock();
-            let mut idx = 0;
-            while idx < data.len() {
-                let scancode = data[idx];
-                idx += 1;
-
-                // Ignore key releases
-                if scancode & 0x80 != 0 {
-                    continue;
-                }
-
-                // Ignore extended scancodes
-                if scancode == 0xE0 {
-                    continue;
-                }
-
-                if let Some(ascii) = SCANCODE_SET1_TO_ASCII
-                    .get(scancode as usize)
-                    .and_then(|v| *v) {
-                    kernel_intf::print!("{}", ascii as char);
-                }
-            }
-
-            data.clear();
-            WRITE_FLAG.store(false, Ordering::Release);
-        }   
+    debug!("Continuing with consumer task");
+    loop{
+        delay_ns(1_000_000_000);
+        info!("Active={}, waiting={}", sched::get_num_active_tasks(), sched::get_num_waiting_tasks());
     }
+    //loop {
+    //    while WRITE_FLAG.load(Ordering::Acquire) == false {
+    //        core::hint::spin_loop();
+    //    }
+
+    //    {
+    //        let mut data = DATA_QUEUE.lock();
+    //        let mut idx = 0;
+    //        while idx < data.len() {
+    //            let scancode = data[idx];
+    //            idx += 1;
+
+    //            // Ignore key releases
+    //            if scancode & 0x80 != 0 {
+    //                continue;
+    //            }
+
+    //            // Ignore extended scancodes
+    //            if scancode == 0xE0 {
+    //                continue;
+    //            }
+
+    //            if let Some(ascii) = SCANCODE_SET1_TO_ASCII
+    //                .get(scancode as usize)
+    //                .and_then(|v| *v) {
+    //                kernel_intf::print!("{}", ascii as char);
+    //            }
+    //        }
+
+    //        data.clear();
+    //        WRITE_FLAG.store(false, Ordering::Release);
+    //    }   
+    //}
 }
 
