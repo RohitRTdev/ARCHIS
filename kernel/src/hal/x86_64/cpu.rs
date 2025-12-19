@@ -15,7 +15,7 @@ static CPU_LIST: Spinlock<DynList<Cpu>> = Spinlock::new(List::new());
 
 pub fn get_core() -> usize {
     // LAPIC is not initialized yet
-    if PRE_INIT_PHASE.load(Ordering::Acquire) {
+    if PRE_INIT_PHASE.load(Ordering::Relaxed) {
         return 0;
     }
 
@@ -29,11 +29,11 @@ pub fn register_cpu(apic_id: usize, logical_id: usize) {
 
     info!("Register cpu: {} with apic_id:{}", logical_id, apic_id);
 
-    PRE_INIT_PHASE.store(false, Ordering::Release);
+    PRE_INIT_PHASE.store(false, Ordering::Relaxed);
 }
 
 pub fn get_bsp_lapic_id() -> usize {
-    assert!(PRE_INIT_PHASE.load(Ordering::Acquire) == false);
+    assert!(PRE_INIT_PHASE.load(Ordering::Relaxed) == false);
 
     CPU_LIST.lock().iter().find(|cb| cb.logical_id == 0).expect("bsp_lapic_id not found!").apic_id
 }

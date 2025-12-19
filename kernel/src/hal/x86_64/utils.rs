@@ -54,6 +54,7 @@ pub fn switch_to_new_address_space(pml4_phys: usize, stack_address: usize, kerne
     // Special hooks to tell logger and cpu to update it's internal pointers now
     crate::cpu::relocate_cpu_init_stack(); 
     crate::logger::relocate_framebuffer();
+     
     unsafe {
         asm::init_address_space(pml4_phys as u64, stack_address as u64,  kernel_address as u64);
         

@@ -1,5 +1,5 @@
 use common::{en_flag, ptr_to_usize};
-use crate::{cpu, hal::enable_interrupts, sync::{Once, Spinlock}};
+use crate::{cpu, mem, hal::enable_interrupts, sync::{Once, Spinlock}};
 use kernel_intf::{debug, info};
 use super::{asm, MAX_INTERRUPT_VECTORS, handlers, lapic, timer};
 
@@ -122,8 +122,10 @@ static CPU_TSS: Once<TaskStateSegment> = Once::new();
 pub extern "C" fn kern_addr_space_start() {
     info!("Switched to new address space");
     crate::cpu::set_panic_base(super::get_current_stack_base());
-    crate::module::complete_handoff();
-    
+    let (kernel_base, total_size) = crate::module::complete_handoff();
+
+    info!("CPU-0 stack address:{:#X}", cpu::get_current_stack_base());
+
     CPU_TSS.call_once(|| {
         TaskStateSegment::new(cpu::get_current_stack_base() as u64) 
     });
@@ -177,6 +179,8 @@ pub extern "C" fn kern_addr_space_start() {
     lapic::init();
     timer::init();
     handlers::init();
+    
+    mem::unmap_kernel_memory(kernel_base, total_size);
 
     enable_interrupts(true);
     crate::kern_main();

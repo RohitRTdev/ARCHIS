@@ -15,6 +15,7 @@ const STACK_UNWIND_DEPTH: usize = 16;
 
 pub fn common_panic_handler(mod_name: &str, info: &PanicInfo) -> ! {
     let panic_cb = GLOBAL_PANIC_LOCK.lock();
+
     kernel_intf::set_panic_mode();
 
     if EARLY_PANIC_PHASE.load(Ordering::Acquire) {
@@ -24,14 +25,13 @@ pub fn common_panic_handler(mod_name: &str, info: &PanicInfo) -> ! {
         
         hal::halt();
     }
-
-    let stack_base = cpu::get_panic_base(); 
-    let mut unwind_list: [usize; STACK_UNWIND_DEPTH] = [0; STACK_UNWIND_DEPTH];
-
+    
     println!("Kernel panic!!");
     println!("Message: {}", info.message());
     println!("Module: {}", mod_name);
 
+    let stack_base = cpu::get_panic_base(); 
+    let mut unwind_list: [usize; STACK_UNWIND_DEPTH] = [0; STACK_UNWIND_DEPTH];
 
     #[cfg(debug_assertions)]
     {

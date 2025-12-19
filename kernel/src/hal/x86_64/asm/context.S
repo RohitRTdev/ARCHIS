@@ -22,7 +22,8 @@ FUNC interrupt_context_save
     // rdi = vector
     // rsi = pointer to context
     movq 120(%rsp), %rdi     
-    leaq 0(%rsp), %rsi       
+    subq $8, %rsp  // Align stack to 16 bytes
+    leaq 0(%rsp), %rsi
 
     call global_interrupt_handler
 
@@ -34,6 +35,9 @@ ENDF interrupt_context_save
 
 
 FUNC switch_context
+    // Remove the offset we added before
+    addq $8, %rsp
+    
     // Restore registers in reverse order
     popq %r15
     popq %r14

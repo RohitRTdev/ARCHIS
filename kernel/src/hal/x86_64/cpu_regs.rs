@@ -4,6 +4,8 @@ use super::{asm, features};
 use kernel_intf::debug;
 use common::en_flag;
 
+pub static mut INIT_RFLAGS: u64 = 0;
+
 pub struct CR0;
 pub struct CR4;
 pub struct RFLAGS;
@@ -123,6 +125,9 @@ pub fn init() {
 
         CPUReg::<EFER>::init(EFER::SCE | EFER::LME | EFER::LMA);
         CPUReg::<RFLAGS>::clear(RFLAGS::IOPL | RFLAGS::AC);
+
+        // Set this as initial RFLAGS value when creating a new task. Also enable interrupts
+        INIT_RFLAGS = asm::read_rflags() | (1 << 9) | (1 << 16);
     }
 
 #[cfg(debug_assertions)]

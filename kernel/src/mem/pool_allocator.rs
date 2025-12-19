@@ -1,6 +1,7 @@
 use core::alloc::Layout;
 use core::ptr::NonNull;
 use core::marker::PhantomData;
+use crate::hal::get_current_stack_base;
 use crate::mem::PageDescriptor;
 use crate::sync::Spinlock;
 use kernel_intf::KError;
@@ -18,6 +19,8 @@ struct Pool {
     free_list: Option<NonNull<FreeBlock>>
 }
 
+unsafe impl Send for Pool{}
+
 impl Pool {
     fn new(block_size: usize) -> Self {
         Pool {
@@ -25,12 +28,26 @@ impl Pool {
             free_list: None
         }
     }
+
+#[cfg(debug_assertions)]
+    fn print(&self, idx: usize) {
+        debug!("Pool idx:{}, size: {}", idx, self.block_size);
+
+        let mut cur_block = self.free_list;
+        while cur_block.is_some() {
+            debug!("Block: {:#X}", cur_block.unwrap().as_ptr().addr());
+
+            cur_block = unsafe {
+                (*cur_block.unwrap().as_ptr()).next
+            };
+        }
+    }
 }
 
 // Linked list to track free slots.
 #[repr(C)]
 struct FreeBlock {
-    next: Option<NonNull<FreeBlock>>,
+    next: Option<NonNull<FreeBlock>>
 }
 
 impl FreeBlock {
@@ -60,6 +77,14 @@ impl PoolControlBlock {
         
         Ok(self.find_pool_mut(block_size).unwrap())
     }
+
+#[cfg(debug_assertions)]
+    fn print_pool(&self) {
+        debug!("===Printing pools===");
+        for (idx, pool) in self.pools.iter().enumerate() { 
+            pool.print(idx);
+        }
+    }
 }
 
 static POOL_CB: Spinlock<PoolControlBlock> = Spinlock::new(PoolControlBlock {
@@ -74,11 +99,23 @@ impl<T> PoolAllocator<T> {
     // Push a range of slots as free blocks into the pool's free list
     fn push_free_blocks(pool: &mut Pool, base: *mut u8, slots: usize, block_size: usize) {
         debug!("pool_allocator -> push_free_blocks: base:{:#X}, slots:{}, block_size:{}",
-            base as usize, slots, block_size);
+            base.addr(), slots, block_size);
+
+        let val = crate::mem::get_physical_address(base.addr());   
+
+
+        debug!("Physical address for base:{:#X} => {:#X}", base.addr(), val.unwrap());
+
         for i in 0..slots {
             let slot_ptr = unsafe { base.add(i * block_size) as *mut FreeBlock };
             unsafe {
                 (*slot_ptr).set_next(pool.free_list);
+                //if block_size == 24 {
+                //    let next = (*slot_ptr).next;
+                //    if next.is_some() {
+                //        //debug!("slot_ptr={:#X}, slot_ptr_next={:#X}", slot_ptr.addr(), next.unwrap().as_ptr().addr());
+                //    }
+                //}
                 pool.free_list = Some(NonNull::new_unchecked(slot_ptr));
             }
         }
@@ -93,8 +130,11 @@ impl<T> super::Allocator<T> for PoolAllocator<T> {
             && layout.size() == size_of::<T>());
 
         let block_size = size_of::<T>();
+        
         let mut cb = POOL_CB.lock();
 
+        debug!("Requesting pool allocation {:?}", layout);
+        
         // Find or create the pool for this block size
         let pool = match cb.find_pool_mut(block_size) {
             Some(pool) => pool,
@@ -105,6 +145,7 @@ impl<T> super::Allocator<T> for PoolAllocator<T> {
         if let Some(free_block) = pool.free_list {
             let next = unsafe { (*free_block.as_ptr()).next };
             pool.free_list = next;
+            
             return Ok(free_block.cast());
         }
 
@@ -120,6 +161,7 @@ impl<T> super::Allocator<T> for PoolAllocator<T> {
         if let Some(free_block) = pool.free_list {
             let next = unsafe { (*free_block.as_ptr()).next };
             pool.free_list = next;
+
             return Ok(free_block.cast());
         }
 
@@ -133,6 +175,7 @@ impl<T> super::Allocator<T> for PoolAllocator<T> {
 
         let block_size = size_of::<T>();
         let mut cb = POOL_CB.lock();
+        debug!("Requesting pool deallocation for address={:#X}", ptr.addr());
 
         // Find the pool for this block size and add the released block back to head of free_list
         if let Some(pool) = cb.find_pool_mut(block_size) {

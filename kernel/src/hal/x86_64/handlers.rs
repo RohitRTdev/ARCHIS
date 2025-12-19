@@ -65,7 +65,9 @@ const EXCP_STRINGS: [&'static str; EXCEPTION_VECTOR_RANGE] = [
 ];
 
 #[derive(Debug, Clone, Copy)]
-pub struct CPUContext {
+#[repr(C)]
+struct CPUContext {
+    pad: u64,
     r15: u64,
     r14: u64,
     r13: u64,
@@ -84,17 +86,27 @@ pub struct CPUContext {
     vector: u64,
     rip: u64,
     cs: u64,
-    rflags: u64
+    rflags: u64,
+    rsp: u64,
+    ss: u64
+}
+
+// We require stack to be 16 byte aligned
+const _: () = {
+    assert!(core::mem::size_of::<CPUContext>() % 16 == 0);
+};
+
+impl CPUContext {
+    fn new() -> Self {
+        CPUContext { pad: 0, r15: 0, r14: 0, r13: 0, r12: 0, r11: 0, r10: 0, r9: 0, r8: 0, rbp: 0, rdi: 0, rsi: 0, 
+            rdx: 0, rcx: 0, rbx: 0, rax: 0, vector: 0, rip: 0, cs: 0, rflags: 0, rsp: 0, ss: 0 
+        }
+    }
 }
 
 #[no_mangle]
 extern "C" fn global_interrupt_handler(vector: u64, cpu_context: *const CPUContext) -> *const CPUContext {
     PER_CPU_GLOBAL_CONTEXT.local().store(cpu_context as *mut u8, Ordering::Relaxed);
-
-    let saved_base = cpu::get_panic_base();
-    cpu::set_panic_base(unsafe {
-        asm::fetch_rbp() as usize
-    });
 
     VECTOR_TABLE.lock()[vector as usize](vector as usize);
 
@@ -102,17 +114,16 @@ extern "C" fn global_interrupt_handler(vector: u64, cpu_context: *const CPUConte
         eoi();
     }
 
-    cpu::set_panic_base(saved_base);
-
     PER_CPU_GLOBAL_CONTEXT.local().load(Ordering::Relaxed) as *const CPUContext
 }
 
 fn default_handler(idx: usize) {
-    panic!("Called default handler on vector: {}", idx);
+    panic!("Called default handler on vector: {}, {:?}", idx, unsafe{*(fetch_context() as *const CPUContext)});
 }
 
 pub fn init() {
     let mut vec_tbl = VECTOR_TABLE.lock();
+    
     for vector in 0..EXCEPTION_VECTOR_RANGE {
         vec_tbl[vector] = |idx| {
             panic!("{} exception!", EXCP_STRINGS[idx]);
@@ -128,6 +139,8 @@ pub fn init() {
     vec_tbl[SPURIOUS_VECTOR] = spurious_handler;
     vec_tbl[TIMER_VECTOR] = timer_handler;
     vec_tbl[ERROR_VECTOR] = error_handler;
+
+    info!("Initialized interrupt handlers");
 }
 
 pub fn register_interrupt_handler(irq: usize, handler: fn(usize), active_high: bool, is_edge_triggered: bool) -> usize {
@@ -175,4 +188,28 @@ pub fn fetch_context() -> *const u8 {
 
 pub fn switch_context(new_context: *const u8) {
     PER_CPU_GLOBAL_CONTEXT.local().store(new_context as *mut u8, Ordering::Release);
+}
+
+pub fn create_kernel_context(handler: fn() -> !, stack_base: *mut u8) -> *const u8 {
+    let mut sp = stack_base as usize;
+    
+    // 16 byte alignment is maintained since stack_base already aligned to 4096 bytes
+    sp -= core::mem::size_of::<CPUContext>();
+
+    let mut context = CPUContext::new(); 
+    context.rip = handler as u64;
+    context.rbp = stack_base.addr() as u64;
+    context.rsp = stack_base.addr() as u64;
+    
+    // Kernel code + Kernel data
+    context.cs = 0x8;
+    context.ss = 0x10;
+    context.rflags = unsafe {
+        super::cpu_regs::INIT_RFLAGS
+    };
+
+    unsafe {
+        (sp as *mut CPUContext).write(context);
+    }
+    sp as *const u8
 }

@@ -24,6 +24,7 @@ const DIVIDE_CNT_OFFSET: u32 = 0x83e;
 const SPURIOUS_ENTRY_OFFSET: u32 = 0x80f;
 
 static mut X2APIC_ENABLED: bool = false;
+static mut APIC_BASE: usize = 0;
 
 fn lapic_mmio_offset(msr: u32) -> usize {
     ((msr - 0x800) << 4) as usize
@@ -52,12 +53,9 @@ fn lapic_write(offset: u32, value: u64) {
 }
 
 fn get_apic_mmio_base() -> usize {
-    let phy_addr = unsafe {
-        (rdmsr(APIC_BASE_OFFSET) & 0xfffff000) as usize
-    };
-
-    get_virtual_address(phy_addr, MapFetchType::Any)
-    .expect("Unable to get APIC base register space virtual address")
+    unsafe {
+        APIC_BASE
+    }
 }
 
 pub fn enable_x2apic() {
@@ -96,6 +94,11 @@ pub fn init() {
 
             map_memory(apic_base_addr as usize, base as usize, PAGE_SIZE, PageDescriptor::MMIO)
             .expect("map_memory failed for apic register space");
+            
+            unsafe {
+                APIC_BASE = get_virtual_address(apic_base_addr as usize, MapFetchType::Any)
+            .expect("Unable to get APIC base register space virtual address");
+            }
         }
     }
 

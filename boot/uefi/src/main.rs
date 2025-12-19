@@ -72,7 +72,7 @@ fn setup_memory_map() -> ArrayTable {
                 base_address: desc.phys_start as usize,
                 size: desc.page_count as usize * PAGE_SIZE as usize
             },
-            mem_type: if desc.att == MemoryAttribute::RUNTIME {
+            mem_type: if desc.att.contains(MemoryAttribute::RUNTIME) {
                     MemType::Identity
                 }
                 else {

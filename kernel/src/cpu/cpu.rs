@@ -27,6 +27,38 @@ pub struct Stack {
     _guard_page: [u8; PAGE_SIZE]
 }
 
+impl Stack {
+    pub fn new() -> *const Self {
+        allocate_memory(Layout::from_size_align(TOTAL_STACK_SIZE, PAGE_SIZE).unwrap()
+        , PageDescriptor::VIRTUAL)
+        .expect("Failed to allocate memory for stack") as *const Stack
+    }
+    
+    #[cfg(feature = "stack_down")]
+    #[inline(always)]
+    pub fn get_stack_base(&self) -> usize {
+        self.stack.as_ptr().addr() + INIT_STACK_SIZE
+    }
+
+    #[cfg(not(feature = "stack_down"))]
+    #[inline(always)]
+    pub fn get_stack_base(&self) -> usize {
+        self.stack.as_ptr().addr()
+    }
+    
+    #[cfg(feature = "stack_down")]
+    #[inline(always)]
+    pub fn get_stack_top(&self) -> usize {
+        self.stack.as_ptr().addr()
+    }
+
+    #[cfg(not(feature = "stack_down"))]
+    #[inline(always)]
+    pub fn get_stack_top(&self) -> usize {
+        self.stack.as_ptr().addr() + INIT_STACK_SIZE
+    }
+}
+
 struct CPUControlBlock {
     id: usize,
     worker_stack: &'static Stack,
@@ -66,11 +98,11 @@ pub fn register_cpu() -> usize {
         CPUControlBlock {
             id: cpu_id,
             worker_stack: stack,
-            panic_base: get_stack_base(stack.stack.as_ptr().addr())
+            panic_base: stack.get_stack_base()
         }
     };
 
-    info!("Registered CPU with core_id:{} and stack:{:#X}", cpu_id, cb.worker_stack.stack.as_ptr() as usize);
+    info!("Registered CPU with core_id:{} and stack:{:#X}", cpu_id, cb.worker_stack.get_stack_top());
 
     CPU_LIST.lock().add_node(cb).expect("Failed to add CPU control block to the list");
 
@@ -78,24 +110,13 @@ pub fn register_cpu() -> usize {
     cpu_id
 }
 
-#[cfg(feature = "stack_down")]
-#[inline(always)]
-fn get_stack_base(stack_top: usize) -> usize {
-    stack_top + INIT_STACK_SIZE
-}
-
-#[cfg(not(feature = "stack_down"))]
-#[inline(always)]
-fn get_stack_base(stack_top: usize) -> usize {
-    stack_top
-}
 
 pub fn get_current_stack_base() -> usize {
     let core_id = hal::get_core();
     let cpu_list = CPU_LIST.lock();
 
     cpu_list.iter().find(|cb| cb.id == core_id)
-        .and_then(|cb| Some(get_stack_base(cb.worker_stack.stack.as_ptr() as usize)))
+        .and_then(|cb| Some(cb.worker_stack.get_stack_base()))
         .expect("Invalid core ID!!")
 }
 
@@ -129,7 +150,7 @@ pub fn relocate_cpu_init_stack() {
             .expect("Failed to get virtual address for CPU init stack") as *const Stack)
         };
 
-        info!("Relocated CPU init stack for main cpu to {:#X}", cb.worker_stack.stack.as_ptr().addr());
+        info!("Relocated CPU init stack for main cpu to {:#X}", cb.worker_stack.get_stack_base());
     } else {
         panic!("Unable to find CPU control block for main cpu!!");
     }

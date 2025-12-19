@@ -1,6 +1,26 @@
 #![allow(static_mut_refs)]
 
 #[macro_export]
+macro_rules! print {
+    () => {};
+    ($($arg:tt)*) => {
+        #[cfg(not(test))]
+        {
+            unsafe {
+                use core::fmt::Write;
+
+                $crate::acquire_spinlock(&mut $crate::LOGGER.lock);
+                
+                $crate::LOGGER.write_fmt(::core::format_args!($($arg)*))
+                .unwrap();
+                
+                $crate::release_spinlock(&mut $crate::LOGGER.lock);
+            }
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! println {
     () => {
         #[cfg(test)]

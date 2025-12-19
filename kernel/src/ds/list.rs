@@ -32,8 +32,6 @@ pub struct ListNodeGuard<T, A: Allocator<ListNode<T>>> {
     _marker: PhantomData<A>
 }
 
-
-
 impl<T> ListNode<T> {
     pub fn into_inner<A: Allocator<ListNode<T>>>(guard_node: ListNodeGuard<T, A>) -> NonNull<ListNode<T>> {
         let guard_node = mem::ManuallyDrop::new(guard_node);
@@ -48,7 +46,7 @@ pub struct List<T, A: Allocator<ListNode<T>>> {
     _marker: PhantomData<A>
 }
 
-unsafe impl<T, A: Allocator<ListNode<T>>> Send for List<T, A>{}
+unsafe impl<T: Send, A: Allocator<ListNode<T>>> Send for List<T, A>{}
 
 impl<T, A: Allocator<ListNode<T>>> Deref for ListNodeGuard<T, A> {
     type Target = T;
@@ -124,10 +122,13 @@ impl<T, A: Allocator<ListNode<T>>> List<T, A> {
         let layout = Layout::from_size_align(size_of::<ListNode<T>>(), align_of::<ListNode<T>>()).unwrap();
         let addr = A::alloc(layout)?.as_ptr();
         let addr_non = NonNull::new(addr).unwrap();
+        
         unsafe {
-            (*addr).next = addr_non;
-            (*addr).prev = addr_non;
-            (*addr).data = data;
+            addr.write(ListNode {
+                next: addr_non,
+                prev: addr_non,
+                data
+            });
         }
 
         self.insert_node_at_tail(addr_non);

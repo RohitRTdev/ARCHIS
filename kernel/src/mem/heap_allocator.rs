@@ -52,6 +52,7 @@ impl LinkedListAllocator {
     }
 
     fn add_free_region(&mut self, addr: usize, size: usize) {
+        debug!("Adding heap free region: {:#X}, size: {}", addr, size);
         let node = addr as *mut ListNode;
         unsafe {
             (*node).size = size;

@@ -141,18 +141,20 @@ pub fn early_init() {
 }
 
 
-pub fn complete_handoff() {
+pub fn complete_handoff() -> (usize, usize) {
     let kernel_base;
     let total_size;
-    let load_base;
     
     info!("Reapplying relocations to switch to new address space");
     {
         let mut mod_list = MODULE_LIST.lock();
         let mod_cb = mod_list.first_mut().unwrap();
         let boot_info = BOOT_INFO.get().unwrap();
+        kernel_base = boot_info.kernel_desc.base;
+        total_size = boot_info.kernel_desc.total_size;
+        
         if mod_cb.info.rlc_shn.is_none() {
-            return;
+            return (kernel_base, total_size);
         }
 
         let rlc_tab_desc = mod_cb.info.rlc_shn.unwrap(); 
@@ -161,9 +163,7 @@ pub fn complete_handoff() {
         };
 
         // This is the old unmapped kernel address
-        kernel_base = boot_info.kernel_desc.base;
-        total_size = boot_info.kernel_desc.total_size;
-        load_base = mod_cb.info.base;
+        let load_base = mod_cb.info.base;
         let dyn_tab = mod_cb.info.dyn_tab;
         
         let info = |bitmap: u64| {
@@ -241,7 +241,7 @@ pub fn complete_handoff() {
             let mut map = BTreeMap::new();
 
             for entry in fs_entries {
-                debug!("Adding init fs entry:{} with total len:{}", entry.name, entry.contents.len());
+                info!("Adding init fs entry:{} with start_addr:{:#X}", entry.name, entry.contents.as_ptr().addr());
                 map.insert(entry.name, entry.contents);
             }
             
@@ -257,6 +257,6 @@ pub fn complete_handoff() {
     }
 
 
-    mem::unmap_kernel_memory(kernel_base, total_size);
     info!("Handoff procedure completed");
+    (kernel_base, total_size)
 }

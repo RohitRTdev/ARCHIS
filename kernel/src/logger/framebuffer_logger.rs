@@ -169,8 +169,6 @@ impl FramebufferLogger {
             ((*FRAMEBUFFER.buffer.get()).as_ptr() as *mut u8).write_bytes(0, self.height * self.stride * 4);
         }
         
-        core::sync::atomic::fence(core::sync::atomic::Ordering::Release);        
-        
         self.current_x = 0;
         self.current_y = 0;
     }
@@ -253,8 +251,6 @@ impl FramebufferLogger {
                 }
             }
         }
-        
-        core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
     }
     
     fn set_pixel(&mut self, x: usize, y: usize, color: u32) {
@@ -274,7 +270,6 @@ impl FramebufferLogger {
         let line_size = self.font_header.height as usize * self.stride * 4; // stride in pixels, *4 for bytes
         let fb_size = self.height * self.stride * 4;
 
-        //#[cfg(debug_assertions)]
         unsafe {
             // Scroll the scratch buffer
             core::ptr::copy(
@@ -311,8 +306,6 @@ impl FramebufferLogger {
                 }
             }
         }
-
-        core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
 
         self.current_y -= self.font_header.height as usize;
     }
