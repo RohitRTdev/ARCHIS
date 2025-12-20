@@ -14,11 +14,14 @@ mod cpu;
 mod devices;
 mod sched;
 
+
+
 use kernel_intf::{info, debug};
 use common::*;
 
 extern crate alloc;
 use alloc::collections::BTreeMap;
+use alloc::collections::VecDeque;
 
 
 #[cfg(test)]
@@ -29,6 +32,7 @@ use cpu::install_interrupt_handler;
 use crate::hal::{delay_ns, disable_interrupts, enable_interrupts, read_port_u8};
 use crate::mem::Regions::*;
 use crate::ds::*;
+use crate::sched::KThread;
 use crate::sync::KSem;
 
 static BOOT_INFO: Once<BootInfo> = Once::new();
@@ -57,16 +61,93 @@ fn clear_keyboard_output_buffer() {
     }
 }
 
+static TASK_COUNTER: Once<KSem> = Once::new();
+static WAIT_EVENT: Once<KSem> = Once::new();
+
+// Checking thread subsystem
+fn task_spawn() -> ! {
+    let mut tasks: VecDeque<KThread> = VecDeque::new();
+    TASK_COUNTER.call_once(|| {
+        KSem::new(-4, 1)
+    });
+
+    WAIT_EVENT.call_once(|| {
+        KSem::new(0, 1)
+    });
+
+    info!("Active_tasks={}, Waiting_tasks={}, terminated_tasks={}", sched::get_num_active_tasks(), 
+    sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks());
+
+    for _ in 0..5 {
+        tasks.push_back(sched::create_task(|| {
+            let id = sched::get_current_task().lock().get_id(); 
+            info!("Running task: {}", id);
+            TASK_COUNTER.get().unwrap().signal();
+            
+            info!("id:{}, Active_tasks={}, Waiting_tasks={}, terminated_tasks={}", id, sched::get_num_active_tasks(), 
+            sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks());
+            
+            // Task 4, 5 and 6 should be in wait queue
+            if id >= 4 {
+                WAIT_EVENT.get().unwrap().wait().unwrap();
+            }
+
+            // Task 2 and 3 will be part of active list
+            loop {
+                info!("id:{}, Active_tasks={}, Waiting_tasks={}, terminated_tasks={}", id, sched::get_num_active_tasks(), 
+                sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks());
+            
+                delay_ns(1_000_000_000);
+            }
+        }).unwrap());
+    }
+
+    TASK_COUNTER.get().unwrap().wait().unwrap();
+    info!("Active_tasks={}, Waiting_tasks={}, terminated_tasks={}", sched::get_num_active_tasks(), 
+    sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks());
+
+    loop {
+        KEYBOARD_EVENT.get().unwrap().wait().unwrap();
+        info!("id:{}, Active_tasks={}, Waiting_tasks={}, terminated_tasks={} before", 1, sched::get_num_active_tasks(), 
+        sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks());
+
+        if !tasks.is_empty() {
+            let task = tasks.pop_front().unwrap();
+            let id = task.lock().get_id();
+            info!("Killing task {}", id);
+            sched::kill_task(id);
+        }
+        else {
+            info!("No more tasks to kill");
+        }
+        
+        info!("id:{}, Active_tasks={}, Waiting_tasks={}, terminated_tasks={} after", 1, sched::get_num_active_tasks(), 
+        sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks());
+    }
+}
+
 fn kern_main() {
     info!("Starting main kernel init");
+    
+    WRITE_EVENT.call_once(|| {
+        KSem::new(0, 1)
+    });
+    
+    KEYBOARD_EVENT.call_once(|| {
+        KSem::new(0, 1)
+    });
 
     // Sample invocation to test out interrupt subsystem
     clear_keyboard_output_buffer();
     install_interrupt_handler(1, key_notifier, true, true);
-    
+
+
     sched::init();
-    sched::create_task(producer).unwrap();
-    sched::create_task(consumer).unwrap();
+    
+    sched::create_task(task_spawn).unwrap();
+
+    //sched::create_task(producer).unwrap();
+    //sched::create_task(consumer).unwrap();
 
     info!("Main task going to sleep"); 
     hal::sleep();
@@ -94,8 +175,8 @@ unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
 
 use alloc::vec::Vec;
 static DATA_QUEUE: Spinlock<Vec<u8>> = Spinlock::new(Vec::new());
-static WRITE_EVENT: KSem = KSem::new(0, 1);
-static KEYBOARD_EVENT: KSem = KSem::new(0, 1);
+static WRITE_EVENT: Once<KSem> = Once::new();
+static KEYBOARD_EVENT: Once<KSem> = Once::new();
 
 const SCANCODE_SET1_TO_ASCII: [Option<u8>; 58] = [
     /* 0x00 */ None,
@@ -162,24 +243,35 @@ const SCANCODE_SET1_TO_ASCII: [Option<u8>; 58] = [
 ];
 
 fn key_notifier(_: usize) {
-    KEYBOARD_EVENT.signal();
+    let (id, status) = {
+        let task = sched::get_current_task();
+        let id = task.lock().get_id();
+        let status = task.lock().get_status();
+        (id, status)
+    };
+
+    info!("Called keyboard handler in task:{} with status: {:?}", id, status);
+    KEYBOARD_EVENT.get().unwrap().signal();
+    clear_keyboard_output_buffer();
 }
 
 fn producer() -> ! {
     info!("Starting producer task");
     clear_keyboard_output_buffer();
+    let key_event = KEYBOARD_EVENT.get().unwrap();
+    let write_event = WRITE_EVENT.get().unwrap();
     DATA_QUEUE.lock().reserve(256);
 
     unsafe {
         loop {
-            KEYBOARD_EVENT.wait().unwrap();
+            key_event.wait().unwrap();
 
             while read_port_u8(0x64) & 0x01 != 0 {
                 let value = read_port_u8(0x60);
                 DATA_QUEUE.lock().push(value);
             }
 
-            WRITE_EVENT.signal();
+            write_event.signal();
         }
     }
 }
@@ -187,9 +279,10 @@ fn producer() -> ! {
 fn consumer() -> ! {
     info!("Starting consumer task");
     info!("Primitive terminal... You may type");
+    let write_event = WRITE_EVENT.get().unwrap();
 
     loop {
-        WRITE_EVENT.wait().unwrap();
+        write_event.wait().unwrap();
         {
             let mut data = DATA_QUEUE.lock();
             let mut idx = 0;

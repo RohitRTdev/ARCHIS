@@ -1,30 +1,33 @@
 use core::ptr::NonNull;
+use alloc::sync::Arc;
 use super::Spinlock;
-use crate::{ds::*, sched};
+use crate::{ds::*, mem::PoolAllocatorGlobal, sched};
 use kernel_intf::KError;
 use crate::sched::KThread;
 
-struct KSemInner {
-    max_count: usize,
+pub type KSemInnerType = Arc<Spinlock<KSemInner>, PoolAllocatorGlobal>;
+
+pub struct KSemInner {
+    max_count: isize,
     counter: isize,
     blocked_list: DynList<KThread>
 }
 
 pub struct KSem {
-    inner: Spinlock<KSemInner>
+    inner: KSemInnerType
 }
 
 unsafe impl Sync for KSem {}
 unsafe impl Send for KSem {}
 
 impl KSem {
-    pub const fn new(init_count: isize, max_count: usize) -> Self {
+    pub fn new(init_count: isize, max_count: isize) -> Self {
         Self {
-            inner: Spinlock::new(KSemInner {
+            inner: Arc::new_in(Spinlock::new(KSemInner {
                 max_count,
                 counter: init_count,
                 blocked_list: List::new()
-            }) 
+            }), PoolAllocatorGlobal) 
         }
     }
 
@@ -35,11 +38,15 @@ impl KSem {
             inner.counter -= 1;
             
             let cur_task = sched::get_current_task();
-
+            
             if count <= 0 {
+                let inner_wrap = Arc::clone(&self.inner);
+
+                kernel_intf::info!("Blocking task: {}", cur_task.lock().get_id());
+
                 // Block task
                 inner.blocked_list.add_node(cur_task)?;
-                sched::add_cur_task_to_wait_queue();
+                sched::add_cur_task_to_wait_queue(inner_wrap);
             }
         }
 
@@ -52,7 +59,7 @@ impl KSem {
     pub fn signal(&self) {
         {
             let mut inner = self.inner.lock();
-            inner.counter = (inner.max_count as isize).min(inner.counter + 1);
+            inner.counter = inner.max_count.min(inner.counter + 1);
 
             if inner.counter >= 0 {
                 let wait_count = inner.blocked_list.get_nodes();
@@ -64,9 +71,34 @@ impl KSem {
                         inner.blocked_list.remove_node(wait_task_ptr)
                     };
                     
+                    kernel_intf::info!("Signalling task: {}", node.lock().get_id());
+                    
+                    let inner_wrap = Arc::clone(&self.inner);
+                    
                     let id = node.lock().get_id();
-                    sched::signal_waiting_task(id);
+                    sched::signal_waiting_task(id, inner_wrap);
                 } 
+            }
+        }
+    }
+
+    pub fn drop_task(inner_arc: KSemInnerType, task_id: usize) {
+        let mut inner = inner_arc.lock();
+
+        let mut blocked_task = None;
+        for task in inner.blocked_list.iter() {
+            if task.lock().get_id() == task_id {
+                blocked_task = Some(NonNull::from(task));
+                break;
+            }
+        } 
+
+        // The list might not contain the waiting task
+        // This might happen if another task called signal on this semaphore before drop_task got a chance to run
+        if blocked_task.is_some() {
+            kernel_intf::info!("Dropping task {} from semaphore blocked list", task_id);
+            unsafe {
+                inner.blocked_list.remove_node(blocked_task.unwrap());
             }
         }
     }

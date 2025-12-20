@@ -3,7 +3,6 @@ use core::ptr::NonNull;
 use core::marker::PhantomData;
 use core::alloc::AllocError;
 use crate::mem::PageDescriptor;
-use crate::hal::get_current_stack_base;
 use crate::sync::Spinlock;
 use kernel_intf::KError;
 use kernel_intf::debug;
@@ -102,24 +101,10 @@ pub struct PoolAllocatorGlobal;
 impl<T> PoolAllocator<T> {
     // Push a range of slots as free blocks into the pool's free list
     fn push_free_blocks(pool: &mut Pool, base: *mut u8, slots: usize, block_size: usize) {
-        debug!("pool_allocator -> push_free_blocks: base:{:#X}, slots:{}, block_size:{}",
-            base.addr(), slots, block_size);
-
-        let val = crate::mem::get_physical_address(base.addr());   
-
-
-        debug!("Physical address for base:{:#X} => {:#X}", base.addr(), val.unwrap());
-
         for i in 0..slots {
             let slot_ptr = unsafe { base.add(i * block_size) as *mut FreeBlock };
             unsafe {
                 (*slot_ptr).set_next(pool.free_list);
-                //if block_size == 24 {
-                //    let next = (*slot_ptr).next;
-                //    if next.is_some() {
-                //        //debug!("slot_ptr={:#X}, slot_ptr_next={:#X}", slot_ptr.addr(), next.unwrap().as_ptr().addr());
-                //    }
-                //}
                 pool.free_list = Some(NonNull::new_unchecked(slot_ptr));
             }
         }
@@ -128,8 +113,6 @@ impl<T> PoolAllocator<T> {
     fn allocate_block(layout: Layout) -> Result<NonNull<[u8]>, KError> {
         let block_size = layout.size();
         let mut cb = POOL_CB.lock();
-        
-        debug!("Requesting pool allocation {:?}", layout);
         
         // Find or create the pool for this block size
         let pool = match cb.find_pool_mut(block_size) {
@@ -168,8 +151,6 @@ impl<T> PoolAllocator<T> {
         let block_size = layout.size();
         let mut cb = POOL_CB.lock();
         
-        debug!("Requesting pool deallocation for address={:#X}", ptr.addr());
-
         // Find the pool for this block size and add the released block back to head of free_list
         if let Some(pool) = cb.find_pool_mut(block_size) {
             let free_ptr = ptr.as_ptr() as *mut FreeBlock;

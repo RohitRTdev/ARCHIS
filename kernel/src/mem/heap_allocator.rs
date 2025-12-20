@@ -81,7 +81,6 @@ impl LinkedListAllocator {
 
 unsafe impl GlobalAlloc for Spinlock<LinkedListAllocator> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        debug!("Requesting heap allocation -> {:?}", layout);
         let size = layout.size().max(size_of::<ListNode>());
         let align = layout.align().max(align_of::<ListNode>());
         let layout = Layout::from_size_align(size, align).unwrap();
@@ -117,7 +116,6 @@ unsafe impl GlobalAlloc for Spinlock<LinkedListAllocator> {
     unsafe fn dealloc(&self, addr: *mut u8, layout: Layout) {
         let size = layout.size().max(size_of::<ListNode>());
         let mut allocator = self.lock();
-        debug!("Requesting heap deallocation -> {:?} at address:{:#X} with memory:{}", layout, addr as usize, allocator.backing_memory);
         allocator.add_free_region(addr as usize, size);
         allocator.backing_memory += size;
     }

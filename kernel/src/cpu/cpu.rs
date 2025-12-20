@@ -6,7 +6,7 @@ use crate::hal::get_core;
 use crate::infra::disable_early_panic_phase;
 use crate::{ds::*, hal};
 use crate::sync::Spinlock;
-use crate::mem::{allocate_memory, get_virtual_address, MapFetchType, PageDescriptor, Regions::*};
+use crate::mem::{MapFetchType, PageDescriptor, Regions::*, allocate_memory, deallocate_memory, get_virtual_address};
 const INIT_STACK_SIZE: usize  = PAGE_SIZE * 2;
 const INIT_GUARD_PAGE_SIZE: usize = PAGE_SIZE;
 pub const TOTAL_STACK_SIZE: usize = INIT_STACK_SIZE + INIT_GUARD_PAGE_SIZE;
@@ -33,7 +33,29 @@ impl Stack {
         , PageDescriptor::VIRTUAL)
         .expect("Failed to allocate memory for stack") as *const Stack
     }
-    
+
+    pub fn destroy(&mut self) {
+        deallocate_memory(
+            self.get_alloc_base(),
+            Layout::from_size_align(TOTAL_STACK_SIZE, PAGE_SIZE).unwrap()
+        , PageDescriptor::VIRTUAL)
+        .expect("Failed to deallocate memory for stack")
+    }
+
+    #[cfg(feature = "stack_down")]
+    #[inline(always)]
+    fn get_alloc_base(&mut self) -> *mut u8 {
+        self._guard_page.as_mut_ptr()
+    }
+
+    #[cfg(not(feature = "stack_down"))]
+    #[inline(always)]
+    pub fn get_alloc_base(&mut self) -> *mut u8 {
+        self.stack.as_mut_ptr()
+    }
+
+
+
     #[cfg(feature = "stack_down")]
     #[inline(always)]
     pub fn get_stack_base(&self) -> usize {

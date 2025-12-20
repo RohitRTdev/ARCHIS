@@ -39,6 +39,11 @@ impl<T> ListNode<T> {
     }
 }
 
+
+// Important note here. Right now list doesn't have an auto clean up when dropping it
+// If you want to clear list, then user must iterate over each element and remove the 
+// corresponding ListNode element (call remove_node). Failure to do so, would just 
+// leak memory
 pub struct List<T, A: Allocator<ListNode<T>>> {
     head: Option<*mut ListNode<T>>,
     tail: Option<*mut ListNode<T>>,
@@ -81,6 +86,8 @@ impl<T> DerefMut for ListNode<T> {
 impl<T, A: Allocator<ListNode<T>>> Drop for ListNodeGuard<T, A> {
     fn drop(&mut self) {
         unsafe {
+            let node = core::ptr::read(self.guard.as_ptr());
+            drop(node);
             A::dealloc(self.guard, Layout::for_value(self.guard.as_ref()));
         }
     }
