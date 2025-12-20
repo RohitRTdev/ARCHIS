@@ -122,7 +122,7 @@ static CPU_TSS: Once<TaskStateSegment> = Once::new();
 pub extern "C" fn kern_addr_space_start() {
     info!("Switched to new address space");
     crate::cpu::set_panic_base(super::get_current_stack_base());
-    let (kernel_base, total_size) = crate::module::complete_handoff();
+    crate::module::complete_handoff();
 
     info!("CPU-0 stack address:{:#X}", cpu::get_current_stack_base());
 

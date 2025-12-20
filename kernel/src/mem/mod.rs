@@ -39,7 +39,6 @@ impl PageDescriptor {
 }
 
 pub fn init() {
-    fixed_allocator_init();
     frame_allocator_init();
     virtual_allocator_init();
 }

@@ -215,63 +215,7 @@ where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
     }
 }
 
-pub fn map_kernel_memory(base: usize, total_size: usize) {
-    let heap_start = OLD_HEAP_PTR.load(Ordering::Relaxed);  
-    let size_top = heap_start - base;
-    let mut kernel_end = heap_start + size_of::<HeapWrapper>();
-
-    // Make sure all regions are aligned to PAGE_SIZE, otherwise page mapper will complain 
-    kernel_end += (kernel_end as *const u8).align_offset(PAGE_SIZE);
-    let size_end = total_size - (kernel_end - heap_start) - size_top;
-
-    // To map the entire kernel, break up whole region as the top and bottom halves of the heap region and identity map them separately
-    let mut remap_list = REMAP_LIST.lock(); 
-    remap_list.add_node(RemapEntry { 
-        value: MemoryRegion {
-                base_address: base,
-                size: size_top
-            }, 
-        map_type: IdentityMapped,
-        flags: 0 
-    }).unwrap();
-
-    remap_list.add_node(RemapEntry { 
-        value: MemoryRegion {
-                base_address: kernel_end,
-                size: size_end
-            }, 
-        map_type: IdentityMapped,
-        flags: 0
-    }).unwrap();
-}
-
-pub fn unmap_kernel_memory(base: usize, total_size: usize) {
-    info!("Unmapping kernel identity mapped region");
-
-    let heap_start = OLD_HEAP_PTR.load(Ordering::Relaxed);
-    let size_top = heap_start - base;
-    let kernel_end = heap_start + size_of::<HeapWrapper>();
-    let size_end = total_size - size_of::<HeapWrapper>() - size_top;
-
-    debug!("base={:#X}, heap={:#X}, size_top={}, base_end={:#X}, size_end={}", base, heap_start, size_top, kernel_end, size_end);
-
-    // Remove the kernel identity mapped regions except the heap region
-    crate::mem::unmap_memory(base as *mut u8, size_top).expect("Unable to unmap kernel top identity mapped region");
-    crate::mem::unmap_memory(kernel_end as *mut u8, size_end).expect("Unable to unmap kernel end identity mapped region");
-}
-
 // This function should be called before using fixed allocator routines
 pub fn setup_heap() {
     OLD_HEAP_PTR.store(HEAP.lock().buffer.as_ptr().addr() , Ordering::Relaxed);
-}
-
-pub fn fixed_allocator_init() {
-    REMAP_LIST.lock().add_node(RemapEntry { 
-        value: MemoryRegion { 
-            base_address: OLD_HEAP_PTR.load(Ordering::Relaxed),
-            size: mem::size_of::<HeapWrapper>()
-        }, 
-        map_type: IdentityMapped,
-        flags: 0 
-    }).unwrap();
 }

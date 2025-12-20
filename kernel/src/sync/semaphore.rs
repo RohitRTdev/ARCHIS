@@ -1,15 +1,13 @@
 use core::ptr::NonNull;
 use super::Spinlock;
 use crate::{ds::*, sched};
-use acpica::init;
-use alloc::sync::Arc;
-use kernel_intf::{KError, debug};
-use crate::sched::Task;
+use kernel_intf::KError;
+use crate::sched::KThread;
 
 struct KSemInner {
     max_count: usize,
     counter: isize,
-    blocked_list: DynList<Arc<Spinlock<Task>>>
+    blocked_list: DynList<KThread>
 }
 
 pub struct KSem {

@@ -1,6 +1,7 @@
 #![cfg_attr(not(test), no_std)]
 #![feature(generic_const_exprs)]
 #![feature(likely_unlikely)]
+#![feature(allocator_api)]
 
 mod infra;
 mod hal;

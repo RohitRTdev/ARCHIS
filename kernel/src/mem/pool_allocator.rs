@@ -1,8 +1,9 @@
 use core::alloc::Layout;
 use core::ptr::NonNull;
 use core::marker::PhantomData;
-use crate::hal::get_current_stack_base;
+use core::alloc::AllocError;
 use crate::mem::PageDescriptor;
+use crate::hal::get_current_stack_base;
 use crate::sync::Spinlock;
 use kernel_intf::KError;
 use kernel_intf::debug;
@@ -95,6 +96,9 @@ pub struct PoolAllocator<T> {
     _marker: PhantomData<T>,
 }
 
+#[derive(Clone, Copy)]
+pub struct PoolAllocatorGlobal;
+
 impl<T> PoolAllocator<T> {
     // Push a range of slots as free blocks into the pool's free list
     fn push_free_blocks(pool: &mut Pool, base: *mut u8, slots: usize, block_size: usize) {
@@ -120,19 +124,11 @@ impl<T> PoolAllocator<T> {
             }
         }
     }
-}
 
-impl<T> super::Allocator<T> for PoolAllocator<T> {
-    fn alloc(layout: Layout) -> Result<NonNull<T>, KError> {
-        // Due to our pool allocator's design, the alignment will be same as the size
-        assert!(layout.size() >= size_of::<FreeBlock>() && layout.size() <= PAGE_SIZE
-            && layout.align() <= layout.size() && layout.size() % layout.align() == 0
-            && layout.size() == size_of::<T>());
-
-        let block_size = size_of::<T>();
-        
+    fn allocate_block(layout: Layout) -> Result<NonNull<[u8]>, KError> {
+        let block_size = layout.size();
         let mut cb = POOL_CB.lock();
-
+        
         debug!("Requesting pool allocation {:?}", layout);
         
         // Find or create the pool for this block size
@@ -146,7 +142,7 @@ impl<T> super::Allocator<T> for PoolAllocator<T> {
             let next = unsafe { (*free_block.as_ptr()).next };
             pool.free_list = next;
             
-            return Ok(free_block.cast());
+            return Ok(Self::block_to_slice(free_block, block_size));
         }
 
         // No free slots, allocate a new block and push all slots to free_list
@@ -162,19 +158,16 @@ impl<T> super::Allocator<T> for PoolAllocator<T> {
             let next = unsafe { (*free_block.as_ptr()).next };
             pool.free_list = next;
 
-            return Ok(free_block.cast());
+            return Ok(Self::block_to_slice(free_block, block_size));
         }
 
         Err(KError::OutOfMemory)
     }
 
-    unsafe fn dealloc(ptr: NonNull<T>, layout: Layout) {
-        assert!(layout.size() >= size_of::<FreeBlock>() && layout.size() <= PAGE_SIZE
-            && layout.align() <= layout.size() && layout.size() % layout.align() == 0
-            && layout.size() == size_of::<T>()); 
-
-        let block_size = size_of::<T>();
+    unsafe fn deallocate_block(ptr: NonNull<u8>, layout: Layout) {
+        let block_size = layout.size();
         let mut cb = POOL_CB.lock();
+        
         debug!("Requesting pool deallocation for address={:#X}", ptr.addr());
 
         // Find the pool for this block size and add the released block back to head of free_list
@@ -187,5 +180,58 @@ impl<T> super::Allocator<T> for PoolAllocator<T> {
             debug_assert!(false, "pool_allocator -> dealloc called for unknown pointer :{:#X} and layout:{:?}",
             ptr.as_ptr() as usize, layout);
         }
+    }
+
+    fn block_to_slice(block: NonNull<FreeBlock>, size: usize) -> NonNull<[u8]> {
+        let ptr = block.as_ptr() as *mut u8;
+        
+        unsafe {
+            NonNull::new_unchecked(
+                core::ptr::slice_from_raw_parts_mut(ptr, size)
+            )
+        }
+    }
+
+    fn slice_to_t(slice: NonNull<[u8]>) -> NonNull<T> {
+        let ptr = slice.as_ptr() as *mut u8;
+
+        unsafe {
+            NonNull::new_unchecked(ptr as *mut T)
+        }
+    }
+
+}
+
+impl<T> super::Allocator<T> for PoolAllocator<T> {
+    fn alloc(layout: Layout) -> Result<NonNull<T>, KError> {
+        // Due to our pool allocator's design, the alignment will be same as the size
+        assert!(layout.size() >= size_of::<FreeBlock>() && layout.size() <= PAGE_SIZE
+            && layout.align() <= layout.size() && layout.size() % layout.align() == 0
+            && layout.size() == size_of::<T>());
+
+        Self::allocate_block(layout).map(|item| {
+            Self::slice_to_t(item)
+        })
+    }
+
+    unsafe fn dealloc(ptr: NonNull<T>, layout: Layout) {
+        assert!(layout.size() >= size_of::<FreeBlock>() && layout.size() <= PAGE_SIZE
+            && layout.align() <= layout.size() && layout.size() % layout.align() == 0
+            && layout.size() == size_of::<T>()); 
+
+        Self::deallocate_block(ptr.cast(), layout);
+    }
+}
+
+
+unsafe impl core::alloc::Allocator for PoolAllocatorGlobal {
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        PoolAllocator::<u8>::allocate_block(layout).map_err(|_err| {
+            AllocError
+        })
+    }
+    
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        PoolAllocator::<u8>::deallocate_block(ptr, layout);
     }
 }

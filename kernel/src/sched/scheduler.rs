@@ -1,6 +1,7 @@
 use alloc::sync::Arc;
 use crate::cpu::{MAX_CPUS, PerCpu, Stack, get_panic_base, set_panic_base};
 use crate::hal::{self, create_kernel_context, fetch_context, register_timer_fn, switch_context};
+use crate::mem::PoolAllocatorGlobal;
 use crate::{ds::*, sched};
 use crate::sync::Spinlock;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -10,7 +11,9 @@ use kernel_intf::{KError, debug, info};
 // This is in milliseconds
 pub const QUANTUM: usize = 5;
 const INIT_QUANTA: usize = 10;
-    
+
+pub type KThread = Arc<Spinlock<Task>, PoolAllocatorGlobal>;
+
 static TASK_ID: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, PartialEq)]
@@ -31,19 +34,19 @@ pub struct Task {
 }
 
 impl Task {
-    fn new() -> Arc<Spinlock<Task>> {
+    fn new() -> KThread {
         let id = TASK_ID.fetch_add(1, Ordering::Relaxed);  
         let stack  = Stack::new();
         debug!("Creating task with ID:{} and stack_addr={:#X}", id, unsafe {(*stack).get_stack_base()});
 
-        Arc::new(Spinlock::new(Task {
+        Arc::new_in(Spinlock::new(Task {
             id, 
             stack,
             status: TaskStatus::ACTIVE,
             context: core::ptr::null(),
             quanta: INIT_QUANTA,
             panic_base: 0
-        }))
+        }), PoolAllocatorGlobal)
     }
 
     pub fn get_id(&self) -> usize {
@@ -52,9 +55,9 @@ impl Task {
 }
 
 pub struct TaskQueue {
-    active_tasks: DynList<Arc<Spinlock<Task>>>,
-    waiting_tasks: DynList<Arc<Spinlock<Task>>>,
-    running_task: Option<NonNull<ListNode<Arc<Spinlock<Task>>>>>
+    active_tasks: DynList<KThread>,
+    waiting_tasks: DynList<KThread>,
+    running_task: Option<NonNull<ListNode<KThread>>>
 }
 
 unsafe impl Send for TaskQueue{}
@@ -74,7 +77,7 @@ static SCHEDULER_CON_BLK: PerCpu<Spinlock<TaskQueue>> = PerCpu::new_with(
 );
 
 // Shouldn't call this function from idle task (for now)
-pub fn get_current_task() -> Arc<Spinlock<Task>> {
+pub fn get_current_task() -> KThread {
     let cb = SCHEDULER_CON_BLK.local().lock().running_task;
     assert!(cb.is_some());
     
