@@ -29,6 +29,7 @@ mod tests;
 
 use sync::{Once, Spinlock};
 use cpu::install_interrupt_handler;
+use crate::hal::register_debug_fn;
 use crate::hal::{delay_ns, disable_interrupts, enable_interrupts, read_port_u8};
 use crate::mem::Regions::*;
 use crate::ds::*;
@@ -75,6 +76,21 @@ fn task_spawn() -> ! {
         KSem::new(0, 1)
     });
 
+    register_debug_fn(|| {
+        // This interrupt is currently fired when task is terminated
+        let (id, status) = {
+            let task = sched::get_current_task();
+            let id = task.lock().get_id();
+            let status = task.lock().get_status();
+            (id, status)
+        };
+
+        info!("Called debug handler in task:{} with status: {:?}", id, status);
+
+        // Try killing task once again
+        sched::kill_task(id);
+    });
+
     info!("Active_tasks={}, Waiting_tasks={}, terminated_tasks={}", sched::get_num_active_tasks(), 
     sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks());
 
@@ -118,7 +134,9 @@ fn task_spawn() -> ! {
             sched::kill_task(id);
         }
         else {
-            info!("No more tasks to kill");
+            info!("Killing self");
+            sched::kill_task(1);
+            info!("This shouldn't be printed");
         }
         
         info!("id:{}, Active_tasks={}, Waiting_tasks={}, terminated_tasks={} after", 1, sched::get_num_active_tasks(), 
@@ -126,7 +144,7 @@ fn task_spawn() -> ! {
     }
 }
 
-fn kern_main() {
+fn kern_main() -> ! {
     info!("Starting main kernel init");
     
     WRITE_EVENT.call_once(|| {
@@ -251,6 +269,8 @@ fn key_notifier(_: usize) {
     };
 
     info!("Called keyboard handler in task:{} with status: {:?}", id, status);
+    info!("Notifier: Active_tasks={}, Waiting_tasks={}, terminated_tasks={} after", sched::get_num_active_tasks(),
+    sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks()); 
     KEYBOARD_EVENT.get().unwrap().signal();
     clear_keyboard_output_buffer();
 }

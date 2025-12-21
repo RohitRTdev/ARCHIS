@@ -101,6 +101,13 @@ pub fn get_current_stack_base() -> usize {
     }
 }
 
+#[inline(always)]
+pub fn fire_debug_interrupt() {
+    unsafe {
+        asm::fire_debug_interrupt();
+    }
+}
+
 #[cfg(debug_assertions)]
 pub fn unwind_stack(max_depth: usize, stack_base: usize, address: &mut [usize]) -> usize {
     let mut base = get_current_stack_base();
@@ -129,14 +136,13 @@ pub fn init() -> ! {
     
     crate::mem::init();
 
-    let stack_base = crate::mem::get_virtual_address(crate::cpu::get_current_stack_base(), MapFetchType::Kernel)
-    .expect("Unexpected error. Stack virtual address not found!");
+    let stack_base = crate::cpu::get_current_stack_base();
 
     switch_to_new_address_space(page_mapper::get_kernel_pml4(), stack_base,
         crate::mem::get_virtual_address(tables::kern_addr_space_start as *const () as usize, MapFetchType::Kernel).expect("kern_addr_space_start virtual address not found!"));
 }
 
-// This function should only be called once during init
+// These function should only be called once during init
 // Tells hal that kernel is ready to handle timer interrupts
 pub fn register_timer_fn(handler: fn()) {
     unsafe {
@@ -145,3 +151,10 @@ pub fn register_timer_fn(handler: fn()) {
 
     lapic::enable_timer(timer::BASE_COUNT.load(Ordering::Acquire) as u32);
 }
+
+pub fn register_debug_fn(handler: fn()) {
+    unsafe {
+        handlers::DEBUG_HANDLER_FN = Some(handler);
+    }
+}
+

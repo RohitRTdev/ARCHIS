@@ -51,8 +51,7 @@ pub fn canonicalize_virtual(addr: usize) -> usize {
 pub fn switch_to_new_address_space(pml4_phys: usize, stack_address: usize, kernel_address: usize) -> ! {
     debug!("kern_address_space_start address = {:#X}", kernel_address);
 
-    // Special hooks to tell logger and cpu to update it's internal pointers now
-    crate::cpu::relocate_cpu_init_stack(); 
+    // Special hook to tell logger to update its internal pointers now
     crate::logger::relocate_framebuffer();
      
     unsafe {

@@ -5,11 +5,10 @@ use core::marker::PhantomData;
 use core::mem;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use common::{ceil_div, MemoryRegion, PAGE_SIZE};
+use common::{ceil_div, PAGE_SIZE};
 use kernel_intf::KError;
 use crate::sync::Spinlock;
-use kernel_intf::{info, debug};
-use crate::{RemapEntry, RemapType::*, REMAP_LIST};
+use kernel_intf::info;
 
 #[repr(usize)]
 pub enum Regions {

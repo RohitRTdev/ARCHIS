@@ -1,5 +1,5 @@
 use common::{en_flag, ptr_to_usize};
-use crate::{cpu, mem, hal::enable_interrupts, sync::{Once, Spinlock}};
+use crate::{cpu, hal::enable_interrupts, sync::{Once, Spinlock}};
 use kernel_intf::{debug, info};
 use super::{asm, MAX_INTERRUPT_VECTORS, handlers, lapic, timer};
 
@@ -61,20 +61,22 @@ pub struct TaskStateSegment {
 }
 
 impl TaskStateSegment {
-    pub const fn new(stack_address: u64) -> Self {
-        Self {
+    pub const fn new(stack_address: u64, good_stack: u64) -> Self {
+        let mut task = Self {
             _reserved1: 0,
             rsp0: stack_address,
             rsp1: 0,
             rsp2: 0,
             _reserved2: 0,
-            // We're not going to use IST (Interrupt stack table) mechanism
             ist: [0; 7],
             _reserved3: 0,
             _reserved4: 0,
             // This along with the limit in TSSDescriptor effectively disables IOPB permission bitmap
             iomap_base: core::mem::size_of::<Self>() as u16,
-        }
+        };
+
+        task.ist[0] = good_stack;
+        task
     }
 }
 
@@ -89,9 +91,10 @@ impl IDTDescriptor {
     const TYPE_IDT: u64 = 0xE;
     const TYPE_SHIFT: u64 = 40;
     const SELECTOR_SHIFT: u64 = 16;
+    const IST0_SHIFT: u64 = 32;
 
-    fn new(selector: u64, handler_address: u64) -> [u64; 2] {
-        [Self::P | Self::DPL | (Self::TYPE_IDT << Self::TYPE_SHIFT) |
+    fn new(selector: u64, handler_address: u64, set_ist: bool) -> [u64; 2] {
+        [Self::P | Self::DPL | (Self::TYPE_IDT << Self::TYPE_SHIFT) | ((if set_ist {1} else {0}) << Self::IST0_SHIFT) |
         (selector << Self::SELECTOR_SHIFT) | (handler_address & Self::TARGET_ADDR_LOW_MASK) |
         ((handler_address & Self::TARGET_ADDR_MIDDLE_MASK) << Self::TARGET_ADDR_MIDDLE_SHIFT),
         (handler_address & Self::TARGET_ADDR_HIGH_MASK) >> Self::TARGET_ADDR_HIGH_SHIFT]
@@ -119,15 +122,17 @@ static CPU_TABLE_DATA: Spinlock<TableData> = Spinlock::new (TableData { gdt_arra
 
 static CPU_TSS: Once<TaskStateSegment> = Once::new();
 
-pub extern "C" fn kern_addr_space_start() {
+#[no_mangle]
+pub extern "C" fn kern_addr_space_start() -> ! {
     info!("Switched to new address space");
-    crate::cpu::set_panic_base(super::get_current_stack_base());
+    crate::cpu::set_panic_base(cpu::get_current_stack_base());
     crate::module::complete_handoff();
 
     info!("CPU-0 stack address:{:#X}", cpu::get_current_stack_base());
 
     CPU_TSS.call_once(|| {
-        TaskStateSegment::new(cpu::get_current_stack_base() as u64) 
+        TaskStateSegment::new(cpu::get_current_stack_base() as u64,
+    cpu::get_current_good_stack_base() as u64) 
     });
 
     let tss_base = CPU_TSS.get().unwrap() as *const _ as u64;
@@ -156,11 +161,11 @@ pub extern "C" fn kern_addr_space_start() {
         cpu_table.gdt_layout.base_address = cpu_table.gdt_array.as_ptr() as u64;     
         cpu_table.gdt_layout.limit = (7 * size_of::<u64>() - 1) as u16;
 
-
         debug!("Interrupt stub address for vector 0 -> {:#X}", asm::IDT_TABLE[0] as u64);
 
         for vector in 0..MAX_INTERRUPT_VECTORS {
-            let idt_desc = IDTDescriptor::new(KERNEL_CODE_SELECTOR as u64, asm::IDT_TABLE[vector] as u64);
+            let idt_desc = IDTDescriptor::new(KERNEL_CODE_SELECTOR as u64, asm::IDT_TABLE[vector] as u64,
+            vector == super::DOUBLE_FAULT_VECTOR || vector == super::NMI_FAULT_VECTOR);
             cpu_table.idt[vector * 2] = idt_desc[0];
             cpu_table.idt[vector * 2 + 1] = idt_desc[1]; 
         }
@@ -180,8 +185,6 @@ pub extern "C" fn kern_addr_space_start() {
     timer::init();
     handlers::init();
     
-    //mem::unmap_kernel_memory(kernel_base, total_size);
-
     enable_interrupts(true);
     crate::kern_main();
 } 

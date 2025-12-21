@@ -9,6 +9,7 @@ use crate::sync::Spinlock;
 use crate::hal;
 use crate::module::*;
 
+static DISABLE_CALLSTACK: AtomicBool = AtomicBool::new(false);
 static EARLY_PANIC_PHASE: AtomicBool = AtomicBool::new(true);
 static GLOBAL_PANIC_LOCK: Spinlock<bool> = Spinlock::new(false);
 const STACK_UNWIND_DEPTH: usize = 16;
@@ -18,7 +19,7 @@ pub fn common_panic_handler(mod_name: &str, info: &PanicInfo) -> ! {
 
     kernel_intf::set_panic_mode();
 
-    if EARLY_PANIC_PHASE.load(Ordering::Acquire) {
+    if EARLY_PANIC_PHASE.load(Ordering::Acquire) || DISABLE_CALLSTACK.load(Ordering::Acquire) {
         println!("Kernel panic!!");
         println!("Message: {}", info.message());
         println!("Module: {}", mod_name);
@@ -105,6 +106,10 @@ fn symbol_trace(addr: usize) -> Option<(&'static str, &'static str, usize)> {
 
 pub fn disable_early_panic_phase() {
     EARLY_PANIC_PHASE.store(false, Ordering::Release);
+}
+
+pub fn disable_callstack() {
+    DISABLE_CALLSTACK.store(true, Ordering::Release);
 }
 
 #[cfg(not(test))]

@@ -1,8 +1,8 @@
 use kernel_intf::{debug, info};
 use core::sync::atomic::{AtomicUsize, AtomicPtr, Ordering};
-use crate::cpu::{self, PerCpu, MAX_CPUS, general_interrupt_handler};
+use crate::cpu::{PerCpu, MAX_CPUS, general_interrupt_handler};
+use crate::infra;
 use super::{lapic, timer};
-use crate::sync::Spinlock;
 use crate::mem::on_page_fault;
 use super::lapic::{eoi, get_error};
 use super::cpu::get_bsp_lapic_id;
@@ -10,12 +10,15 @@ use super::MAX_INTERRUPT_VECTORS;
 use super::asm;
 use crate::devices::ioapic::add_redirection_entry;
 
-const PAGE_FAULT_VECTOR: usize = 14;
+pub const PAGE_FAULT_VECTOR: usize = 14;
+pub const DOUBLE_FAULT_VECTOR: usize = 8;
+pub const NMI_FAULT_VECTOR: usize = 2;
 pub const SPURIOUS_VECTOR: usize = 32;
 pub const YIELD_VECTOR: usize = 33;
-pub const TIMER_VECTOR: usize = 34;
-pub const ERROR_VECTOR: usize = 35;
-const USER_VECTOR_START: usize = 36;
+pub const DEBUG_VECTOR: usize = 34;
+pub const TIMER_VECTOR: usize = 35;
+pub const ERROR_VECTOR: usize = 36;
+const USER_VECTOR_START: usize = 37;
 
 static NEXT_AVAILABLE_VECTOR: AtomicUsize = AtomicUsize::new(USER_VECTOR_START);
 
@@ -23,12 +26,13 @@ const EXCEPTION_VECTOR_RANGE: usize = 32;
 
 // This is set at init time and then never changed
 pub static mut KERNEL_TIMER_FN: Option<fn()> = None;
+pub static mut DEBUG_HANDLER_FN: Option<fn()> = None;
 
 static PER_CPU_GLOBAL_CONTEXT: PerCpu<AtomicPtr<u8>> = PerCpu::new_with(
     [const {AtomicPtr::new(core::ptr::null_mut())}; MAX_CPUS]
 );
 
-static VECTOR_TABLE: Spinlock<[fn(usize); MAX_INTERRUPT_VECTORS]> = Spinlock::new([default_handler; MAX_INTERRUPT_VECTORS]);
+static mut VECTOR_TABLE: [fn(usize); MAX_INTERRUPT_VECTORS] = [default_handler; MAX_INTERRUPT_VECTORS];
 const UNDEFINED_STRING: &'static str = "Undefined";
 const EXCP_STRINGS: [&'static str; EXCEPTION_VECTOR_RANGE] = [
     "Divide by zero",
@@ -109,9 +113,11 @@ impl CPUContext {
 extern "C" fn global_interrupt_handler(vector: u64, cpu_context: *const CPUContext) -> *const CPUContext {
     PER_CPU_GLOBAL_CONTEXT.local().store(cpu_context as *mut u8, Ordering::Relaxed);
 
-    VECTOR_TABLE.lock()[vector as usize](vector as usize);
+    unsafe {
+        VECTOR_TABLE[vector as usize](vector as usize);
+    }
 
-    if vector as usize > YIELD_VECTOR {
+    if vector as usize > DEBUG_VECTOR {
         eoi();
     }
 
@@ -123,40 +129,59 @@ fn default_handler(idx: usize) {
 }
 
 pub fn init() {
-    let mut vec_tbl = VECTOR_TABLE.lock();
-    
-    for vector in 0..EXCEPTION_VECTOR_RANGE {
-        vec_tbl[vector] = |idx| {
-            panic!("{} exception!", EXCP_STRINGS[idx]);
-        };
+    unsafe {
+        for vector in 0..EXCEPTION_VECTOR_RANGE {
+            VECTOR_TABLE[vector] = |idx| {
+                // In these cases, we switch to different stack
+                // Even though it's possible to still print the callstack, we don't do it for now
+                if idx == NMI_FAULT_VECTOR || idx == DOUBLE_FAULT_VECTOR {
+                    infra::disable_callstack();
+                }
+                
+                panic!("{} exception!", EXCP_STRINGS[idx]);
+            };
+        }
+
+        VECTOR_TABLE[PAGE_FAULT_VECTOR] = page_fault_handler;
+
+        for vector in USER_VECTOR_START..MAX_INTERRUPT_VECTORS {
+            VECTOR_TABLE[vector] = general_interrupt_handler;
+        }
+
+        VECTOR_TABLE[SPURIOUS_VECTOR] = spurious_handler;
+        VECTOR_TABLE[DEBUG_VECTOR] = debug_handler;
+        VECTOR_TABLE[YIELD_VECTOR] = yield_handler;
+        VECTOR_TABLE[TIMER_VECTOR] = timer_handler;
+        VECTOR_TABLE[ERROR_VECTOR] = error_handler;
     }
-
-    vec_tbl[PAGE_FAULT_VECTOR] = page_fault_handler;
-
-    for vector in USER_VECTOR_START..MAX_INTERRUPT_VECTORS {
-        vec_tbl[vector] = general_interrupt_handler;
-    }
-
-    vec_tbl[SPURIOUS_VECTOR] = spurious_handler;
-    vec_tbl[YIELD_VECTOR] = yield_handler;
-    vec_tbl[TIMER_VECTOR] = timer_handler;
-    vec_tbl[ERROR_VECTOR] = error_handler;
-
     info!("Initialized interrupt handlers");
 }
 
+// Interrupts must be disabled during this call
 pub fn register_interrupt_handler(irq: usize, handler: fn(usize), active_high: bool, is_edge_triggered: bool) -> usize {
     let vector = NEXT_AVAILABLE_VECTOR.fetch_add(1, Ordering::Relaxed);
 
     // We will tie up all IOAPIC interrupts to BSP
     add_redirection_entry(irq, get_bsp_lapic_id(), vector, active_high, is_edge_triggered);    
-    VECTOR_TABLE.lock()[vector] = handler;
+    
+    unsafe {
+        VECTOR_TABLE[vector] = handler;
+    }
 
     vector
 }
 
 fn spurious_handler(_vector: usize) {
     debug!("Detected spurious interrupt!");
+}
+
+fn debug_handler(_vector: usize) {
+    info!("Calling debug handler layer");
+    unsafe {
+        if let Some(handler) = DEBUG_HANDLER_FN {
+            handler();
+        }
+    }
 }
 
 // It's fine to handle these without locks since CPU won't interrupt during this call

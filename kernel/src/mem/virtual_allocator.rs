@@ -1,4 +1,4 @@
-use crate::{REMAP_LIST, cpu::PerCpu, mem::{KERNEL_HALF_OFFSET, KERNEL_HALF_OFFSET_RAW, PageDescriptor, fixed_allocator::Regions::*}};
+use crate::{REMAP_LIST, cpu::{self, PerCpu}, mem::{KERNEL_HALF_OFFSET, KERNEL_HALF_OFFSET_RAW, PageDescriptor, fixed_allocator::Regions::*}};
 use crate::sync::{Once, Spinlock};
 use crate::hal::{self, PageMapper};
 use crate::ds::*;
@@ -199,18 +199,21 @@ impl VirtMemConBlk {
 
         // Remove node from alloc_block_list
         let mut alloc_blk = None;
+        let mut is_no_alloc = false;
         for blk in self.alloc_block_list.iter() {
             if blk.start_virt_address == addr as usize && blk.num_pages == num_pages {
                 alloc_blk = Some(NonNull::from(blk));
-
+                is_no_alloc = (blk.flags & PageDescriptor::NO_ALLOC) != 0;
                 // It is required for the memory being deallocated to have been mapped to physical memory
-                debug_assert!(blk.flags & PageDescriptor::VIRTUAL != 0);
+                debug_assert!((blk.flags & PageDescriptor::VIRTUAL != 0) || is_no_alloc);
                 break;
             }
         }
         if let Some(blk) = alloc_blk {
             unsafe {
-                PHY_MEM_CB.get().unwrap().lock().deallocate(blk.as_ref().start_phy_address as *mut u8, layout).expect(ERROR_MESSAGE);
+                if !is_no_alloc {
+                    PHY_MEM_CB.get().unwrap().lock().deallocate(blk.as_ref().start_phy_address as *mut u8, layout).expect(ERROR_MESSAGE);
+                } 
                 self.alloc_block_list.remove_node(blk);
             }
         }
@@ -282,7 +285,8 @@ impl VirtMemConBlk {
 
         let size = size + (size as *const u8).align_offset(PAGE_SIZE);
     
-        if phys_addr & (PAGE_SIZE - 1) != 0 || virt_addr & (PAGE_SIZE - 1) != 0 {
+        if phys_addr & (PAGE_SIZE - 1) != 0 || virt_addr & (PAGE_SIZE - 1) != 0 
+        || (flags & PageDescriptor::NO_ALLOC) != 0 {
             return Err(KError::InvalidArgument);
         }
 
@@ -536,7 +540,30 @@ pub fn virtual_allocator_init() {
             f(virt_addr);
         }
     });
+    
+    // Create a new stack for boot cpu
+    let stack_raw = kernel_addr_space.allocate(Layout::from_size_align(cpu::TOTAL_STACK_SIZE, PAGE_SIZE).unwrap()
+    , PageDescriptor::VIRTUAL | PageDescriptor::NO_ALLOC).expect("Failed to create space in virtual address for boot cpu stack");
 
+    let stack_raw_phys = PHY_MEM_CB.get().unwrap().lock().allocate(Layout::from_size_align(cpu::INIT_STACK_SIZE, PAGE_SIZE).unwrap())
+    .expect("Failed to create space for physical address space for boot cpu stack");
+
+    #[cfg(feature = "stack_down")]
+    let stack_base = unsafe {
+        stack_raw.add(cpu::INIT_GUARD_PAGE_SIZE)
+    };
+
+    #[cfg(not(feature = "stack_down"))]
+    let stack_base = stack_raw;
+
+    kernel_addr_space.map_memory(stack_raw_phys.addr(), stack_base.addr(), cpu::INIT_STACK_SIZE, PageDescriptor::VIRTUAL)
+    .expect("Failed to map boot cpu stack to kernel virtual address space!");
+
+    debug!("Created boot cpu stack with virtual address: {:#X} and physical address: {:#X}", stack_base.addr(), stack_raw_phys.addr());
+
+    cpu::set_worker_stack_for_boot_cpu(stack_raw);
+
+    // Finalize address space creation
     kernel_addr_space.page_mapper.bootstrap_activate();
 
     ADDRESS_SPACES.call_once(|| {

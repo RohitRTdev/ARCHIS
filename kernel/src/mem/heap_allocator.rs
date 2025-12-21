@@ -85,7 +85,7 @@ unsafe impl GlobalAlloc for Spinlock<LinkedListAllocator> {
         let align = layout.align().max(align_of::<ListNode>());
         let layout = Layout::from_size_align(size, align).unwrap();
         let mut allocator = self.lock();
-        
+
         // If not enough memory is reserved, just skip the search and ask virtual allocator for memory
         if allocator.backing_memory >= size {
             if let Some(node_ptr) = allocator.find_fit(layout) {

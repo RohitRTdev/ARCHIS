@@ -91,7 +91,6 @@ fn apply_relocation(load_base: usize, kernel_size: usize, reloc_sections: &Vec<M
     
     assert_eq!(reloc_sections[0].dest_size, size_of::<Elf64Rela>(), "Relocation section entry size not matching!!");
     let mut rel_relocations = 0;
-    let mut abs_relocations = 0;
     let mut jmp_relocations = 0;
     let mut glob_relocations = 0;
     for shn in reloc_sections {
@@ -113,10 +112,28 @@ fn apply_relocation(load_base: usize, kernel_size: usize, reloc_sections: &Vec<M
 
                     rel_relocations += 1;
                 },
-                R_X86_64_64 => {
-                    abs_relocations += 1;
-                },
-                R_GLOB_DAT => {
+                R_X86_64_64 | R_GLOB_DAT => {
+                    assert!(dyn_tab.is_some());
+
+                    let dyn_entries = unsafe {
+                        let tab = dyn_tab.as_ref().unwrap();
+                        core::slice::from_raw_parts(
+                            tab.dest_addr as *const Elf64Sym,
+                            tab.src_size / tab.dest_size
+                        )
+                    };
+
+                    let sym_idx = (entry.r_info >> 32) as usize;
+                    let sym = &dyn_entries[sym_idx];
+
+                    assert!(sym.st_shndx != SHN_UNDEF, "Undefined symbol in relocation");
+
+                    let value = load_base + sym.st_value as usize + entry.r_addend as usize;
+
+                    unsafe {
+                        *(address as *mut u64) = value as u64;
+                    }
+
                     glob_relocations += 1;
                 },
                 R_JUMP_SLOT => {
@@ -140,7 +157,7 @@ fn apply_relocation(load_base: usize, kernel_size: usize, reloc_sections: &Vec<M
         }
     }
     
-    debug!("Relative relocations = {}, absolute relocations = {}, dynamic relocations = {}, global relocations = {}", rel_relocations, abs_relocations, jmp_relocations, glob_relocations);
+    debug!("Relative relocations = {}, dynamic relocations = {}, global relocations = {}", rel_relocations, jmp_relocations, glob_relocations);
 }
 
 #[cfg(debug_assertions)]

@@ -42,8 +42,6 @@ impl KSem {
             if count <= 0 {
                 let inner_wrap = Arc::clone(&self.inner);
 
-                kernel_intf::info!("Blocking task: {}", cur_task.lock().get_id());
-
                 // Block task
                 inner.blocked_list.add_node(cur_task)?;
                 sched::add_cur_task_to_wait_queue(inner_wrap);
@@ -70,9 +68,7 @@ impl KSem {
                     let node = unsafe {
                         inner.blocked_list.remove_node(wait_task_ptr)
                     };
-                    
-                    kernel_intf::info!("Signalling task: {}", node.lock().get_id());
-                    
+
                     let inner_wrap = Arc::clone(&self.inner);
                     
                     let id = node.lock().get_id();
@@ -96,7 +92,6 @@ impl KSem {
         // The list might not contain the waiting task
         // This might happen if another task called signal on this semaphore before drop_task got a chance to run
         if blocked_task.is_some() {
-            kernel_intf::info!("Dropping task {} from semaphore blocked list", task_id);
             unsafe {
                 inner.blocked_list.remove_node(blocked_task.unwrap());
             }

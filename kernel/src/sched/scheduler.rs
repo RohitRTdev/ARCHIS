@@ -29,7 +29,7 @@ pub enum TaskStatus {
 
 pub struct Task {
     id: usize,
-    stack: *const Stack,
+    stack: Option<Stack>,
     status: TaskStatus,
     context: *const u8,
     quanta: usize,
@@ -38,10 +38,20 @@ pub struct Task {
 }
 
 impl Task {
-    fn new() -> KThread {
+    fn new(alloc_stack: bool) -> Result<KThread, KError> {
+        let stack  = if alloc_stack {
+            Some(Stack::new()?)
+        } else {
+            None
+        };
         let id = TASK_ID.fetch_add(1, Ordering::Relaxed);  
-        let stack  = Stack::new();
-        debug!("Creating task with ID:{} and stack_addr={:#X}", id, unsafe {(*stack).get_stack_base()});
+
+        if alloc_stack {
+            debug!("Creating task with ID:{} and stack_addr={:#X}", id, stack.as_ref().unwrap().get_stack_base());
+        } 
+        else {
+            debug!("Creating task with ID:{}", id);
+        }
 
         let task = Arc::new_in(Spinlock::new(Task {
             id, 
@@ -55,7 +65,7 @@ impl Task {
 
         TASKS.lock().insert(id, Arc::clone(&task));
 
-        task
+        Ok(task)
     }
 
     pub fn get_id(&self) -> usize {
@@ -72,8 +82,8 @@ impl Drop for Task {
         info!("Dropping task:{}", self.id);
         assert!(self.wait_semaphores.get_nodes() == 0);
         
-        unsafe {
-            (*(self.stack as *mut Stack)).destroy();
+        if let Some(stack) = &mut self.stack {
+            stack.destroy();
         }
     }
 }
@@ -143,7 +153,9 @@ pub fn yield_cpu() {
 }
 
 pub fn init() {
-    let init_task = Task::new();
+    let init_task = Task::new(false)
+    .expect("Init task creation failed!!");
+
     init_task.lock().status = TaskStatus::RUNNING;
     init_task.lock().panic_base = get_panic_base();
 
@@ -168,7 +180,6 @@ pub fn add_cur_task_to_wait_queue(wait_semaphore: KSemInnerType) {
         return;
     }
 
-    info!("Setting task {} status to waiting", task.get_id());
     task.wait_semaphores.add_node(wait_semaphore)
     .expect("System in bad state.. Could not add semaphore to task list");
 
@@ -190,8 +201,6 @@ fn remove_wait_semaphore(task: &mut Task, wait_semaphore: KSemInnerType) {
     }
 
     if sem.is_some() {
-        info!("Removing wait semaphore for task: {}", task.get_id());
-        
         unsafe {
             task.wait_semaphores.remove_node(sem.unwrap());
         }
@@ -216,7 +225,7 @@ pub fn signal_waiting_task(task_id: usize, wait_semaphore: KSemInnerType) {
         return;
     }
 
-    let mut waiting_task = None;
+    let mut waiting_task: Option<NonNull<ListNode<Arc<Spinlock<Task>, PoolAllocatorGlobal>>>> = None;
     for task in sched_cb.waiting_tasks.iter() {
         if task.lock().get_id() == task_id {
             waiting_task = Some(NonNull::from(task));
@@ -280,8 +289,7 @@ pub fn kill_task(task_id: usize) {
         // Remove task from active list and add to terminated list
         match status {
             TaskStatus::ACTIVE => {
-                info!("Killing active task");
-                let mut task_l = None;
+                let mut task_l: Option<NonNull<ListNode<Arc<Spinlock<Task>, PoolAllocatorGlobal>>>> = None;
                 for active_task in sched_cb.active_tasks.iter() {
                     if active_task.lock().id == task_id {
                         task_l = Some(NonNull::from(active_task));
@@ -307,7 +315,6 @@ pub fn kill_task(task_id: usize) {
                 }
 
                 if task_l.is_some() {
-                    info!("Killing waiting task from wait list");
                     let task_node = unsafe {
                         ListNode::into_inner(sched_cb.waiting_tasks.remove_node(task_l.unwrap()))
                     };
@@ -316,7 +323,6 @@ pub fn kill_task(task_id: usize) {
 
                 }
                 else {
-                    info!("Killing waiting task still not scheduled out");
                     // Task might not have been scheduled out
                     // In this case, let scheduler take care of it
 
@@ -327,10 +333,9 @@ pub fn kill_task(task_id: usize) {
             },
 
             TaskStatus::RUNNING => {
-                info!("Killing running task");
-                
                 // The current task is killing itself (exit)
                 yield_flag = true;
+                
             },
 
             _ => {
@@ -341,7 +346,6 @@ pub fn kill_task(task_id: usize) {
 
     // Inform semaphore that this task is about to be killed, remove it from the blocked list
     if drop_task {
-        let mut sem_id = 0;
         while this_task.lock().wait_semaphores.get_nodes() != 0 {
             // We do it in this weird fashion since we don't want the task to be locked during call to drop_task
             let (sem_wrap, sem_inner) = {
@@ -350,8 +354,6 @@ pub fn kill_task(task_id: usize) {
                 (Arc::clone(&**sem.unwrap()), NonNull::from(sem.unwrap()))
             };
 
-            info!("Removing wait semaphore {}", sem_id);
-            sem_id += 1;
             KSem::drop_task(sem_wrap, task_id);
 
             unsafe {
@@ -362,9 +364,12 @@ pub fn kill_task(task_id: usize) {
 
     // The current running task is killed, yield remaining context
     if yield_flag {
+        // Yielding tricks rust compiler into thinking that
+        // the stack frame is preserved, thereby not releasing the task
+        // So, explicitly drop it
+        drop(this_task);
         yield_cpu();
     }
-
 }
 
 fn reap_tasks(sched_cb: &mut TaskQueue) {
@@ -379,9 +384,6 @@ fn reap_tasks(sched_cb: &mut TaskQueue) {
         }
         
         TASKS.lock().remove(&id);
-
-        info!("Reaping terminated tasks");
-        info!("Task map length = {}", TASKS.lock().len());
     }   
 }
 
@@ -462,10 +464,8 @@ fn idle_task() -> ! {
 }
 
 pub fn create_task(handler: fn() -> !) -> Result<KThread, KError> {
-    let task = Task::new();
-    let stack_base = unsafe {
-        (*task.lock().stack).get_stack_base()
-    };
+    let task = Task::new(true)?;
+    let stack_base = task.lock().stack.as_ref().unwrap().get_stack_base();
 
     // Setup the initial context
     let context = create_kernel_context(handler, stack_base as *mut u8);

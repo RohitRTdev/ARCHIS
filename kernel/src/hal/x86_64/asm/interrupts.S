@@ -33,3 +33,9 @@ FUNC fire_yield_interrupt
     int $33 
     ret
 ENDF fire_yield_interrupt
+
+FUNC fire_debug_interrupt
+    int $34 
+    ret
+ENDF fire_debug_interrupt
+
