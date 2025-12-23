@@ -9,12 +9,10 @@ use crate::hal::write_port_u8;
 use core::mem::size_of;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::ptr::{read_volatile, write_volatile};
+use common::madt::*;
 
 const MAX_IOAPIC: usize = 4;
 const MAX_INT_OVERRIDE: usize = 20;
-
-const IOAPIC_VER_OFFSET: u32 = 0x1;
-const IOAPIC_REDIR_START_OFFSET: u32 = 0x10;
 
 static NUM_IOAPIC: AtomicUsize = AtomicUsize::new(0);
 static NUM_IOAPIC_REL: AtomicUsize = AtomicUsize::new(0);
@@ -37,33 +35,6 @@ struct IntOverride {
 
 static IOAPIC_LIST: Spinlock<[Ioapic; MAX_IOAPIC]> = Spinlock::new([Ioapic { id: 0, base_address: 0, gsi: 0}; MAX_IOAPIC]);
 static OVERRIDE_LIST: Spinlock<[IntOverride; MAX_INT_OVERRIDE]> = Spinlock::new([IntOverride { irq: 0, gsi: 0, is_edge_triggered: true, is_active_high: true}; MAX_INT_OVERRIDE]);
-
-const MADT_TYPE_IOAPIC: u8 = 1;
-const INT_SRC_OVERRIDE: u8 = 2;
-
-#[repr(C, packed)]
-struct MadtEntryHeader {
-    entry_type: u8,
-    length: u8,
-}
-
-#[repr(C, packed)]
-struct IoapicEntry {
-    header: MadtEntryHeader,
-    id: u8,
-    res: u8,
-    addr: u32,
-    gsi: u32
-}
-
-#[repr(C, packed)]
-struct IntEntry {
-    header: MadtEntryHeader,
-    bus: u8,
-    src: u8,
-    gsi: u32,
-    flags: u16
-}
 
 // Register legacy type IRQ with IOAPIC
 pub fn add_redirection_entry(irq: usize, cpu_lapic_id: usize, vector: usize, active_high: bool, is_edge_triggered: bool) {
@@ -169,7 +140,7 @@ fn parse_madt(madt: &AcpiTableMadt) {
                 };
 
                 let override_desc = IntOverride { 
-                    irq: entry.src as usize, gsi: entry.gsi as usize, is_active_high: (entry.flags & 0x3) == 0x2,
+                    irq: entry.src as usize, gsi: entry.gsi as usize, is_active_high: (entry.flags & 0x3) == 0x1,
                     is_edge_triggered: ((entry.flags >> 2) & 0x3) != 0x3
                 };
    

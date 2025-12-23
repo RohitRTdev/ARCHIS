@@ -186,5 +186,8 @@ pub extern "C" fn kern_addr_space_start() -> ! {
     handlers::init();
     
     enable_interrupts(true);
+    
+#[cfg(not(test))]
+    super::smp::init();
     crate::kern_main();
 } 

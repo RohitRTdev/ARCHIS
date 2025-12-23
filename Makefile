@@ -100,11 +100,11 @@ build_drivers: build_kernel
 
 run_unit_test: build_kernel_test
 	@cargo test --manifest-path=boot/blr/Cargo.toml -- --nocapture
-	@cargo test --manifest-path=kernel/Cargo.toml -- --nocapture
+	@cargo test --features test-kernel --manifest-path=kernel/Cargo.toml -- --nocapture
 
 test:
 	@echo "Starting simulator..."
-	@qemu-system-x86_64 -cpu Skylake-Client,+smap,+smep,+umip,+pge -bios scripts/OVMF.fd\
+	@qemu-system-x86_64 -smp sockets=1,cores=4,threads=2 -cpu Skylake-Client,+smap,+smep,+umip,+pge -bios scripts/OVMF.fd\
  -drive file=$(OUTPUT_DIR)/archis_os.iso,format=raw,if=ide -serial mon:stdio | tee >(sed 's/\x1b\[[0-9;=]*[A-Za-z]//g' > $(OUTPUT_DIR)/con_log.txt)
 
 clean:

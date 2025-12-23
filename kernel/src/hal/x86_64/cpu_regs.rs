@@ -127,7 +127,7 @@ pub fn init() {
         CPUReg::<RFLAGS>::clear(RFLAGS::IOPL | RFLAGS::AC);
 
         // Set this as initial RFLAGS value when creating a new task. Also enable interrupts
-        INIT_RFLAGS = asm::read_rflags() | (1 << 9) | (1 << 16);
+        INIT_RFLAGS = asm::read_rflags() | (1 << 9);
     }
 
 #[cfg(debug_assertions)]

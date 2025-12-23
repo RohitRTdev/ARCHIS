@@ -12,6 +12,10 @@ mod handlers;
 mod cpu;
 mod timer;
 mod lapic;
+
+#[cfg(not(test))]
+mod smp;
+
 pub use cpu::*;
 pub use utils::*;
 pub use page_mapper::*;

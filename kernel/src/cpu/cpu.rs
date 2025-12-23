@@ -14,12 +14,22 @@ pub const INIT_GUARD_PAGE_SIZE: usize = PAGE_SIZE;
 pub const TOTAL_STACK_SIZE: usize = INIT_STACK_SIZE + INIT_GUARD_PAGE_SIZE;
 
 #[cfg_attr(target_arch = "x86_64", repr(align(4096)))]
-struct KStack {
+struct KStackGood {
     stack: [u8; PAGE_SIZE]
 }
 
-static KERN_BACKUP_STACK: KStack = KStack {
+#[cfg_attr(target_arch = "x86_64", repr(align(4096)))]
+struct KStack {
+    stack: [u8; TOTAL_STACK_SIZE]
+}
+
+static KERN_BACKUP_STACK: KStackGood = KStackGood {
     stack: [0; PAGE_SIZE]
+};
+
+#[cfg(debug_assertions)]
+static KERN_STACK: KStack = KStack {
+    stack: [0; TOTAL_STACK_SIZE]
 };
 
 pub struct Stack {
@@ -128,15 +138,25 @@ pub fn init() {
 pub fn register_cpu() -> usize {
     let cpu_id = CPU_ID.fetch_add(1, Ordering::Relaxed);
     let cb = if cpu_id == 0 {
+        #[cfg(debug_assertions)]
+        let stack = Stack {
+            stack_size: INIT_STACK_SIZE,
+            guard_size: INIT_GUARD_PAGE_SIZE,
+            base: NonNull::new(KERN_STACK.stack.as_ptr() as *mut u8).unwrap()
+        };
+        
         // This is prematurely created just to take care of early panic management
+        #[cfg(not(debug_assertions))]
+        let stack = Stack {
+            stack_size: INIT_STACK_SIZE,
+            guard_size: INIT_GUARD_PAGE_SIZE,
+            base: NonNull::new(align_up(hal::get_current_stack_base(), PAGE_SIZE) as *mut u8).unwrap()
+        };
+ 
         CPUControlBlock {
             id: cpu_id,
             // We will not make use of this at this stage. This value is given just to initialize it
-            worker_stack: Stack {
-                stack_size: INIT_STACK_SIZE,
-                guard_size: INIT_GUARD_PAGE_SIZE,
-                base: NonNull::new(align_up(hal::get_current_stack_base(), PAGE_SIZE) as *mut u8).unwrap()
-            },
+            worker_stack: stack, 
             good_stack: Stack {
                 stack_size: PAGE_SIZE,
                 guard_size: 0,
@@ -166,6 +186,12 @@ pub fn register_cpu() -> usize {
     cpu_id
 }
 
+pub fn get_worker_stack(core_id: usize) -> usize {
+    let cpu_list = CPU_LIST.lock();
+
+    cpu_list.iter().find(|cb| cb.id == core_id)
+        .expect("Current core does not have associated cpu descriptor!").worker_stack.get_stack_base()
+}
 
 // This should be called once memory manager is up
 pub fn set_worker_stack_for_boot_cpu(stack_base: *mut u8) {

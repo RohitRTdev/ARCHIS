@@ -14,8 +14,6 @@ mod cpu;
 mod devices;
 mod sched;
 
-
-
 use kernel_intf::{info, debug};
 use common::*;
 
@@ -104,7 +102,7 @@ fn task_spawn() -> ! {
             sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks());
             
             // Task 4, 5 and 6 should be in wait queue
-            if id >= 4 {
+            if id >= 2 {
                 WAIT_EVENT.get().unwrap().wait().unwrap();
             }
 
@@ -146,7 +144,6 @@ fn task_spawn() -> ! {
 
 fn kern_main() -> ! {
     info!("Starting main kernel init");
-    
     WRITE_EVENT.call_once(|| {
         KSem::new(0, 1)
     });
@@ -182,6 +179,7 @@ unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
     logger::init();
 
     info!("Starting aris");
+    
     devices::init();
     cpu::init();
     module::early_init();

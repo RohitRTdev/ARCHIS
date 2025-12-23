@@ -1,3 +1,4 @@
+use crate::hal::{disable_interrupts, enable_interrupts};
 use crate::mem::{MapFetchType, PageDescriptor, allocate_memory, get_virtual_address, map_memory};
 
 use super::asm::{rdmsr, wrmsr};
@@ -22,6 +23,14 @@ const INITIAL_CNT_OFFSET: u32 = 0x838;
 const CURRENT_CNT_OFFSET: u32 = 0x839;
 const DIVIDE_CNT_OFFSET: u32 = 0x83e;
 const SPURIOUS_ENTRY_OFFSET: u32 = 0x80f;
+const APIC_ICR_OFFSET:  u32 = 0x830;
+
+const DELIVERY_INIT: u32 = 0b101 << 8;
+const DELIVERY_SIPI: u32 = 0b110 << 8;
+
+const TRIGGER_LEVEL: u32 = 1 << 15;
+const LEVEL_ASSERT: u32 = 1 << 14;
+
 
 static mut X2APIC_ENABLED: bool = false;
 static mut APIC_BASE: usize = 0;
@@ -48,6 +57,45 @@ fn lapic_write(offset: u32, value: u64) {
         } else {
             let mmio_base = get_apic_mmio_base();
             core::ptr::write_volatile((mmio_base + lapic_mmio_offset(offset) as usize) as *mut u32, value as u32);
+        }
+    }
+}
+
+fn lapic_icr_write(icr_high: u32, icr_low: u32) {
+    unsafe {
+        if X2APIC_ENABLED {
+            // In x2APIC mode, ICR is a single 64-bit MSR
+            let value = ((icr_high as u64) << 32) | (icr_low as u64);
+            wrmsr(APIC_ICR_OFFSET, value);
+        } else {
+            let mmio_base = get_apic_mmio_base();
+            let stat = disable_interrupts();
+            core::ptr::write_volatile((mmio_base + lapic_mmio_offset(APIC_ICR_OFFSET) + 0x10) as *mut u32, icr_high);
+            core::ptr::write_volatile((mmio_base + lapic_mmio_offset(APIC_ICR_OFFSET)) as *mut u32, icr_low);
+            enable_interrupts(stat);
+        }
+    }
+}
+
+fn lapic_icr_read() -> (u32, u32) {
+    unsafe {
+        if X2APIC_ENABLED {
+            let value = rdmsr(APIC_ICR_OFFSET);
+            ((value >> 32) as u32, value as u32)
+        } else {
+            let mmio_base = get_apic_mmio_base();
+            let stat = disable_interrupts();
+            let high = core::ptr::read_volatile((mmio_base + lapic_mmio_offset(APIC_ICR_OFFSET) + 0x10) as *const u32);
+            let mut low = core::ptr::read_volatile((mmio_base + lapic_mmio_offset(APIC_ICR_OFFSET)) as *const u32);
+
+            // Wait for delivery status pending bit to clear 
+            while low & (1 << 12) != 0 {
+                core::hint::spin_loop();
+                low = core::ptr::read_volatile((mmio_base + lapic_mmio_offset(APIC_ICR_OFFSET)) as *const u32);
+            }
+
+            enable_interrupts(stat);
+            (high, low)
         }
     }
 }
@@ -123,7 +171,13 @@ pub fn init() {
 }
 
 pub fn get_lapic_id() -> usize {
-    lapic_read(APIC_ID_OFFSET) as usize
+    let id = lapic_read(APIC_ID_OFFSET);
+    if unsafe {X2APIC_ENABLED} {
+        id as usize
+    }
+    else {
+        ((id >> 24) & 0xff000000) as usize
+    }
 }
 
 pub fn eoi() {
@@ -133,7 +187,12 @@ pub fn eoi() {
 pub fn get_error() -> u64 {
     // This write is required to get latest error status
     lapic_write(ERROR_STS_OFFSET, 0);
+    
     lapic_read(ERROR_STS_OFFSET)
+}
+
+pub fn clear_error() {
+    lapic_write(ERROR_STS_OFFSET, 0);
 }
 
 // This initial setup is required for measuring the timer frequency
@@ -166,4 +225,56 @@ pub fn enable_timer(init_count: u32) {
 
 pub fn setup_timer_value(init_count: u32) {
     lapic_write(INITIAL_CNT_OFFSET, init_count as u64);
+}
+
+pub fn lapic_wait_icr_idle() {
+    if unsafe {!X2APIC_ENABLED} {
+        while lapic_read(APIC_ICR_OFFSET) & (1 << 12) != 0 {
+            core::hint::spin_loop();
+        }
+    }
+}
+
+fn create_apic_dw(apic_id: u32) -> u32 {
+    if unsafe {X2APIC_ENABLED} {
+        apic_id
+    }
+    else {
+        apic_id << 24
+    }
+}
+
+pub fn send_ipi(apic_id: u32, vector: u8) {
+   lapic_icr_write(
+create_apic_dw(apic_id),
+    vector as u32); 
+}
+
+pub fn send_init_ipi(apic_id: u32) {
+    lapic_icr_write(
+        create_apic_dw(apic_id),
+        DELIVERY_INIT |
+        TRIGGER_LEVEL |
+        LEVEL_ASSERT
+    );
+    
+    lapic_wait_icr_idle();
+}
+
+pub fn send_init_deassert(apic_id: u32) {
+    lapic_icr_write(
+    create_apic_dw(apic_id),
+        DELIVERY_INIT |
+        TRIGGER_LEVEL 
+    );
+    
+    lapic_wait_icr_idle();
+}
+
+pub fn send_sipi(apic_id: u32, vector: u8) {
+    lapic_icr_write(
+    create_apic_dw(apic_id),
+        DELIVERY_SIPI |
+        vector as u32 
+    );
 }

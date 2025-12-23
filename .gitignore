@@ -3,4 +3,5 @@
 *stub*
 output
 **/target
+trampoline_offsets.rs
 .vscode

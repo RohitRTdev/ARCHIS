@@ -11,3 +11,4 @@ num-traits = { version = "*", default-features = false }
 
 [features]
 acpi = []
+test-kernel = []

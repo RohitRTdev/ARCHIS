@@ -190,6 +190,31 @@ pub fn complete_handoff() {
                         *(address as *mut u64) = (load_base + entry.r_addend as usize) as u64;
                     }
                 },
+                R_X86_64_64 | R_GLOB_DAT => {
+                    assert!(dyn_tab.is_some());
+
+                    let dyn_entries = unsafe {
+                        let tab = dyn_tab.as_ref().unwrap();
+                        core::slice::from_raw_parts(
+                            tab.start as *const Elf64Sym,
+                            tab.size / tab.entry_size
+                        )
+                    };
+
+                    let sym_idx = (entry.r_info >> 32) as usize;
+                    let sym = &dyn_entries[sym_idx];
+
+                    assert!(
+                        sym.st_shndx != SHN_UNDEF,
+                        "Undefined symbol in absolute relocation"
+                    );
+
+                    let value = load_base + sym.st_value as usize + entry.r_addend as usize;
+
+                    unsafe {
+                        *(address as *mut u64) = value as u64;
+                    }
+                }
                 R_JUMP_SLOT => {
                     assert!(dyn_tab.is_some());
                     let dyn_entries = unsafe {

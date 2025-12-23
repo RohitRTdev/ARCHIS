@@ -137,8 +137,14 @@ pub fn init() {
                 if idx == NMI_FAULT_VECTOR || idx == DOUBLE_FAULT_VECTOR {
                     infra::disable_callstack();
                 }
+
+                if idx == DOUBLE_FAULT_VECTOR {
+                    panic!("{} exception!\nPossible stack overflow??", EXCP_STRINGS[idx]);
+                }
+                else {
+                    panic!("{} exception!", EXCP_STRINGS[idx]);
+                }
                 
-                panic!("{} exception!", EXCP_STRINGS[idx]);
             };
         }
 
@@ -158,16 +164,12 @@ pub fn init() {
 }
 
 // Interrupts must be disabled during this call
-pub fn register_interrupt_handler(irq: usize, handler: fn(usize), active_high: bool, is_edge_triggered: bool) -> usize {
+pub fn register_interrupt_handler(irq: usize, active_high: bool, is_edge_triggered: bool) -> usize {
     let vector = NEXT_AVAILABLE_VECTOR.fetch_add(1, Ordering::Relaxed);
 
     // We will tie up all IOAPIC interrupts to BSP
     add_redirection_entry(irq, get_bsp_lapic_id(), vector, active_high, is_edge_triggered);    
     
-    unsafe {
-        VECTOR_TABLE[vector] = handler;
-    }
-
     vector
 }
 

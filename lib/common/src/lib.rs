@@ -4,6 +4,9 @@ mod utils;
 pub use utils::*;
 pub mod elf;
 
+#[cfg(any(feature = "acpi", feature = "test-kernel"))]
+pub mod madt;
+
 #[cfg(target_arch="x86_64")]
 pub const PAGE_SIZE: usize = 4096;
 pub const MAX_DESCRIPTORS: usize = 200;
