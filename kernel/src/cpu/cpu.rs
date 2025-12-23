@@ -13,6 +13,8 @@ pub const INIT_STACK_SIZE: usize  = PAGE_SIZE * 3;
 pub const INIT_GUARD_PAGE_SIZE: usize = PAGE_SIZE;
 pub const TOTAL_STACK_SIZE: usize = INIT_STACK_SIZE + INIT_GUARD_PAGE_SIZE;
 
+static TOTAL_CPUS: AtomicUsize = AtomicUsize::new(1);
+
 #[cfg_attr(target_arch = "x86_64", repr(align(4096)))]
 struct KStackGood {
     stack: [u8; PAGE_SIZE]
@@ -39,6 +41,14 @@ pub struct Stack {
 }
 
 impl Stack {
+    const fn create() -> Self {
+        Self {
+            guard_size: 0,
+            stack_size: 0,
+            base: NonNull::dangling()
+        }
+    }
+
     // Create STACK + GUARD page. The guard page will remain unmapped
     // This is to allow us to catch any stack overflow scenarios
     pub fn new() -> Result<Self, KError> {
@@ -129,14 +139,26 @@ unsafe impl Send for CPUControlBlock {}
 pub const MAX_CPUS: usize = 64; 
 
 static CPU_ID: AtomicUsize = AtomicUsize::new(0);
-static CPU_LIST: Spinlock<FixedList<CPUControlBlock, {Region4 as usize}>> = Spinlock::new(List::new());
+static CPU_LIST: PerCpu<Spinlock<CPUControlBlock>> = PerCpu::new_with(
+    [const {Spinlock::new(CPUControlBlock{id: 0, worker_stack: Stack::create(), 
+    good_stack: Stack::create(), panic_base: 0})}; MAX_CPUS]);
 
 pub fn init() {
     register_cpu();
 }
 
+pub fn get_total_cores() -> usize {
+    TOTAL_CPUS.load(Ordering::Relaxed)
+}
+
+pub fn set_total_cores(total_count: usize) {
+    TOTAL_CPUS.store(total_count, Ordering::Release);
+}
+
 pub fn register_cpu() -> usize {
     let cpu_id = CPU_ID.fetch_add(1, Ordering::Relaxed);
+    assert!(cpu_id < TOTAL_CPUS.load(Ordering::Acquire));
+
     let cb = if cpu_id == 0 {
         #[cfg(debug_assertions)]
         let stack = Stack {
@@ -180,17 +202,20 @@ pub fn register_cpu() -> usize {
 
     info!("Registered CPU with core_id:{} and stack:{:#X}", cpu_id, cb.worker_stack.get_stack_top());
 
-    CPU_LIST.lock().add_node(cb).expect("Failed to add CPU control block to the list");
+    unsafe {
+        *CPU_LIST.get(cpu_id).lock() = cb;
+    }
 
     disable_early_panic_phase();
     cpu_id
 }
 
 pub fn get_worker_stack(core_id: usize) -> usize {
-    let cpu_list = CPU_LIST.lock();
+    let cpu_list = unsafe {
+        CPU_LIST.get(core_id).lock()
+    };
 
-    cpu_list.iter().find(|cb| cb.id == core_id)
-        .expect("Current core does not have associated cpu descriptor!").worker_stack.get_stack_base()
+    cpu_list.worker_stack.get_stack_base()
 }
 
 // This should be called once memory manager is up
@@ -198,50 +223,33 @@ pub fn set_worker_stack_for_boot_cpu(stack_base: *mut u8) {
     let stack = Stack {stack_size: INIT_STACK_SIZE, guard_size: INIT_GUARD_PAGE_SIZE, 
         base: NonNull::new(stack_base).unwrap()};
 
-    let core_id = hal::get_core();
-    let mut cpu_list = CPU_LIST.lock();
+    let mut cpu_list = CPU_LIST.local().lock();
 
-    cpu_list.iter_mut().find(|cb| cb.id == core_id)
-        .expect("Could not find cpu descriptor for boot cpu")
-        .worker_stack = stack;
+    cpu_list.worker_stack = stack;
 }
 
 pub fn get_current_stack_base() -> usize {
-    let core_id = hal::get_core();
-    let cpu_list = CPU_LIST.lock();
+    let cpu_list = CPU_LIST.local().lock();
 
-    cpu_list.iter().find(|cb| cb.id == core_id)
-        .and_then(|cb| Some(cb.worker_stack.get_stack_base()))
-        .expect("Current core does not have associated cpu descriptor!")
+    cpu_list.worker_stack.get_stack_base()
 }
 
 pub fn get_current_good_stack_base() -> usize {
-    let core_id = hal::get_core();
-    let cpu_list = CPU_LIST.lock();
+    let cpu_list = CPU_LIST.local().lock();
 
-    cpu_list.iter().find(|cb| cb.id == core_id)
-        .and_then(|cb| Some(cb.good_stack.get_stack_base()))
-        .expect("Current core does not have associated cpu descriptor!")
+    cpu_list.good_stack.get_stack_base()
 }
 
 pub fn get_panic_base() -> usize {
-    let core_id = hal::get_core();
-    let cpu_list = CPU_LIST.lock();
+    let cpu_list = CPU_LIST.local().lock();
 
-    cpu_list.iter().find(|cb| cb.id == core_id)
-        .and_then(|cb| Some(cb.panic_base))
-        .expect("Invalid core ID!!")
+    cpu_list.panic_base
 }
 
 pub fn set_panic_base(base: usize) {
-    let core_id = hal::get_core();
-    let mut cpu_list = CPU_LIST.lock();
+    let mut cpu_list = CPU_LIST.local().lock();
 
-    if let Some(cb) = cpu_list.iter_mut().find(|cb| cb.id == core_id) {
-        cb.panic_base = base;
-    } else {
-        panic!("Unable to find CPU control block for core_id:{}", core_id);
-    }
+    cpu_list.panic_base = base;
 }
 
 // Usual cacheline size

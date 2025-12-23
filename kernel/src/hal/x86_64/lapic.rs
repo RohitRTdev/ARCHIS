@@ -176,7 +176,7 @@ pub fn get_lapic_id() -> usize {
         id as usize
     }
     else {
-        ((id >> 24) & 0xff000000) as usize
+        ((id >> 24) & 0xff) as usize
     }
 }
 

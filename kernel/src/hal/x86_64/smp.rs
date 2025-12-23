@@ -1,5 +1,5 @@
 use crate::{hal::get_bsp_lapic_id, mem::{PageDescriptor, map_memory}};
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 use acpica::AcpiTableMadt;
 use crate::BOOT_INFO;
 use crate::mem::PHY_MEM_CB;
@@ -13,6 +13,11 @@ use common::PAGE_SIZE;
 use super::page_mapper;
 use super::lapic;
 use super::timer;
+use super::cpu::get_core;
+use super::tables;
+use super::cpu_regs;
+use super::sleep;
+use super::disable_interrupts;
 
 #[derive(Debug)]
 struct Lapic {
@@ -33,7 +38,7 @@ static LAPIC_LIST: Spinlock<DynList<Lapic>> = Spinlock::new(List::new());
 static NMI_LIST: Spinlock<DynList<Nmi>> = Spinlock::new(List::new());
 
 static AP_INIT_COMPLETE: AtomicBool = AtomicBool::new(false);
-
+static AP_CORES_INIT: AtomicUsize = AtomicUsize::new(1);
 static AP_TRAMPOLINE: &[u8] = include_bytes!(env!("TRAMPOLINE_BIN"));
 
 include!("asm/trampoline_offsets.rs");
@@ -165,7 +170,10 @@ pub fn init() {
 
     parse_madt(madt_tab);
 
-    info!("Found {} enabled logical cores in system", LAPIC_LIST.lock().get_nodes());
+    let total_cores = LAPIC_LIST.lock().get_nodes();
+    cpu::set_total_cores(total_cores);
+    
+    info!("Found {} enabled logical cores in system", total_cores);
 
     let tramp_start = AP_TRAMPOLINE.as_ptr().addr();
     let tramp_size = AP_TRAMPOLINE.len(); 
@@ -208,7 +216,12 @@ pub fn init() {
             continue;
         } 
 
+        // This registers CPU at kernel level
         cpu::register_cpu();
+
+        // This registers CPU at HAL level
+        super::register_cpu(core.id, idx);
+        
         let stack_base = cpu::get_worker_stack(idx);
 
         debug!("Setting stack base {:#X} for core {}", stack_base, idx);
@@ -247,12 +260,31 @@ pub fn init() {
 
     // From this point on, pages can be freely allocated from any range in the physical address space
     PHY_MEM_CB.get().unwrap().lock().disable_upper_limit();
+
+    // Wait for all cores to initialize before proceeding
+    while AP_CORES_INIT.load(Ordering::Acquire) < total_cores {
+        core::hint::spin_loop();
+    } 
 }
 
 #[no_mangle]
 extern "C" fn ap_init() -> ! {
+    disable_interrupts();
+    
+    // Signal BSP that this core is up
     AP_INIT_COMPLETE.store(true, Ordering::SeqCst);
+    lapic::init();
 
-    info!("Starting new core...");
-    crate::hal::halt();
+    info!("Starting AP init for core {}", get_core());
+    
+    cpu_regs::init();
+    tables::build_gdt();
+    tables::register_tables();
+    timer::init();
+
+    AP_CORES_INIT.fetch_add(1, Ordering::Release);
+    info!("AP core {} going to sleep", get_core());
+    
+    // This will internally enable interrupts
+    sleep();
 }

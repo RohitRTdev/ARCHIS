@@ -7,7 +7,7 @@ pub struct Once<T> {
     value: UnsafeCell<Option<T>>,
 }
 
-unsafe impl<T> Sync for Once<T> where T: Sync {}
+unsafe impl<T> Sync for Once<T> where T: Send {}
 
 impl<T> Once<T> {
     pub const fn new() -> Self {

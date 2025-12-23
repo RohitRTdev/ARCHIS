@@ -13,6 +13,8 @@ struct Cpu {
 static PRE_INIT_PHASE: AtomicBool = AtomicBool::new(true);
 static CPU_LIST: Spinlock<DynList<Cpu>> = Spinlock::new(List::new());
 
+// This provides the logical cpu id
+// BSP will always be given an ID of 0, followed by a contiguous assignment for remaining cpus
 pub fn get_core() -> usize {
     // LAPIC is not initialized yet
     if PRE_INIT_PHASE.load(Ordering::Relaxed) {
@@ -30,6 +32,10 @@ pub fn register_cpu(apic_id: usize, logical_id: usize) {
     info!("Register cpu: {} with apic_id:{}", logical_id, apic_id);
 
     PRE_INIT_PHASE.store(false, Ordering::Relaxed);
+}
+
+pub fn get_apic_id(core: usize) -> usize {
+    CPU_LIST.lock().iter().find(|cb| cb.logical_id == core).unwrap().apic_id
 }
 
 pub fn get_bsp_lapic_id() -> usize {

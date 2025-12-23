@@ -1,7 +1,10 @@
-use kernel_intf::{debug, info};
+use kernel_intf::{KError, debug, info};
 use core::sync::atomic::{AtomicUsize, AtomicPtr, Ordering};
-use crate::cpu::{PerCpu, MAX_CPUS, general_interrupt_handler};
+use core::ptr::NonNull;
+use crate::cpu::{self, MAX_CPUS, PerCpu, general_interrupt_handler};
+use crate::hal::{delay_ns, get_core};
 use crate::infra;
+use crate::sync::{KSem, Spinlock};
 use super::{lapic, timer};
 use crate::mem::on_page_fault;
 use super::lapic::{eoi, get_error};
@@ -9,6 +12,7 @@ use super::cpu::get_bsp_lapic_id;
 use super::MAX_INTERRUPT_VECTORS;
 use super::asm;
 use crate::devices::ioapic::add_redirection_entry;
+use crate::ds::*;
 
 pub const PAGE_FAULT_VECTOR: usize = 14;
 pub const DOUBLE_FAULT_VECTOR: usize = 8;
@@ -18,7 +22,19 @@ pub const YIELD_VECTOR: usize = 33;
 pub const DEBUG_VECTOR: usize = 34;
 pub const TIMER_VECTOR: usize = 35;
 pub const ERROR_VECTOR: usize = 36;
-const USER_VECTOR_START: usize = 37;
+pub const IPI_VECTOR: usize = 37;
+const USER_VECTOR_START: usize = 38;
+
+pub enum IPIRequestType {
+    NEW_TASK
+}
+
+pub struct IPIRequest {
+    req_type: IPIRequestType,
+    core: usize,
+    wait_mutex: KSem
+}
+
 
 static NEXT_AVAILABLE_VECTOR: AtomicUsize = AtomicUsize::new(USER_VECTOR_START);
 
@@ -31,6 +47,8 @@ pub static mut DEBUG_HANDLER_FN: Option<fn()> = None;
 static PER_CPU_GLOBAL_CONTEXT: PerCpu<AtomicPtr<u8>> = PerCpu::new_with(
     [const {AtomicPtr::new(core::ptr::null_mut())}; MAX_CPUS]
 );
+
+static IPI_REQUESTS: Spinlock<DynList<IPIRequest>> = Spinlock::new(List::new());
 
 static mut VECTOR_TABLE: [fn(usize); MAX_INTERRUPT_VECTORS] = [default_handler; MAX_INTERRUPT_VECTORS];
 const UNDEFINED_STRING: &'static str = "Undefined";
@@ -159,6 +177,7 @@ pub fn init() {
         VECTOR_TABLE[YIELD_VECTOR] = yield_handler;
         VECTOR_TABLE[TIMER_VECTOR] = timer_handler;
         VECTOR_TABLE[ERROR_VECTOR] = error_handler;
+        VECTOR_TABLE[IPI_VECTOR] = ipi_handler;
     }
     info!("Initialized interrupt handlers");
 }
@@ -250,4 +269,51 @@ pub fn create_kernel_context(handler: fn() -> !, stack_base: *mut u8) -> *const 
         (sp as *mut CPUContext).write(context);
     }
     sp as *const u8
+}
+
+fn ipi_handler(_vector: usize) {
+    // Search the requests list to find the first request aimed at this cpu
+    let mut ipi_queue = IPI_REQUESTS.lock();
+    let mut ipi_req = None;
+    for req in ipi_queue.iter() {
+        if req.core == get_core() {
+            ipi_req = Some(NonNull::from(req));
+            break;
+        }
+    }
+
+    if let Some(req) = ipi_req {
+        let req_info: &ListNode<IPIRequest> = unsafe {&*req.as_ptr()};
+        match req_info.req_type {
+            IPIRequestType::NEW_TASK => {
+                debug!("Got IPI for new task...");
+                delay_ns(5_000_000_000);
+                debug!("Signalling sender cpu...");
+            }
+        }
+
+        req_info.wait_mutex.signal();
+
+        unsafe {
+            ipi_queue.remove_node(req);
+        }
+    }
+}
+
+// Function should only be called after scheduler is up
+pub fn notify_core(req_type: IPIRequestType, target_core: usize) -> Result<KSem, KError> {
+    assert!(target_core < cpu::get_total_cores());
+    
+    let apic_id = super::get_apic_id(target_core);
+
+    let wait_sem = KSem::new(0, 1);
+    let req = IPIRequest {
+        req_type, core: target_core, wait_mutex: wait_sem.clone()
+    };
+
+    IPI_REQUESTS.lock().add_node(req)?;
+
+    lapic::send_ipi(apic_id as u32, IPI_VECTOR as u8);
+
+    Ok(wait_sem)
 }

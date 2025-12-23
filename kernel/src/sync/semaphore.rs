@@ -97,4 +97,10 @@ impl KSem {
             }
         }
     }
+
+    pub fn clone(&self) -> Self {
+        KSem {
+            inner: Arc::clone(&self.inner)
+        }
+    }
 }
