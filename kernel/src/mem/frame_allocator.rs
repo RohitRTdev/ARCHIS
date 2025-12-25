@@ -9,13 +9,18 @@ use core::alloc::Layout;
 use core::ptr::NonNull;
 
 #[cfg(target_arch = "x86_64")]
-const ARCH_PHY_LIMIT: u64 = 0xffffffffffffffff;
+const ARCH_PHY_UPPER_LIMIT: u64 = 0xffffffffffffffff;
+
+#[cfg(target_arch = "x86_64")]
+const ARCH_PHY_LOWER_LIMIT: u64 = 0;
 
 pub struct PhyMemConBlk {
     total_memory: usize,
     avl_memory: usize,
 #[cfg(target_arch = "x86_64")]
     hard_limit: u64,
+#[cfg(target_arch = "x86_64")]
+    lower_limit: u64,
     free_block_list: FixedList<PageDescriptor, {Region0 as usize}>,
     alloc_block_list: FixedList<PageDescriptor, {Region0 as usize}>, 
 }
@@ -28,8 +33,10 @@ impl PhyMemConBlk {
 
         // Track the block with the smallest number of pages that can satisfy above request
         for block in self.free_block_list.iter_mut() {
-            // Also check if it satisfies the upper limit constraint
-            if block.num_pages >= pages && block.start_phy_address + block.num_pages * PAGE_SIZE - 1 <= self.hard_limit as usize {
+            // Also check if it satisfies the upper & lower limit constraints
+            if block.num_pages >= pages && 
+            block.start_phy_address + pages * PAGE_SIZE - 1 <= self.hard_limit as usize && 
+            block.start_phy_address >= self.lower_limit as usize {
                 if let Some(val) = &smallest_blk {
                     if block.num_pages < val.num_pages {
                         smallest_blk = Some(block);
@@ -61,6 +68,12 @@ impl PhyMemConBlk {
             return Err(KError::OutOfMemory);
         }
     }
+    
+    #[cfg(target_arch = "x86_64")]
+    pub fn configure_lower_limit(&mut self, lower_limit: u64) {
+        info!("Configuring frame allocator lower limit:{:#X}", lower_limit);
+        self.lower_limit = lower_limit;
+    }
 
     #[cfg(target_arch = "x86_64")]
     pub fn configure_upper_limit(&mut self, upper_limit: u64) {
@@ -69,9 +82,10 @@ impl PhyMemConBlk {
     }
     
     #[cfg(target_arch = "x86_64")]
-    pub fn disable_upper_limit(&mut self) {
-        info!("Disabling frame allocator upper limit");
-        self.hard_limit = ARCH_PHY_LIMIT;
+    pub fn disable_limits(&mut self) {
+        info!("Disabling frame allocator upper and lower limit");
+        self.hard_limit = ARCH_PHY_UPPER_LIMIT;
+        self.lower_limit = ARCH_PHY_LOWER_LIMIT;
     }
 
     pub fn allocate(&mut self, layout: Layout) -> Result<*mut u8, KError> {
@@ -168,7 +182,8 @@ pub fn frame_allocator_init() {
     let mut init_mem_cb = PhyMemConBlk {
         total_memory: 0,
         avl_memory: 0,
-        hard_limit: ARCH_PHY_LIMIT,
+        hard_limit: ARCH_PHY_UPPER_LIMIT,
+        lower_limit: ARCH_PHY_LOWER_LIMIT,
         free_block_list: List::new(),
         alloc_block_list: List::new()
     };
@@ -251,7 +266,8 @@ pub fn test_init_allocator() {
     let cb = PhyMemConBlk {
         total_memory: 18 * PAGE_SIZE,
         avl_memory: 18 * PAGE_SIZE,
-        hard_limit: ARCH_PHY_LIMIT, 
+        hard_limit: ARCH_PHY_UPPER_LIMIT,
+        lower_limit: ARCH_PHY_LOWER_LIMIT,
         free_block_list,
         alloc_block_list: List::new()
     };
@@ -282,7 +298,8 @@ pub fn test_init_allocator_for_virtual() {
     let cb = PhyMemConBlk {
         total_memory: 100 * PAGE_SIZE,
         avl_memory: 100 * PAGE_SIZE,
-        hard_limit: ARCH_PHY_LIMIT,
+        hard_limit: ARCH_PHY_UPPER_LIMIT,
+        lower_limit: ARCH_PHY_LOWER_LIMIT,
         free_block_list,
         alloc_block_list: List::new()
     };

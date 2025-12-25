@@ -13,7 +13,8 @@ ap_trampoline_start:
     movw %ax, %ds
     movw %ax, %es
     movw %ax, %ss
-    movw $0x7000, %sp // We're just loading a value here. Won't use it      
+    movw $0, %sp
+    // Here, assembler assumes 32 bits is required and 0x67 prefix is emitted
 _patch1:
     lgdt gdt_desc
 
@@ -21,8 +22,9 @@ _patch1:
     movl %cr0, %eax
     orl  $0x1, %eax        
     movl %eax, %cr0
+    // Ensure that offset is 32 bits (Force assembler to emit 0x66 prefix)
 _patch2:
-    ljmp $CODE32_SEL, $pmode_entry
+    ljmpl $CODE32_SEL, $pmode_entry
 
 .align 8
 gdt:
@@ -30,7 +32,8 @@ gdt:
     .quad 0x00cf9a000000ffff      // 32-bit code 
     .quad 0x00cf92000000ffff      // 32-bit data 
     .quad 0x00af9a000000ffff      // 64-bit code 
-    .quad 0x00af92000000ffff      // 64-bit data 
+    .quad 0x0020920000000000      // 64-bit data
+
 gdt_end:
 
 gdt_desc:

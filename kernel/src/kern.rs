@@ -159,14 +159,14 @@ fn kern_main() -> ! {
 
     sched::init();
 
-    sched::create_task(|| -> ! {
-        debug!("Waiting for task!!");
-        let sem = hal::notify_core(hal::IPIRequestType::NEW_TASK, 1).unwrap();
-        
-        sem.wait().unwrap();
-        debug!("Received task completion notification");
-        loop{}
-    }).unwrap();
+    //sched::create_task(|| -> ! {
+    //    debug!("Waiting for task!!");
+    //    let sem = hal::notify_core(hal::IPIRequestType::NEW_TASK, 1).unwrap();
+    //    
+    //    sem.wait().unwrap();
+    //    debug!("Received task completion notification");
+    //    loop{}
+    //}).unwrap();
 
 
     //sched::create_task(task_spawn).unwrap();

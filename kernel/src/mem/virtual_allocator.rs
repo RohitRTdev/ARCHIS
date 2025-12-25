@@ -509,8 +509,11 @@ pub fn virtual_allocator_init() {
     let remap_list = REMAP_LIST.lock();
 
     // All page tables that are mapped must be below 4GB. This is to later support MP init
-#[cfg(target_arch = "x86_64")]
-    PHY_MEM_CB.get().unwrap().lock().configure_upper_limit((1 << 32) - 1);
+#[cfg(target_arch = "x86_64")] 
+    {
+        PHY_MEM_CB.get().unwrap().lock().configure_upper_limit((1 << 32) - 1); // 4GB
+        PHY_MEM_CB.get().unwrap().lock().configure_lower_limit(1 << 20); // 1MB
+    }
 
     let mut kernel_addr_space = VirtMemConBlk::new(true);
     // First map the identity mapped regions

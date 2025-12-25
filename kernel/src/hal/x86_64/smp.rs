@@ -155,12 +155,11 @@ unsafe fn patch_trampoline(load_addr: *mut u8, pml4: u32, ap_init: u64) {
     (ap_entry as *mut u64).write(ap_init);
 
     // Apply manual relocation to instructions
-    (load_addr.add(_PATCH1 + 4) as *mut u16).write_unaligned(gdt_desc as u16);
-    (load_addr.add(_PATCH2 + 1) as *mut u16).write_unaligned((load_addr.addr() + PMODE_ENTRY) as u16);
+    (load_addr.add(_PATCH1 + 4) as *mut u32).write_unaligned(gdt_desc as u32);
+    (load_addr.add(_PATCH2 + 2) as *mut u32).write_unaligned((load_addr.addr() + PMODE_ENTRY) as u32);
     (load_addr.add(_PATCH3 + 1) as *mut u32).write_unaligned((load_addr.addr() + PML4_PHYS) as u32);
     (load_addr.add(_PATCH4 + 1) as *mut u32).write_unaligned((load_addr.addr() + LMODE_ENTRY) as u32);
 }
-
 
 #[cfg(feature = "acpi")]
 pub fn init() {
@@ -182,7 +181,10 @@ pub fn init() {
 
     let ap_start_code = {
         let mut frame_allocator = PHY_MEM_CB.get().unwrap().lock();
-        frame_allocator.configure_upper_limit((1 << 20) - 1);
+        // Theoretically, any address below 1MB should be fine. However, in practice have noted that
+        // addresses above 0x80000 seem to be having some issues
+        frame_allocator.configure_upper_limit(0x80000);
+        frame_allocator.configure_lower_limit(0);
         
         let addr = frame_allocator.allocate(Layout::from_size_align(tramp_size, PAGE_SIZE).unwrap());
 
@@ -259,7 +261,7 @@ pub fn init() {
     }
 
     // From this point on, pages can be freely allocated from any range in the physical address space
-    PHY_MEM_CB.get().unwrap().lock().disable_upper_limit();
+    PHY_MEM_CB.get().unwrap().lock().disable_limits();
 
     // Wait for all cores to initialize before proceeding
     while AP_CORES_INIT.load(Ordering::Acquire) < total_cores {
