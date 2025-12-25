@@ -1,6 +1,6 @@
 use crate::{hal::get_bsp_lapic_id, mem::{PageDescriptor, map_memory}};
 use core::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
-use acpica::AcpiTableMadt;
+use crate::acpica::{self, AcpiTableMadt};
 use crate::BOOT_INFO;
 use crate::mem::PHY_MEM_CB;
 use crate::ds::*;

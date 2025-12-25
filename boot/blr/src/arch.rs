@@ -144,6 +144,10 @@ fn apply_relocation(load_base: usize, kernel_size: usize, reloc_sections: &Vec<M
                     };
 
                     let sym_idx = (entry.r_info >> 32) as usize;
+                    
+                    if dyn_entries[sym_idx].st_shndx == SHN_UNDEF {
+                        panic!("Undefined symbol found during relocation");
+                    }
 
                     let value = load_base + dyn_entries[sym_idx].st_value as usize;
 

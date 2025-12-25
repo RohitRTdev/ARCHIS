@@ -14,6 +14,9 @@ mod cpu;
 mod devices;
 mod sched;
 
+#[cfg(feature = "acpi")]
+mod acpica;
+
 use kernel_intf::{info, debug};
 use common::*;
 
@@ -161,7 +164,7 @@ fn kern_main() -> ! {
 
     //sched::create_task(|| -> ! {
     //    debug!("Waiting for task!!");
-    //    let sem = hal::notify_core(hal::IPIRequestType::NEW_TASK, 1).unwrap();
+    //    let sem = hal::notify_core(hal::IPIRequestType::NewTask, 1).unwrap();
     //    
     //    sem.wait().unwrap();
     //    debug!("Received task completion notification");

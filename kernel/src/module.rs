@@ -204,10 +204,9 @@ pub fn complete_handoff() {
                     let sym_idx = (entry.r_info >> 32) as usize;
                     let sym = &dyn_entries[sym_idx];
 
-                    assert!(
-                        sym.st_shndx != SHN_UNDEF,
-                        "Undefined symbol in absolute relocation"
-                    );
+                    if dyn_entries[sym_idx].st_shndx == SHN_UNDEF {
+                        panic!("Could not find definition for symbol: {} during absolute relocation", stringizer(dyn_entries[sym_idx].st_name as usize));
+                    }
 
                     let value = load_base + sym.st_value as usize + entry.r_addend as usize;
 

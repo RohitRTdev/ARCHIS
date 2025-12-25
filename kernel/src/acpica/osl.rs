@@ -2,7 +2,7 @@ use core::ptr;
 use core::ffi::{c_char, c_void, CStr};
 use kernel_intf::info;
 
-use crate::types::*;
+use super::types::*;
 
 #[no_mangle]
 extern "C" fn AcpiOsInitialize() -> ACPI_STATUS {
@@ -375,3 +375,7 @@ extern "C" fn AcpiOsSignal(function: u32, info: *const c_void) -> ACPI_STATUS {
     AE_OK
 }
 
+#[no_mangle]
+extern "C" fn AcpiOsEnterSleep(sleep_state: u8, reg_a_val: u32, reg_b_val: u32) -> ACPI_STATUS {
+    panic!("Aris currently does not support HW reduced ACPI platforms");
+}

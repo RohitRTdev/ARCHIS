@@ -1,5 +1,5 @@
 use core::ptr::read_unaligned;
-use crate::types::{AcpiTable, AcpiTableHeader};
+use super::types::{AcpiTable, AcpiTableHeader};
 
 // These are helper table functions that can be used before/after acpica init
 fn fetch_acpi_table_core(rsdp_ptr: *const u8, signature: &str) -> Option<*const u8> {

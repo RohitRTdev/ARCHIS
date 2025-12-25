@@ -1,5 +1,5 @@
 use crate::BOOT_INFO;
-use acpica::*;
+use crate::acpica::{self, *};
 use crate::Spinlock;
 use kernel_intf::info;
 use common::MemoryRegion;

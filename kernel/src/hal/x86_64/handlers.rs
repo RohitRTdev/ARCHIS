@@ -26,7 +26,7 @@ pub const IPI_VECTOR: usize = 37;
 const USER_VECTOR_START: usize = 38;
 
 pub enum IPIRequestType {
-    NEW_TASK
+    NewTask
 }
 
 pub struct IPIRequest {

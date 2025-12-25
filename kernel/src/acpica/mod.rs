@@ -1,5 +1,3 @@
-#![cfg_attr(not(test), no_std)]
-
 mod osl;
 mod types;
 mod table;

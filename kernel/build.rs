@@ -4,6 +4,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::collections::HashSet;
+
+use walkdir::WalkDir;
     
 const MAX_VECTORS: usize = 256;
 
@@ -161,7 +163,7 @@ fn build_trampoline(path: &Path, out_dir: &Path, asm_dir: &Path, target: &str) {
     println!("cargo:rustc-env=TRAMPOLINE_BIN={}", bin.display());
 }
 
-fn generate_trampoline_offsets(obj: &Path, out: &String) {
+fn generate_trampoline_offsets(obj: &Path, out: &str) {
     let output = Command::new("llvm-nm")
         .args(["-n", obj.to_str().unwrap()])
         .output()
@@ -192,6 +194,56 @@ fn generate_trampoline_offsets(obj: &Path, out: &String) {
     }
 
     fs::write(out, contents).expect("Failed to write trampoline_offsets.rs");
+}
+
+fn build_acpica(out_dir: &Path, target: &str) {
+    let acpica_src = Path::new("src/acpica/acpica_c");
+    let mut c_files = Vec::new();
+    for entry in WalkDir::new(acpica_src)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map(|ext| ext == "c").unwrap_or(false))
+    {
+        println!("cargo:rerun-if-changed={}", entry.path().display());
+        c_files.push(entry.path().to_owned());
+    }
+
+    for file in &c_files {
+        let file_stem = file.file_stem().unwrap().to_string_lossy();
+        let obj_path = out_dir.join(format!("{}.o", file_stem));
+
+        let status = Command::new("clang")
+            .args(&[
+                "-c",
+                "-fPIC",
+                "-O2",
+                "-msoft-float",
+                "-mno-sse",
+                "-mno-sse2",
+                "-mno-avx",
+                "-mno-mmx",
+                "-fno-tree-vectorize",
+                "-fno-vectorize",
+                "-fno-slp-vectorize",
+                "-fno-builtin",
+                "-nostdlib",
+                "-ffreestanding",
+                "-fno-lto",
+                "-Isrc/acpica/acpica_c/include",
+                "-target", &target,
+                file.to_str().unwrap(),
+                "-o",
+                obj_path.to_str().unwrap(),
+            ])
+            .status()
+            .expect("Failed to run clang");
+
+        if !status.success() {
+            panic!("Failed to compile {:?}", file);
+        }
+
+        println!("cargo:rustc-link-arg={}", obj_path.display());
+    }
 }
 
 
@@ -227,4 +279,10 @@ fn main() {
             } 
         }
     }
+    
+    if env::var("CARGO_FEATURE_ACPI").is_ok() {
+        println!("Building acpica files from source");
+        build_acpica(out_dir.as_path(), target.as_str());
+    } 
+
 }
