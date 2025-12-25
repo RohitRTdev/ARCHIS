@@ -89,10 +89,6 @@ impl Drop for Task {
     fn drop(&mut self) {
         info!("Dropping task:{}", self.id);
         assert!(self.wait_semaphores.get_nodes() == 0);
-        
-        if let Some(stack) = &mut self.stack {
-            stack.destroy();
-        }
     }
 }
 
@@ -146,8 +142,8 @@ pub fn get_current_task() -> Option<KThread> {
 }
 
 pub fn get_num_active_tasks() -> usize {
-    // +1 since we need to account for the running task
-    SCHEDULER_CON_BLK.local().lock().active_tasks.get_nodes() + 1
+    let sched_cb = SCHEDULER_CON_BLK.local().lock();
+    sched_cb.active_tasks.get_nodes() + if sched_cb.running_task.is_some() {1} else {0}
 }
 
 pub fn get_num_waiting_tasks() -> usize {
@@ -192,7 +188,14 @@ pub fn init() {
             SCHEDULER_CON_BLK.get(core).lock()
         };
 
-        sched_cb.idle_task_stack = NonNull::new(stack_base as *mut u8).unwrap();
+        // We need to create separate stack for idle task on cpu 0, since the current stack is used by init task
+        if core == 0 {
+            let stack = Stack::into_inner(&mut Stack::new().expect("Could not create worker stack for cpu 0"));
+            sched_cb.idle_task_stack = stack; 
+        }
+        else {
+            sched_cb.idle_task_stack = NonNull::new(stack_base as *mut u8).unwrap();
+        }
     } 
 
     enable_scheduler_timer();
@@ -253,7 +256,7 @@ pub fn signal_waiting_task(task_id: usize, wait_semaphore: KSemInnerType) {
         return;
     }
 
-    let mut waiting_task: Option<NonNull<ListNode<Arc<Spinlock<Task>, PoolAllocatorGlobal>>>> = None;
+    let mut waiting_task= None;
     for task in sched_cb.waiting_tasks.iter() {
         if task.lock().get_id() == task_id {
             waiting_task = Some(NonNull::from(task));
@@ -304,7 +307,7 @@ pub fn kill_task(task_id: usize) {
         return;
     }
 
-    let this_task = this_task.unwrap();
+    let this_task: Arc<Spinlock<Task>, PoolAllocatorGlobal> = this_task.unwrap();
     let core = this_task.lock().core;
 
     {
@@ -407,16 +410,20 @@ pub fn kill_task(task_id: usize) {
     }
 }
 
-fn reap_tasks(sched_cb: &mut TaskQueue) {
-    while sched_cb.terminated_tasks.get_nodes() != 0 {
-        let task = NonNull::from(sched_cb.terminated_tasks.first().unwrap());
-        let id = unsafe {
-            (*task.as_ptr()).lock().get_id()
+// We do all this moving out of stuff and into other stuff drama in order to avoid holding any lock during signal operation
+fn reap_tasks(mut term_list: DynList<KThread>) {
+    while term_list.get_nodes() != 0 {
+        let task = NonNull::from(term_list.first().unwrap());
+        let task_inner = unsafe {
+            &*task.as_ptr()
         };
+        
+        task_inner.signal();
+        let id = task_inner.lock().get_id();
 
         info!("Removing task {}", id);
         unsafe {
-            sched_cb.terminated_tasks.remove_node(task);
+            term_list.remove_node(task);
         }
         
         TASKS.lock().remove(&id);
@@ -426,68 +433,47 @@ fn reap_tasks(sched_cb: &mut TaskQueue) {
 // Select the ready/active task at head of queue
 // Run the task if it has non-zero quanta left
 pub fn schedule() {
-    let mut sched_cb = SCHEDULER_CON_BLK.local().lock();
+    let term_tasks = {
+        let mut sched_cb = SCHEDULER_CON_BLK.local().lock();
 
-    reap_tasks(&mut *sched_cb);
+        // We ensure that we don't encounter the scenario where there is no running task but tasks exist in the ready queue
+        if sched_cb.running_task.is_some() {
+            let current_task = sched_cb.running_task.unwrap(); 
+            let mut task_info = unsafe {
+                current_task.as_ref().lock()
+            };
 
-    // We ensure that we don't encounter the scenario where there is no running task but tasks exist in the ready queue
-    if sched_cb.running_task.is_some() {
-        let current_task = sched_cb.running_task.unwrap(); 
-        let mut task_info = unsafe {
-            current_task.as_ref().lock()
-        };
+            task_info.quanta = task_info.quanta.saturating_sub(1);
+            
+            // Switch to new task
+            if task_info.status == TaskStatus::WAITING || task_info.status == TaskStatus::TERMINATED ||
+            task_info.quanta == 0 {
+                // First choose new task
+                // We create NonNull here so that the node can later be removed
+                let head_task = sched_cb.active_tasks.first().and_then(|item| {
+                    Some(NonNull::from(item))
+                });
 
-        task_info.quanta = task_info.quanta.saturating_sub(1);
-        
-        // Switch to new task
-        if task_info.status == TaskStatus::WAITING || task_info.status == TaskStatus::TERMINATED ||
-        task_info.quanta == 0 {
-            // First choose new task
-            // We create NonNull here so that the node can later be removed
-            let head_task = sched_cb.active_tasks.first().and_then(|item| {
-                Some(NonNull::from(item))
-            });
-
-            if head_task.is_some() {
-                let mut head_task_info = unsafe {
-                    head_task.unwrap().as_ref().lock()
-                };
-                
-                assert!(head_task_info.status == TaskStatus::ACTIVE); 
-                head_task_info.status = TaskStatus::RUNNING;
-                head_task_info.quanta = INIT_QUANTA;
-                let new_context = head_task_info.context;
-                
-                let prev_context = fetch_context();
-                task_info.context = prev_context;
-                if task_info.status == TaskStatus::RUNNING {
-                    task_info.status = TaskStatus::ACTIVE; 
-                }
-
-                // This ensures that list doesn't delete the node. It simply removes it from the list 
-                let head_task = unsafe {
-                    ListNode::into_inner(sched_cb.active_tasks.remove_node(head_task.unwrap()))
-                };
-
-                if task_info.status == TaskStatus::WAITING {
-                    sched_cb.waiting_tasks.insert_node_at_tail(current_task);
-                }
-                else if task_info.status == TaskStatus::TERMINATED {
-                    sched_cb.terminated_tasks.insert_node_at_tail(current_task);
-                }
-                else {
-                    sched_cb.active_tasks.insert_node_at_tail(current_task);
-                }
-
-                sched_cb.running_task = Some(head_task);
-
-                set_panic_base(head_task_info.panic_base);
-                switch_context(new_context);
-            }
-            else {
-                if task_info.status != TaskStatus::RUNNING {
+                if head_task.is_some() {
+                    let mut head_task_info = unsafe {
+                        head_task.unwrap().as_ref().lock()
+                    };
+                    
+                    assert!(head_task_info.status == TaskStatus::ACTIVE); 
+                    head_task_info.status = TaskStatus::RUNNING;
+                    head_task_info.quanta = INIT_QUANTA;
+                    let new_context = head_task_info.context;
+                    
                     let prev_context = fetch_context();
                     task_info.context = prev_context;
+                    if task_info.status == TaskStatus::RUNNING {
+                        task_info.status = TaskStatus::ACTIVE; 
+                    }
+
+                    // This ensures that list doesn't delete the node. It simply removes it from the list 
+                    let head_task = unsafe {
+                        ListNode::into_inner(sched_cb.active_tasks.remove_node(head_task.unwrap()))
+                    };
 
                     if task_info.status == TaskStatus::WAITING {
                         sched_cb.waiting_tasks.insert_node_at_tail(current_task);
@@ -495,48 +481,73 @@ pub fn schedule() {
                     else if task_info.status == TaskStatus::TERMINATED {
                         sched_cb.terminated_tasks.insert_node_at_tail(current_task);
                     }
-                    prep_idle_task(&mut sched_cb);
+                    else {
+                        sched_cb.active_tasks.insert_node_at_tail(current_task);
+                    }
+
+                    sched_cb.running_task = Some(head_task);
+
+                    set_panic_base(head_task_info.panic_base);
+                    switch_context(new_context);
                 }
                 else {
-                    // No other task to run. Continue with this task
-                    task_info.quanta = INIT_QUANTA;
+                    if task_info.status != TaskStatus::RUNNING {
+                        let prev_context = fetch_context();
+                        task_info.context = prev_context;
+
+                        if task_info.status == TaskStatus::WAITING {
+                            sched_cb.waiting_tasks.insert_node_at_tail(current_task);
+                        }
+                        else if task_info.status == TaskStatus::TERMINATED {
+                            sched_cb.terminated_tasks.insert_node_at_tail(current_task);
+                        }
+                        prep_idle_task(&mut sched_cb);
+                    }
+                    else {
+                        // No other task to run. Continue with this task
+                        task_info.quanta = INIT_QUANTA;
+                    }
                 }
             }
         }
-    }
-    else {
-        // This means we're in idle task. Check and run any active tasks
-        let head_task = sched_cb.active_tasks.first().and_then(|item| {
-            Some(NonNull::from(item))
-        });
-
-        debug!("Moving out of idle task on core {}", hal::get_core());
-
-        if head_task.is_some() {
-            let mut head_task_info = unsafe {
-                head_task.unwrap().as_ref().lock()
-            };
-
-            assert!(head_task_info.status == TaskStatus::ACTIVE); 
-            head_task_info.status = TaskStatus::RUNNING;
-            head_task_info.quanta = INIT_QUANTA;
-            let new_context = head_task_info.context;
-            
-            let head_task = unsafe {
-                ListNode::into_inner(sched_cb.active_tasks.remove_node(head_task.unwrap()))
-            };
-            sched_cb.running_task = Some(head_task);
-
-            set_panic_base(head_task_info.panic_base);
-            switch_context(new_context);
-            debug!("Moved out of idle task on core {}", hal::get_core());
-        }
         else {
-            if sched_cb.terminated_tasks.get_nodes() == 0 {
+            // This means we're in idle task. Check and run any active tasks
+            let head_task = sched_cb.active_tasks.first().and_then(|item| {
+                Some(NonNull::from(item))
+            });
+
+            debug!("Moving out of idle task on core {}", hal::get_core());
+
+            if head_task.is_some() {
+                let mut head_task_info = unsafe {
+                    head_task.unwrap().as_ref().lock()
+                };
+
+                assert!(head_task_info.status == TaskStatus::ACTIVE); 
+                head_task_info.status = TaskStatus::RUNNING;
+                head_task_info.quanta = INIT_QUANTA;
+                let new_context = head_task_info.context;
+                
+                let head_task = unsafe {
+                    ListNode::into_inner(sched_cb.active_tasks.remove_node(head_task.unwrap()))
+                };
+                sched_cb.running_task = Some(head_task);
+
+                set_panic_base(head_task_info.panic_base);
+                switch_context(new_context);
+                debug!("Moved out of idle task on core {}", hal::get_core());
+            }
+            else {
                 disable_scheduler_timer(); 
             }
         }
-    }
+        
+        unsafe {
+            sched_cb.terminated_tasks.move_list()
+        }
+    };
+
+    reap_tasks(term_tasks);
 }
 
 fn prep_idle_task(sched_cb: &mut TaskQueue) {
@@ -545,9 +556,7 @@ fn prep_idle_task(sched_cb: &mut TaskQueue) {
     set_panic_base(sched_cb.idle_task_stack.as_ptr() as usize);
     switch_context(context);
     
-    if sched_cb.terminated_tasks.get_nodes() == 0 {
-        disable_scheduler_timer(); 
-    }
+    disable_scheduler_timer(); 
 }
 
 fn idle_task() -> ! {
@@ -557,6 +566,7 @@ fn idle_task() -> ! {
 
 fn notify_other_cpu(target_core: usize) {
     if hal::get_core() == target_core {
+        enable_scheduler_timer();
         return;
     }
 
@@ -592,7 +602,21 @@ pub fn create_task(handler: fn() -> !) -> Result<KThread, KError> {
 
 
 impl Spinlock<Task> {
-//    pub fn wait(&self) {
-//        let task = 
-//    }
+    fn signal(&self) {
+        let sem = {
+            let task = self.lock();
+            task.term_notify.clone() 
+        };
+
+        sem.signal();
+    }
+
+    pub fn wait(&self) -> Result<(), KError> {
+        let sem = {
+            let task = self.lock();
+            task.term_notify.clone() 
+        };
+
+        sem.wait()
+    }
 }

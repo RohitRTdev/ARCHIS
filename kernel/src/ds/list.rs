@@ -125,6 +125,24 @@ impl<T, A: Allocator<ListNode<T>>> List<T, A> {
         }
     }
 
+    // This function does a manual move of the list structure
+    // Under normal circumstances this is bad, but in certain cases it's useful
+    // since it allows us to bypass rust's move semantics
+    pub unsafe fn move_list(&mut self) -> Self {
+        let moved_list = Self {
+            head: self.head,
+            tail: self.tail,
+            num_nodes: self.num_nodes,
+            _marker: PhantomData
+        };
+
+        self.head = None;
+        self.tail = None;
+        self.num_nodes = 0;
+
+        moved_list
+    } 
+
     pub fn add_node(&mut self, data: T) -> Result<(), KError> {
         let layout = Layout::from_size_align(size_of::<ListNode<T>>(), align_of::<ListNode<T>>()).unwrap();
         let addr = A::alloc(layout)?.as_ptr();

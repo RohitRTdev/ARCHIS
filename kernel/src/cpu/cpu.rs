@@ -37,7 +37,8 @@ static KERN_STACK: KStack = KStack {
 pub struct Stack {
     guard_size: usize,
     stack_size: usize,
-    base: NonNull<u8>
+    base: NonNull<u8>,
+    allocated: bool
 }
 
 impl Stack {
@@ -45,7 +46,8 @@ impl Stack {
         Self {
             guard_size: 0,
             stack_size: 0,
-            base: NonNull::dangling()
+            base: NonNull::dangling(),
+            allocated: false
         }
     }
 
@@ -73,10 +75,23 @@ impl Stack {
 
         map_memory(stack_raw_phys.addr(), stack_base.addr(), stack_size, PageDescriptor::VIRTUAL)?;
 
-        Ok(Self {guard_size: guard_size, stack_size: stack_size, base: NonNull::new(stack_raw).unwrap() })
+        Ok(Self {guard_size: guard_size, stack_size: stack_size, base: NonNull::new(stack_raw).unwrap(), 
+        allocated: true })
     }
 
-    pub fn destroy(&mut self) {
+    pub fn into_inner(stack: &mut Stack) -> NonNull<u8> {
+        assert!(stack.allocated == true);
+        stack.allocated = false;
+
+        NonNull::new(stack.get_stack_base() as *mut u8).unwrap() 
+    }
+
+    fn destroy(&mut self) {
+        if !self.allocated {
+            return;
+        }
+
+        kernel_intf::debug!("Destroying stack...");
         deallocate_memory(self.get_stack_top() as *mut u8, Layout::from_size_align(self.stack_size, PAGE_SIZE).unwrap(), PageDescriptor::VIRTUAL)
         .expect("Stack base address wrong during unmap??");
         
@@ -88,6 +103,8 @@ impl Stack {
             , PageDescriptor::VIRTUAL)
             .expect("Failed to deallocate memory for stack");
         }
+
+        self.allocated = false;
     }
     
     #[cfg(feature = "stack_down")]
@@ -124,6 +141,12 @@ impl Stack {
     #[inline(always)]
     pub fn get_stack_top(&self) -> usize {
         self.base.as_ptr().addr() + self.stack_size
+    }
+}
+
+impl Drop for Stack {
+    fn drop(&mut self) {
+        self.destroy();
     }
 }
 
@@ -164,7 +187,8 @@ pub fn register_cpu() -> usize {
         let stack = Stack {
             stack_size: INIT_STACK_SIZE,
             guard_size: INIT_GUARD_PAGE_SIZE,
-            base: NonNull::new(KERN_STACK.stack.as_ptr() as *mut u8).unwrap()
+            base: NonNull::new(KERN_STACK.stack.as_ptr() as *mut u8).unwrap(),
+            allocated: true
         };
         
         // This is prematurely created just to take care of early panic management
@@ -172,7 +196,8 @@ pub fn register_cpu() -> usize {
         let stack = Stack {
             stack_size: INIT_STACK_SIZE,
             guard_size: INIT_GUARD_PAGE_SIZE,
-            base: NonNull::new(align_up(hal::get_current_stack_base(), PAGE_SIZE) as *mut u8).unwrap()
+            base: NonNull::new(align_up(hal::get_current_stack_base(), PAGE_SIZE) as *mut u8).unwrap(),
+            allocated: false
         };
  
         CPUControlBlock {
@@ -182,7 +207,8 @@ pub fn register_cpu() -> usize {
             good_stack: Stack {
                 stack_size: PAGE_SIZE,
                 guard_size: 0,
-                base: NonNull::new(KERN_BACKUP_STACK.stack.as_ptr() as *mut u8).unwrap()
+                base: NonNull::new(KERN_BACKUP_STACK.stack.as_ptr() as *mut u8).unwrap(),
+                allocated: true
             },
             panic_base: hal::get_current_stack_base()
         }
@@ -221,7 +247,7 @@ pub fn get_worker_stack(core_id: usize) -> usize {
 // This should be called once memory manager is up
 pub fn set_worker_stack_for_boot_cpu(stack_base: *mut u8) {
     let stack = Stack {stack_size: INIT_STACK_SIZE, guard_size: INIT_GUARD_PAGE_SIZE, 
-        base: NonNull::new(stack_base).unwrap()};
+        base: NonNull::new(stack_base).unwrap(), allocated: true};
 
     let mut cpu_list = CPU_LIST.local().lock();
 
