@@ -80,7 +80,7 @@ fn task_spawn() -> ! {
     register_debug_fn(|| {
         // This interrupt is currently fired when task is terminated
         let (id, status) = {
-            let task = sched::get_current_task();
+            let task = sched::get_current_task().unwrap();
             let id = task.lock().get_id();
             let status = task.lock().get_status();
             (id, status)
@@ -97,7 +97,7 @@ fn task_spawn() -> ! {
 
     for _ in 0..5 {
         tasks.push_back(sched::create_task(|| {
-            let id = sched::get_current_task().lock().get_id(); 
+            let id = sched::get_current_task().unwrap().lock().get_id(); 
             info!("Running task: {}", id);
             TASK_COUNTER.get().unwrap().signal();
             
@@ -164,7 +164,7 @@ fn kern_main() -> ! {
 
     //sched::create_task(|| -> ! {
     //    debug!("Waiting for task!!");
-    //    let sem = hal::notify_core(hal::IPIRequestType::NewTask, 1).unwrap();
+    //    let sem = hal::notify_core(hal::IPIRequestType::SchedChange, 1).unwrap();
     //    
     //    sem.wait().unwrap();
     //    debug!("Received task completion notification");
@@ -172,7 +172,7 @@ fn kern_main() -> ! {
     //}).unwrap();
 
 
-    //sched::create_task(task_spawn).unwrap();
+    sched::create_task(task_spawn).unwrap();
 
     //sched::create_task(producer).unwrap();
     //sched::create_task(consumer).unwrap();
@@ -272,14 +272,19 @@ const SCANCODE_SET1_TO_ASCII: [Option<u8>; 58] = [
 ];
 
 fn key_notifier(_: usize) {
-    let (id, status) = {
+    {
         let task = sched::get_current_task();
-        let id = task.lock().get_id();
-        let status = task.lock().get_status();
-        (id, status)
+        if task.is_none() {
+            info!("Called keyboard handler from idle task on core {}", hal::get_core());
+        }
+        else {
+            let task = task.unwrap();
+            let id = task.lock().get_id();
+            let status = task.lock().get_status();
+            info!("Called keyboard handler in task:{} with status: {:?} on core {}", id, status, hal::get_core());
+        }
     };
 
-    info!("Called keyboard handler in task:{} with status: {:?}", id, status);
     info!("Notifier: Active_tasks={}, Waiting_tasks={}, terminated_tasks={} after", sched::get_num_active_tasks(),
     sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks()); 
     KEYBOARD_EVENT.get().unwrap().signal();

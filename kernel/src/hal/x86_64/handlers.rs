@@ -2,7 +2,7 @@ use kernel_intf::{KError, debug, info};
 use core::sync::atomic::{AtomicUsize, AtomicPtr, Ordering};
 use core::ptr::NonNull;
 use crate::cpu::{self, MAX_CPUS, PerCpu, general_interrupt_handler};
-use crate::hal::{delay_ns, get_core};
+use crate::hal::{delay_ns, enable_scheduler_timer, get_core};
 use crate::infra;
 use crate::sync::{KSem, Spinlock};
 use super::{lapic, timer};
@@ -26,7 +26,7 @@ pub const IPI_VECTOR: usize = 37;
 const USER_VECTOR_START: usize = 38;
 
 pub enum IPIRequestType {
-    NewTask
+    SchedChange
 }
 
 pub struct IPIRequest {
@@ -41,7 +41,6 @@ static NEXT_AVAILABLE_VECTOR: AtomicUsize = AtomicUsize::new(USER_VECTOR_START);
 const EXCEPTION_VECTOR_RANGE: usize = 32;
 
 // This is set at init time and then never changed
-pub static mut KERNEL_TIMER_FN: Option<fn()> = None;
 pub static mut DEBUG_HANDLER_FN: Option<fn()> = None;
 
 static PER_CPU_GLOBAL_CONTEXT: PerCpu<AtomicPtr<u8>> = PerCpu::new_with(
@@ -160,6 +159,7 @@ pub fn init() {
                     panic!("{} exception!\nPossible stack overflow??", EXCP_STRINGS[idx]);
                 }
                 else {
+                    debug!("{:?}", unsafe {*(fetch_context() as *const CPUContext)});
                     panic!("{} exception!", EXCP_STRINGS[idx]);
                 }
                 
@@ -208,11 +208,7 @@ fn debug_handler(_vector: usize) {
 // It's fine to handle these without locks since CPU won't interrupt during this call
 // This is true since we are already in interrupt handler and further interrupts are masked by current design
 fn timer_handler(_vector: usize) {
-    unsafe {
-        if let Some(handler) = KERNEL_TIMER_FN {
-            handler();
-        }
-    }
+    crate::sched::schedule();
 
     // Reload the timer
     lapic::setup_timer_value(timer::BASE_COUNT.load(Ordering::Relaxed) as u32);
@@ -220,11 +216,7 @@ fn timer_handler(_vector: usize) {
 
 // Do the same thing as timer handler, except we don't reload the timer register and we won't send EOI
 fn yield_handler(_vector: usize) {
-    unsafe {
-        if let Some(handler) = KERNEL_TIMER_FN {
-            handler();
-        }
-    }
+    crate::sched::schedule();
 }
 
 fn error_handler(_vector: usize) {
@@ -285,10 +277,9 @@ fn ipi_handler(_vector: usize) {
     if let Some(req) = ipi_req {
         let req_info: &ListNode<IPIRequest> = unsafe {&*req.as_ptr()};
         match req_info.req_type {
-            IPIRequestType::NEW_TASK => {
+            IPIRequestType::SchedChange => {
                 debug!("Got IPI for new task...");
-                delay_ns(5_000_000_000);
-                debug!("Signalling sender cpu...");
+                crate::sched::schedule();
             }
         }
 

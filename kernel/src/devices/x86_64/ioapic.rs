@@ -1,5 +1,4 @@
 use crate::BOOT_INFO;
-use crate::acpica::{self, *};
 use crate::Spinlock;
 use kernel_intf::{debug, info};
 use common::{MemoryRegion, PAGE_SIZE};
@@ -9,10 +8,15 @@ use crate::hal::write_port_u8;
 use core::mem::size_of;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::ptr::{read_volatile, write_volatile};
-use common::madt::*;
+
+#[cfg(feature="acpi")] 
+use {common::madt::*, crate::acpica::{self, *}};
 
 const MAX_IOAPIC: usize = 4;
 const MAX_INT_OVERRIDE: usize = 20;
+
+const IOAPIC_VER_OFFSET: u32 = 0x1;
+const IOAPIC_REDIR_START_OFFSET: u32 = 0x10;
 
 static NUM_IOAPIC: AtomicUsize = AtomicUsize::new(0);
 static NUM_IOAPIC_REL: AtomicUsize = AtomicUsize::new(0);
@@ -87,6 +91,8 @@ pub fn add_redirection_entry(irq: usize, cpu_lapic_id: usize, vector: usize, act
     }
 }  
 
+
+#[cfg(feature="acpi")]
 fn parse_madt(madt: &AcpiTableMadt) {
     let madt_start = madt as *const _ as usize;
     let madt_len = madt.header.length as usize;

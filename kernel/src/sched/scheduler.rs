@@ -1,11 +1,10 @@
 use alloc::sync::Arc;
-use alloc::task;
-use crate::cpu::{MAX_CPUS, PerCpu, Stack, get_panic_base, set_panic_base};
-use crate::hal::{self, create_kernel_context, fetch_context, register_timer_fn, switch_context};
+use crate::cpu::{MAX_CPUS, PerCpu, Stack, get_panic_base, set_panic_base, get_total_cores, get_worker_stack};
+use crate::hal::{self, IPIRequestType, create_kernel_context, disable_scheduler_timer, enable_scheduler_timer, fetch_context, switch_context};
 use crate::mem::PoolAllocatorGlobal;
-use crate::{ds::*, sched};
+use crate::ds::*;
 use crate::sync::{KSem, KSemInnerType, Spinlock};
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU8,AtomicUsize, Ordering};
 use core::ptr::NonNull;
 use alloc::collections::BTreeMap;
 use kernel_intf::{KError, debug, info};
@@ -17,7 +16,12 @@ const INIT_QUANTA: usize = 2;
 pub type KThread = Arc<Spinlock<Task>, PoolAllocatorGlobal>;
 
 static TASK_ID: AtomicUsize = AtomicUsize::new(0);
+static TASK_CPU: AtomicU8 = AtomicU8::new(0);
 static TASKS: Spinlock<BTreeMap<usize, KThread>> = Spinlock::new(BTreeMap::new());
+
+const _: () = {
+    assert!(u8::MAX as usize + 1 >= MAX_CPUS);
+};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum TaskStatus {
@@ -29,16 +33,18 @@ pub enum TaskStatus {
 
 pub struct Task {
     id: usize,
+    core: usize,
     stack: Option<Stack>,
     status: TaskStatus,
     context: *const u8,
     quanta: usize,
     panic_base: usize,
-    wait_semaphores: DynList<KSemInnerType>
+    wait_semaphores: DynList<KSemInnerType>,
+    term_notify: KSem
 }
 
 impl Task {
-    fn new(alloc_stack: bool) -> Result<KThread, KError> {
+    fn new(alloc_stack: bool, core: usize) -> Result<KThread, KError> {
         let stack  = if alloc_stack {
             Some(Stack::new()?)
         } else {
@@ -54,13 +60,15 @@ impl Task {
         }
 
         let task = Arc::new_in(Spinlock::new(Task {
-            id, 
+            id,
+            core, 
             stack,
             status: TaskStatus::ACTIVE,
             context: core::ptr::null(),
             quanta: INIT_QUANTA,
             panic_base: 0,
-            wait_semaphores: List::new()
+            wait_semaphores: List::new(),
+            term_notify: KSem::new(0, 1)
         }), PoolAllocatorGlobal);
 
         TASKS.lock().insert(id, Arc::clone(&task));
@@ -94,7 +102,8 @@ pub struct TaskQueue {
     active_tasks: DynList<KThread>,
     waiting_tasks: DynList<KThread>,
     terminated_tasks: DynList<KThread>,
-    running_task: Option<NonNull<ListNode<KThread>>>
+    running_task: Option<NonNull<ListNode<KThread>>>,
+    idle_task_stack: NonNull<u8> 
 }
 
 unsafe impl Send for TaskQueue{}
@@ -105,7 +114,8 @@ impl TaskQueue {
             active_tasks: List::new(),
             waiting_tasks: List::new(),
             terminated_tasks: List::new(),
-            running_task: None
+            running_task: None,
+            idle_task_stack: NonNull::dangling()
         }
     }
 }
@@ -122,14 +132,17 @@ pub fn get_task_info(task_id: usize) -> Option<KThread> {
     })
 }
 
-// Shouldn't call this function from idle task (for now)
-pub fn get_current_task() -> KThread {
+// None indicates that idle task is currently running
+pub fn get_current_task() -> Option<KThread> {
     let cb = SCHEDULER_CON_BLK.local().lock().running_task;
-    assert!(cb.is_some());
-    
-    Arc::clone(unsafe {
+
+    if cb.is_none() {
+        return None;
+    }
+
+    Some(Arc::clone(unsafe {
         &**cb.unwrap().as_ptr()
-    })
+    }))
 }
 
 pub fn get_num_active_tasks() -> usize {
@@ -147,33 +160,47 @@ pub fn get_num_terminated_tasks() -> usize {
 
 pub fn yield_cpu() {
     // Remove all remaining run time
-    get_current_task().lock().quanta = 0;
+    get_current_task()
+    .expect("yield_cpu() called from idle task!").lock().quanta = 0;
 
     hal::yield_cpu();
 }
 
 pub fn init() {
-    let init_task = Task::new(false)
+    let init_task = Task::new(false, 0)
     .expect("Init task creation failed!!");
 
     init_task.lock().status = TaskStatus::RUNNING;
     init_task.lock().panic_base = get_panic_base();
 
-    let mut sched_cb = SCHEDULER_CON_BLK.local().lock();
-    sched_cb.active_tasks.add_node(init_task).expect("Init task creation failed!");
+    {
+        let mut sched_cb = SCHEDULER_CON_BLK.local().lock();
+        sched_cb.active_tasks.add_node(init_task).expect("Init task creation failed!");
 
-    let task = NonNull::from(sched_cb.active_tasks.first().unwrap());
+        let task = NonNull::from(sched_cb.active_tasks.first().unwrap());
 
-    unsafe {
-        let guard = sched_cb.active_tasks.remove_node(task);
-        sched_cb.running_task = Some(ListNode::into_inner(guard));
+        unsafe {
+            let guard = sched_cb.active_tasks.remove_node(task);
+            sched_cb.running_task = Some(ListNode::into_inner(guard));
+        }
     }
 
-    register_timer_fn(schedule);
+    // Now init idle task stack for all cpus
+    for core in 0..get_total_cores() {
+        let stack_base = get_worker_stack(core);
+        let mut sched_cb = unsafe {
+            SCHEDULER_CON_BLK.get(core).lock()
+        };
+
+        sched_cb.idle_task_stack = NonNull::new(stack_base as *mut u8).unwrap();
+    } 
+
+    enable_scheduler_timer();
 }
 
 pub fn add_cur_task_to_wait_queue(wait_semaphore: KSemInnerType) {
-    let cur_task = get_current_task();
+    let cur_task = get_current_task()
+    .expect("add_cur_task_to_wait_queue() called from idle task!!");
     let mut task = cur_task.lock();
     // TERMINATED > WAITING, don't do anything
     if task.status == TaskStatus::TERMINATED {
@@ -183,7 +210,6 @@ pub fn add_cur_task_to_wait_queue(wait_semaphore: KSemInnerType) {
     task.wait_semaphores.add_node(wait_semaphore)
     .expect("System in bad state.. Could not add semaphore to task list");
 
-    // We will add support for idle task later
     task.status = TaskStatus::WAITING;
 }
 
@@ -218,7 +244,9 @@ pub fn signal_waiting_task(task_id: usize, wait_semaphore: KSemInnerType) {
 
     let this_task = this_task.unwrap();
 
-    let mut sched_cb = SCHEDULER_CON_BLK.local().lock();
+    let mut sched_cb = unsafe {
+        SCHEDULER_CON_BLK.get(this_task.lock().core).lock() 
+    };
 
     // TERMINATED > WAITING, don't do anything
     if this_task.lock().status == TaskStatus::TERMINATED {
@@ -245,6 +273,7 @@ pub fn signal_waiting_task(task_id: usize, wait_semaphore: KSemInnerType) {
         task.status = TaskStatus::RUNNING;
         task.quanta = INIT_QUANTA;
 
+        notify_other_cpu(task.core);
         remove_wait_semaphore(&mut *task, wait_semaphore);
         return;
     }
@@ -263,6 +292,7 @@ pub fn signal_waiting_task(task_id: usize, wait_semaphore: KSemInnerType) {
 
     // Give this task the highest priority
     sched_cb.active_tasks.insert_node_at_head(signal_task);
+    notify_other_cpu(task.core);
 }
 
 pub fn kill_task(task_id: usize) {
@@ -275,9 +305,12 @@ pub fn kill_task(task_id: usize) {
     }
 
     let this_task = this_task.unwrap();
+    let core = this_task.lock().core;
 
     {
-        let mut sched_cb = SCHEDULER_CON_BLK.local().lock();
+        let mut sched_cb = unsafe {
+            SCHEDULER_CON_BLK.get(core).lock()
+        };
 
         let status = this_task.lock().status;
         if status == TaskStatus::TERMINATED {
@@ -344,6 +377,8 @@ pub fn kill_task(task_id: usize) {
         }
     }
 
+    notify_other_cpu(core);
+
     // Inform semaphore that this task is about to be killed, remove it from the blocked list
     if drop_task {
         while this_task.lock().wait_semaphores.get_nodes() != 0 {
@@ -379,6 +414,7 @@ fn reap_tasks(sched_cb: &mut TaskQueue) {
             (*task.as_ptr()).lock().get_id()
         };
 
+        info!("Removing task {}", id);
         unsafe {
             sched_cb.terminated_tasks.remove_node(task);
         }
@@ -389,7 +425,7 @@ fn reap_tasks(sched_cb: &mut TaskQueue) {
 
 // Select the ready/active task at head of queue
 // Run the task if it has non-zero quanta left
-fn schedule() {
+pub fn schedule() {
     let mut sched_cb = SCHEDULER_CON_BLK.local().lock();
 
     reap_tasks(&mut *sched_cb);
@@ -417,6 +453,7 @@ fn schedule() {
                     head_task.unwrap().as_ref().lock()
                 };
                 
+                assert!(head_task_info.status == TaskStatus::ACTIVE); 
                 head_task_info.status = TaskStatus::RUNNING;
                 head_task_info.quanta = INIT_QUANTA;
                 let new_context = head_task_info.context;
@@ -448,32 +485,114 @@ fn schedule() {
                 switch_context(new_context);
             }
             else {
-                // No other task to run. Continue with this task
-                assert!(task_info.status == TaskStatus::RUNNING, "Idle task not supported right now");
-                task_info.quanta = INIT_QUANTA;
+                if task_info.status != TaskStatus::RUNNING {
+                    let prev_context = fetch_context();
+                    task_info.context = prev_context;
+
+                    if task_info.status == TaskStatus::WAITING {
+                        sched_cb.waiting_tasks.insert_node_at_tail(current_task);
+                    }
+                    else if task_info.status == TaskStatus::TERMINATED {
+                        sched_cb.terminated_tasks.insert_node_at_tail(current_task);
+                    }
+                    prep_idle_task(&mut sched_cb);
+                }
+                else {
+                    // No other task to run. Continue with this task
+                    task_info.quanta = INIT_QUANTA;
+                }
             }
         }
     }
     else {
-        // This means we're in idle task. Don't do anything (for now)
+        // This means we're in idle task. Check and run any active tasks
+        let head_task = sched_cb.active_tasks.first().and_then(|item| {
+            Some(NonNull::from(item))
+        });
+
+        debug!("Moving out of idle task on core {}", hal::get_core());
+
+        if head_task.is_some() {
+            let mut head_task_info = unsafe {
+                head_task.unwrap().as_ref().lock()
+            };
+
+            assert!(head_task_info.status == TaskStatus::ACTIVE); 
+            head_task_info.status = TaskStatus::RUNNING;
+            head_task_info.quanta = INIT_QUANTA;
+            let new_context = head_task_info.context;
+            
+            let head_task = unsafe {
+                ListNode::into_inner(sched_cb.active_tasks.remove_node(head_task.unwrap()))
+            };
+            sched_cb.running_task = Some(head_task);
+
+            set_panic_base(head_task_info.panic_base);
+            switch_context(new_context);
+            debug!("Moved out of idle task on core {}", hal::get_core());
+        }
+        else {
+            if sched_cb.terminated_tasks.get_nodes() == 0 {
+                disable_scheduler_timer(); 
+            }
+        }
+    }
+}
+
+fn prep_idle_task(sched_cb: &mut TaskQueue) {
+    sched_cb.running_task = None;
+    let context = create_kernel_context(idle_task, sched_cb.idle_task_stack.as_ptr() as *mut u8);
+    set_panic_base(sched_cb.idle_task_stack.as_ptr() as usize);
+    switch_context(context);
+    
+    if sched_cb.terminated_tasks.get_nodes() == 0 {
+        disable_scheduler_timer(); 
     }
 }
 
 fn idle_task() -> ! {
+    info!("Moving to idle task on core {}", hal::get_core());
     hal::sleep();
 }
 
+fn notify_other_cpu(target_core: usize) {
+    if hal::get_core() == target_core {
+        return;
+    }
+
+    info!("Notifying cpu {} on new task", target_core);
+    let _ = hal::notify_core(IPIRequestType::SchedChange, target_core);
+}
+
 pub fn create_task(handler: fn() -> !) -> Result<KThread, KError> {
-    let task = Task::new(true)?;
-    let stack_base = task.lock().stack.as_ref().unwrap().get_stack_base();
+    let core = TASK_CPU.fetch_add(1, Ordering::Relaxed) as usize % get_total_cores();   
+    let task = Task::new(true, core)?;
+    
+    {
+        let mut task = task.lock();
+        let stack_base = task.stack.as_ref().unwrap().get_stack_base();
 
-    // Setup the initial context
-    let context = create_kernel_context(handler, stack_base as *mut u8);
-    task.lock().context = context;  
-    task.lock().panic_base = stack_base;
+        // Setup the initial context
+        let context = create_kernel_context(handler, stack_base as *mut u8);
+        task.context = context;  
+        task.panic_base = stack_base;
+    }
 
-    // Add to ready queue
-    SCHEDULER_CON_BLK.local().lock().active_tasks.add_node(Arc::clone(&task))?;
+    // We will use simple round robin to determine the cpu which gets this task
+    unsafe {
+        // Add to ready queue
+        let mut sched_cb = SCHEDULER_CON_BLK.get(core).lock();
+        sched_cb.active_tasks.add_node(Arc::clone(&task))?;
+    };
+
+    notify_other_cpu(core);
 
     Ok(task)
+}
+
+
+impl Spinlock<Task> {
+//    pub fn wait(&self) {
+//        let task = 
+//    }
 }

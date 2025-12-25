@@ -77,7 +77,8 @@ impl Stack {
     }
 
     pub fn destroy(&mut self) {
-        unmap_memory(self.get_stack_top() as *mut u8, self.stack_size).expect("Stack base address wrong during unmap??");
+        deallocate_memory(self.get_stack_top() as *mut u8, Layout::from_size_align(self.stack_size, PAGE_SIZE).unwrap(), PageDescriptor::VIRTUAL)
+        .expect("Stack base address wrong during unmap??");
         
         // Deallocate the guard page memory (if any)
         if self.guard_size != 0 {
@@ -85,8 +86,7 @@ impl Stack {
                 self.get_alloc_base() as *mut u8,
                 Layout::from_size_align(self.guard_size, PAGE_SIZE).unwrap()
             , PageDescriptor::VIRTUAL)
-            .expect("Failed to deallocate memory for stack")
-
+            .expect("Failed to deallocate memory for stack");
         }
     }
     

@@ -223,7 +223,9 @@ impl VirtMemConBlk {
         } 
 
         #[cfg(not(test))]
-        self.page_mapper.unmap_memory(addr as usize, num_size);
+        if !is_no_alloc {
+            self.page_mapper.unmap_memory(addr as usize, num_size);
+        }
         
         self.coalesce_block(addr as usize, num_pages);
         self.avl_memory += num_size;
@@ -398,6 +400,15 @@ fn get_active_vcb() -> Option<NonNull<Spinlock<VirtMemConBlk>>> {
     }
 
     Some(NonNull::new(vcb).unwrap())
+}
+
+pub fn ap_init() {
+    let kernel_addr_space = unsafe {
+        PER_CPU_ACTIVE_VCB.get(0).load(Ordering::Acquire)
+    };
+
+    // All AP will use the same kernel virtual address space
+    PER_CPU_ACTIVE_VCB.local().store(kernel_addr_space, Ordering::Release);
 }
 
 // Central API to call into both physical and virtual allocator

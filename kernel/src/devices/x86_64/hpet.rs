@@ -1,11 +1,13 @@
 use crate::BOOT_INFO;
-use crate::acpica::{self, *};
 use crate::Spinlock;
 use kernel_intf::info;
 use common::MemoryRegion;
 use crate::{RemapEntry, RemapType::*, REMAP_LIST};
 use crate::mem::PageDescriptor;
 use core::ptr::{read_volatile, write_volatile, read_unaligned};
+
+#[cfg(feature="acpi")]
+use crate::acpica::{self, *};
 
 const GEN_CAP_OFFSET: usize = 0;
 const GEN_CONF_OFFSET: usize = 0x10;

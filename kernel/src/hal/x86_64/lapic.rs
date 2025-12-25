@@ -219,8 +219,13 @@ pub fn setup_timer() {
 }
 
 pub fn enable_timer(init_count: u32) {
-    lapic_write(TIMER_LVT, TIMER_VECTOR as u64);
     setup_timer_value(init_count);
+    lapic_write(TIMER_LVT, TIMER_VECTOR as u64);
+}
+
+pub fn disable_timer() {
+    lapic_write(TIMER_LVT, (1 << 16) | TIMER_VECTOR as u64);
+    setup_timer_value(0);
 }
 
 pub fn setup_timer_value(init_count: u32) {

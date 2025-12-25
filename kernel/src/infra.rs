@@ -15,19 +15,17 @@ static GLOBAL_PANIC_LOCK: Spinlock<bool> = Spinlock::new(false);
 const STACK_UNWIND_DEPTH: usize = 16;
 
 pub fn common_panic_handler(mod_name: &str, info: &PanicInfo) -> ! {
-    let panic_cb = GLOBAL_PANIC_LOCK.lock();
-
-    kernel_intf::set_panic_mode();
+    let core = hal::get_core();
 
     if EARLY_PANIC_PHASE.load(Ordering::Acquire) || DISABLE_CALLSTACK.load(Ordering::Acquire) {
-        println!("Kernel panic!!");
+        println!("Kernel panic on core {}!!", core);
         println!("Message: {}", info.message());
         println!("Module: {}", mod_name);
         
         hal::halt();
     }
     
-    println!("Kernel panic!!");
+    println!("Kernel panic on core {}!!", core);
     println!("Message: {}", info.message());
     println!("Module: {}", mod_name);
 

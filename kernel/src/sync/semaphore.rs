@@ -37,7 +37,8 @@ impl KSem {
             let count = inner.counter;
             inner.counter -= 1;
             
-            let cur_task = sched::get_current_task();
+            let cur_task = sched::get_current_task()
+            .expect("wait() called from idle task!!");
             
             if count <= 0 {
                 let inner_wrap = Arc::clone(&self.inner);

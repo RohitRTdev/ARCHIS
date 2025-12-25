@@ -48,7 +48,7 @@ macro_rules! println {
                 use core::fmt::Write;
 
                 $crate::acquire_spinlock(&mut $crate::LOGGER.lock);
-                
+
                 $crate::LOGGER.write_fmt(::core::format_args!($($arg)*))
                 .and_then(|_| $crate::LOGGER.write_str("\n"))
                 .unwrap();
@@ -112,25 +112,15 @@ impl core::fmt::Write for KernelLogger {
 } 
 
 pub struct KernelLogger {
-    pub panic_mode: bool,
     pub log_timestamp: bool,
     pub lock: crate::Lock
 }
 
-pub static mut LOGGER: KernelLogger = KernelLogger { panic_mode: false, log_timestamp: false, lock: crate::Lock { lock: 0, int_status: false } };
+pub static mut LOGGER: KernelLogger = KernelLogger { log_timestamp: false, lock: crate::Lock { lock: 0, int_status: false } };
 
 pub fn init_logger() {
     unsafe {
         crate::create_spinlock(&mut LOGGER.lock);
-    }
-}
-
-pub fn set_panic_mode() {
-    unsafe {
-        crate::acquire_spinlock(&mut crate::LOGGER.lock);    
-        crate::LOGGER.panic_mode = true;
-        crate::release_spinlock(&mut crate::LOGGER.lock);
-        crate::clear_screen();
     }
 }
 

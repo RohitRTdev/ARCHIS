@@ -146,19 +146,18 @@ pub fn init() -> ! {
         crate::mem::get_virtual_address(tables::kern_addr_space_start as *const () as usize, MapFetchType::Kernel).expect("kern_addr_space_start virtual address not found!"));
 }
 
-// These function should only be called once during init
-// Tells hal that kernel is ready to handle timer interrupts
-pub fn register_timer_fn(handler: fn()) {
-    unsafe {
-        handlers::KERNEL_TIMER_FN = Some(handler);
-    }
-
-    lapic::enable_timer(timer::BASE_COUNT.load(Ordering::Acquire) as u32);
-}
-
 pub fn register_debug_fn(handler: fn()) {
     unsafe {
         handlers::DEBUG_HANDLER_FN = Some(handler);
     }
 }
+
+pub fn enable_scheduler_timer() {
+    lapic::enable_timer(timer::BASE_COUNT.load(Ordering::Acquire) as u32);
+}
+
+pub fn disable_scheduler_timer() {
+    lapic::disable_timer();
+}
+
 

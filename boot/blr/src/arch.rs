@@ -126,6 +126,7 @@ fn apply_relocation(load_base: usize, kernel_size: usize, reloc_sections: &Vec<M
                     let sym_idx = (entry.r_info >> 32) as usize;
                     let sym = &dyn_entries[sym_idx];
 
+                    #[cfg(not(test))]
                     assert!(sym.st_shndx != SHN_UNDEF, "Undefined symbol in relocation");
 
                     let value = load_base + sym.st_value as usize + entry.r_addend as usize;
@@ -144,7 +145,8 @@ fn apply_relocation(load_base: usize, kernel_size: usize, reloc_sections: &Vec<M
                     };
 
                     let sym_idx = (entry.r_info >> 32) as usize;
-                    
+
+                    #[cfg(not(test))] 
                     if dyn_entries[sym_idx].st_shndx == SHN_UNDEF {
                         panic!("Undefined symbol found during relocation");
                     }

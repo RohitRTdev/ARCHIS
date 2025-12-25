@@ -147,7 +147,7 @@ pub extern "C" fn kern_addr_space_start() -> ! {
     
     enable_interrupts(true);
 
-#[cfg(not(test))]
+#[cfg(all(not(test), feature="acpi"))]
     smp::init();
     crate::kern_main();
 }

@@ -2,11 +2,9 @@ pub const X2APIC_NMI: u8 = 0xA;
 pub const XAPIC_NMI: u8 = 0x4;
 pub const XLAPIC: u8 = 0x0;
 pub const X2LAPIC: u8 = 0x9;
-
-pub const IOAPIC_VER_OFFSET: u32 = 0x1;
-pub const IOAPIC_REDIR_START_OFFSET: u32 = 0x10;
 pub const MADT_TYPE_IOAPIC: u8 = 1;
 pub const INT_SRC_OVERRIDE: u8 = 2;
+
 
 #[repr(C, packed)]
 pub struct MadtEntryHeader {

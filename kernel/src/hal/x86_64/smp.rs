@@ -1,12 +1,10 @@
 use crate::{hal::get_bsp_lapic_id, mem::{PageDescriptor, map_memory}};
 use core::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
-use crate::acpica::{self, AcpiTableMadt};
 use crate::BOOT_INFO;
 use crate::mem::PHY_MEM_CB;
 use crate::ds::*;
 use crate::sync::Spinlock;
 use crate::cpu;
-use common::madt::*;
 use kernel_intf::{debug, info};
 use alloc::alloc::Layout;
 use common::PAGE_SIZE;
@@ -18,6 +16,9 @@ use super::tables;
 use super::cpu_regs;
 use super::sleep;
 use super::disable_interrupts;
+
+#[cfg(feature = "acpi")]
+use {crate::acpica::{self, AcpiTableMadt}, common::madt::*};
 
 #[derive(Debug)]
 struct Lapic {
@@ -43,6 +44,7 @@ static AP_TRAMPOLINE: &[u8] = include_bytes!(env!("TRAMPOLINE_BIN"));
 
 include!("asm/trampoline_offsets.rs");
 
+#[cfg(feature="acpi")]
 fn parse_madt(madt: &AcpiTableMadt) {
     let madt_start = madt as *const _ as usize;
     let madt_len = madt.header.length as usize;
@@ -276,6 +278,7 @@ extern "C" fn ap_init() -> ! {
     // Signal BSP that this core is up
     AP_INIT_COMPLETE.store(true, Ordering::SeqCst);
     lapic::init();
+    crate::mem::ap_init();
 
     info!("Starting AP init for core {}", get_core());
     
