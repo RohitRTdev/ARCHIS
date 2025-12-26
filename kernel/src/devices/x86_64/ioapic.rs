@@ -51,9 +51,10 @@ pub fn add_redirection_entry(irq: usize, cpu_lapic_id: usize, vector: usize, act
         int.clone()
     });
 
+    let msg_type = 0u32 << 8;
     let upper_dword = (cpu_lapic_id as u32) << 24;
     let lower_dword = (((if irq_override.is_edge_triggered {0} else {1}) as u32) << 15) | 
-    (((if irq_override.is_active_high {0} else {1}) as u32) << 13) | ((vector as u32) & 0xff);
+    (((if irq_override.is_active_high {0} else {1}) as u32) << 13) | (msg_type) | ((vector as u32) & 0xff);
 
     info!("Adding IOAPIC redirection entry for src_irq:{}, dest_irq:{}", irq_override.irq, irq_override.gsi);
 

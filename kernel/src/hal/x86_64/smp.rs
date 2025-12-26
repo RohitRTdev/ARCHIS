@@ -1,4 +1,5 @@
 use crate::{hal::get_bsp_lapic_id, mem::{PageDescriptor, map_memory}};
+use crate::infra;
 use core::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 use crate::BOOT_INFO;
 use crate::mem::PHY_MEM_CB;
@@ -170,6 +171,7 @@ pub fn init() {
         BOOT_INFO.get().unwrap().rsdp as *const u8).expect("No MADT ACPI table found!");
 
     parse_madt(madt_tab);
+    activate_local_core_nmi_trap();
 
     let total_cores = LAPIC_LIST.lock().get_nodes();
     cpu::set_total_cores(total_cores);
@@ -268,8 +270,31 @@ pub fn init() {
     // Wait for all cores to initialize before proceeding
     while AP_CORES_INIT.load(Ordering::Acquire) < total_cores {
         core::hint::spin_loop();
-    } 
+    }
+
+    infra::enable_mp_init(); 
 }
+
+fn activate_local_core_nmi_trap() {
+    // First find the uid associated with this cpu
+    let apic_id = lapic::get_lapic_id();
+    for core in LAPIC_LIST.lock().iter() {
+        if core.id == apic_id {
+            // Now find the nmi entry associated with this value
+            for nmi in NMI_LIST.lock().iter() {
+                // UID of 0xff means that this nmi entry is associated with every logical core
+                if nmi.uid == core.uid || nmi.uid == 0xff {
+                    assert!(nmi.pin == 0 || nmi.pin == 1);
+                    lapic::configure_nmi(nmi.pin == 0, nmi.is_edge_triggered);
+                    break;
+                }
+            }            
+            
+            break;
+        }
+    }
+}
+
 
 #[no_mangle]
 extern "C" fn ap_init() -> ! {
@@ -279,6 +304,7 @@ extern "C" fn ap_init() -> ! {
     AP_INIT_COMPLETE.store(true, Ordering::SeqCst);
     lapic::init();
     crate::mem::ap_init();
+    activate_local_core_nmi_trap();
 
     info!("Starting AP init for core {}", get_core());
     

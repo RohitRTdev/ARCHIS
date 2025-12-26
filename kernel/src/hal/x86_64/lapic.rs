@@ -232,6 +232,13 @@ pub fn setup_timer_value(init_count: u32) {
     lapic_write(INITIAL_CNT_OFFSET, init_count as u64);
 }
 
+pub fn configure_nmi(is_pin_0: bool, is_edge_triggered: bool) {
+    let addr = if is_pin_0 {LINT0_LVT} else {LINT1_LVT};
+    let tgm_mask = if is_edge_triggered {0} else {1u64 << 15};
+
+    lapic_write(addr, tgm_mask | (0b100u64 << 8));    
+}
+
 pub fn lapic_wait_icr_idle() {
     if unsafe {!X2APIC_ENABLED} {
         while lapic_read(APIC_ICR_OFFSET) & (1 << 12) != 0 {

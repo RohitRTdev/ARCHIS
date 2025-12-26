@@ -11,6 +11,7 @@ use super::lapic::{eoi, get_error};
 use super::cpu::get_bsp_lapic_id;
 use super::MAX_INTERRUPT_VECTORS;
 use super::asm;
+use crate::hal::halt;
 use crate::devices::ioapic::add_redirection_entry;
 use crate::ds::*;
 
@@ -26,7 +27,8 @@ pub const IPI_VECTOR: usize = 37;
 const USER_VECTOR_START: usize = 38;
 
 pub enum IPIRequestType {
-    SchedChange
+    SchedChange,
+    Shutdown
 }
 
 pub struct IPIRequest {
@@ -280,6 +282,10 @@ fn ipi_handler(_vector: usize) {
             IPIRequestType::SchedChange => {
                 debug!("Got IPI for new task...");
                 crate::sched::schedule();
+            },
+            IPIRequestType::Shutdown => {
+                info!("Got IPI for shutdown...");
+                halt();
             }
         }
 

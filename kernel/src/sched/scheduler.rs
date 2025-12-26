@@ -430,13 +430,11 @@ fn reap_tasks(mut term_list: DynList<KThread>) {
     }   
 }
 
-// Select the ready/active task at head of queue
-// Run the task if it has non-zero quanta left
+// Main scheduler loop
 pub fn schedule() {
     let term_tasks = {
         let mut sched_cb = SCHEDULER_CON_BLK.local().lock();
 
-        // We ensure that we don't encounter the scenario where there is no running task but tasks exist in the ready queue
         if sched_cb.running_task.is_some() {
             let current_task = sched_cb.running_task.unwrap(); 
             let mut task_info = unsafe {

@@ -5,7 +5,7 @@ use crate::devices::uart;
 pub use framebuffer_logger::relocate_framebuffer;
 
 #[no_mangle]
-extern "C" fn clear_screen() {
+pub extern "C" fn clear_screen() {
     FRAMEBUFFER_LOGGER.lock().clear_screen();
 }
 

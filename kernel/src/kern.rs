@@ -100,7 +100,7 @@ fn task_spawn() -> ! {
             let id = sched::get_current_task().unwrap().lock().get_id(); 
             info!("Running task: {}", id);
             TASK_COUNTER.get().unwrap().signal();
-            
+
             info!("id:{}, Active_tasks={}, Waiting_tasks={}, terminated_tasks={}", id, sched::get_num_active_tasks(), 
             sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks());
             
@@ -181,7 +181,6 @@ unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
     logger::init();
 
     info!("Starting aris");
-    
     devices::init();
     cpu::init();
     module::early_init();
