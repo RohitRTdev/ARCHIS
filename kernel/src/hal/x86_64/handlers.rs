@@ -281,6 +281,7 @@ fn ipi_handler(_vector: usize) {
         match req_info.req_type {
             IPIRequestType::SchedChange => {
                 debug!("Got IPI for new task...");
+                enable_scheduler_timer();
                 crate::sched::schedule();
             },
             IPIRequestType::Shutdown => {
@@ -311,6 +312,6 @@ pub fn notify_core(req_type: IPIRequestType, target_core: usize) -> Result<KSem,
     IPI_REQUESTS.lock().add_node(req)?;
 
     lapic::send_ipi(apic_id as u32, IPI_VECTOR as u8);
-
+    debug!("Issued IPI from core {} to core {}", super::get_core(), target_core);
     Ok(wait_sem)
 }

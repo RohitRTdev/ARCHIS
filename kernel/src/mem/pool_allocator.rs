@@ -124,7 +124,7 @@ impl<T> PoolAllocator<T> {
         if let Some(free_block) = pool.free_list {
             let next = unsafe { (*free_block.as_ptr()).next };
             pool.free_list = next;
-            
+
             return Ok(Self::block_to_slice(free_block, block_size));
         }
 

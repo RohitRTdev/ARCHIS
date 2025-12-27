@@ -20,6 +20,37 @@ fn get_test_lock() -> &'static Arc<Mutex<bool>> {
 }
 
 #[test]
+fn list_clear_test() {
+    let _guard = get_test_lock().lock().unwrap();
+    mem::clear_heap();
+    mem::setup_heap();
+
+    let mut structure: FixedList<Sample, {mem::Regions::Region0 as usize}> = List::new();
+    test_log!("Starting list_clear_test");
+
+    #[derive(Debug)]
+    struct Sample {
+        _a: u32,
+        _b: u32
+    }
+
+    impl Drop for Sample {
+        fn drop(&mut self) {
+            test_log!("Dropping {:?}", self);
+        }
+    }
+
+    structure.add_node(Sample{_a:52, _b: 12}).unwrap();
+    structure.add_node(Sample{_a:32, _b: 13}).unwrap();
+    structure.add_node(Sample{_a:38, _b: 1000}).unwrap();
+    structure.add_node(Sample{_a:12035, _b: 2}).unwrap();
+
+    structure.clear();
+    test_log!("Cleared list...");
+}
+
+
+#[test]
 fn fixed_allocator_test() {
     // Certain tests such as this needs to be run in isolation
     let _guard = get_test_lock().lock().unwrap();

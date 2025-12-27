@@ -31,7 +31,15 @@ impl KSem {
         }
     }
 
+    // There is one case where there could be a memory leak (KSemInner doesn't get dropped)
+    // Suppose a task A creates a local semaphore and then waits on it
+    // Now suppose another task B kills task A. Then the wait semaphores within task A would be dropped 
+    // as part of kill logic. However, the reference held by the local stack variable semaphore in task A
+    // would remain and will prevent the drop. The stack will be removed, but the semaphore stays on 
+    // without it's drop called. 
+    // This might feel like a problem but this case is too niche, and frankly should be avoided anyway.
     pub fn wait(&self) -> Result<(), KError> {
+        let mut yield_flag = false;
         {
             let mut inner = self.inner.lock();
             let count = inner.counter;
@@ -46,11 +54,14 @@ impl KSem {
                 // Block task
                 inner.blocked_list.add_node(cur_task)?;
                 sched::add_cur_task_to_wait_queue(inner_wrap);
+                yield_flag = true;
             }
         }
 
         // We call it here, in order to unlock the spinlock
-        sched::yield_cpu();
+        if yield_flag {
+            sched::yield_cpu();
+        }
 
         Ok(())
     }

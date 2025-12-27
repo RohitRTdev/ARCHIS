@@ -209,6 +209,16 @@ impl<T, A: Allocator<ListNode<T>>> List<T, A> {
         self.insert_node(this, false);
     }
 
+    pub fn clear(&mut self) {
+        while self.get_nodes() != 0 {
+            let node = NonNull::from(self.first().unwrap());
+
+            unsafe {
+                self.remove_node(node);
+            }
+        }
+    }
+
     // This is unsafe, since it is caller's responsibility to ensure that the given ListNode is a valid node that is 
     // part of this list
     pub unsafe fn remove_node(&mut self, this: NonNull<ListNode<T>>) -> ListNodeGuard<T, A> {

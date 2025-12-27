@@ -37,6 +37,8 @@ static PER_CPU_ACTIVE_VCB: PerCpu<AtomicPtr<Spinlock<VirtMemConBlk>>> = PerCpu::
     [const {AtomicPtr::new(core::ptr::null_mut())}; MAX_CPUS]
 );
 
+pub type VCB = NonNull<Spinlock<VirtMemConBlk>>;
+
 impl VirtMemConBlk {
     #[cfg(target_arch="x86_64")]
     pub fn new(is_init_address_space: bool) -> Self {
@@ -392,6 +394,12 @@ impl VirtMemConBlk {
     }
 }
 
+
+pub fn get_kernel_addr_space() -> VCB {
+    let val = &**ADDRESS_SPACES.get().unwrap().lock().first().unwrap();
+    NonNull::from(&**ADDRESS_SPACES.get().unwrap().lock().first().unwrap())
+}
+
 fn get_active_vcb() -> Option<NonNull<Spinlock<VirtMemConBlk>>> {
     let vcb = PER_CPU_ACTIVE_VCB.local().load(Ordering::Acquire);
 
@@ -560,29 +568,26 @@ pub fn virtual_allocator_init() {
     });
     
     // Create a new stack for boot cpu
-    #[cfg(not(debug_assertions))]
-    {
-        let stack_raw = kernel_addr_space.allocate(Layout::from_size_align(cpu::TOTAL_STACK_SIZE, PAGE_SIZE).unwrap()
-        , PageDescriptor::VIRTUAL | PageDescriptor::NO_ALLOC).expect("Failed to create space in virtual address for boot cpu stack");
+    let stack_raw = kernel_addr_space.allocate(Layout::from_size_align(cpu::TOTAL_STACK_SIZE, PAGE_SIZE).unwrap()
+    , PageDescriptor::VIRTUAL | PageDescriptor::NO_ALLOC).expect("Failed to create space in virtual address for boot cpu stack");
 
-        let stack_raw_phys = PHY_MEM_CB.get().unwrap().lock().allocate(Layout::from_size_align(cpu::INIT_STACK_SIZE, PAGE_SIZE).unwrap())
-        .expect("Failed to create space for physical address space for boot cpu stack");
+    let stack_raw_phys = PHY_MEM_CB.get().unwrap().lock().allocate(Layout::from_size_align(cpu::INIT_STACK_SIZE, PAGE_SIZE).unwrap())
+    .expect("Failed to create space for physical address space for boot cpu stack");
 
-        #[cfg(feature = "stack_down")]
-        let stack_base = unsafe {
-            stack_raw.add(cpu::INIT_GUARD_PAGE_SIZE)
-        };
+    #[cfg(feature = "stack_down")]
+    let stack_base = unsafe {
+        stack_raw.add(cpu::INIT_GUARD_PAGE_SIZE)
+    };
 
-        #[cfg(not(feature = "stack_down"))]
-        let stack_base = stack_raw;
+    #[cfg(not(feature = "stack_down"))]
+    let stack_base = stack_raw;
 
-        kernel_addr_space.map_memory(stack_raw_phys.addr(), stack_base.addr(), cpu::INIT_STACK_SIZE, PageDescriptor::VIRTUAL)
-        .expect("Failed to map boot cpu stack to kernel virtual address space!");
+    kernel_addr_space.map_memory(stack_raw_phys.addr(), stack_base.addr(), cpu::INIT_STACK_SIZE, PageDescriptor::VIRTUAL)
+    .expect("Failed to map boot cpu stack to kernel virtual address space!");
 
-        debug!("Created boot cpu stack with virtual address: {:#X} and physical address: {:#X}", stack_base.addr(), stack_raw_phys.addr());
+    debug!("Created boot cpu stack with virtual address: {:#X} and physical address: {:#X}", stack_base.addr(), stack_raw_phys.addr());
 
-        cpu::set_worker_stack_for_boot_cpu(stack_raw);
-    }
+    cpu::set_worker_stack_for_boot_cpu(stack_raw);
 
     // Finalize address space creation
     kernel_addr_space.page_mapper.bootstrap_activate();

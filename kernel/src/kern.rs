@@ -30,11 +30,11 @@ mod tests;
 
 use sync::{Once, Spinlock};
 use cpu::install_interrupt_handler;
-use crate::hal::register_debug_fn;
-use crate::hal::{delay_ns, disable_interrupts, enable_interrupts, read_port_u8};
+use crate::hal::{delay_ns, disable_interrupts, read_port_u8};
 use crate::mem::Regions::*;
 use crate::ds::*;
 use crate::sched::KThread;
+use crate::sched::get_current_process;
 use crate::sync::KSem;
 
 static BOOT_INFO: Once<BootInfo> = Once::new();
@@ -77,26 +77,11 @@ fn task_spawn() -> ! {
         KSem::new(0, 1)
     });
 
-    register_debug_fn(|| {
-        // This interrupt is currently fired when task is terminated
-        let (id, status) = {
-            let task = sched::get_current_task().unwrap();
-            let id = task.lock().get_id();
-            let status = task.lock().get_status();
-            (id, status)
-        };
-
-        info!("Called debug handler in task:{} with status: {:?}", id, status);
-
-        // Try killing task once again
-        sched::kill_task(id);
-    });
-
     info!("Active_tasks={}, Waiting_tasks={}, terminated_tasks={}", sched::get_num_active_tasks(), 
     sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks());
 
     for _ in 0..5 {
-        tasks.push_back(sched::create_task(|| {
+        tasks.push_back(sched::create_thread(|| {
             let id = sched::get_current_task().unwrap().lock().get_id(); 
             info!("Running task: {}", id);
             TASK_COUNTER.get().unwrap().signal();
@@ -105,7 +90,7 @@ fn task_spawn() -> ! {
             sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks());
             
             // Task 4, 5 and 6 should be in wait queue
-            if id >= 2 {
+            if id >= 4 {
                 WAIT_EVENT.get().unwrap().wait().unwrap();
             }
 
@@ -132,17 +117,62 @@ fn task_spawn() -> ! {
             let task = tasks.pop_front().unwrap();
             let id = task.lock().get_id();
             info!("Killing task {}", id);
-            sched::kill_task(id);
+            sched::kill_thread(id);
         }
         else {
+            let cur_thread_id = sched::get_current_task().unwrap().lock().get_id();
+            info!("Killing thread 1");
+            sched::kill_thread(1);
             info!("Killing self");
-            sched::kill_task(1);
+            sched::kill_thread(cur_thread_id);
             info!("This shouldn't be printed");
         }
         
         info!("id:{}, Active_tasks={}, Waiting_tasks={}, terminated_tasks={} after", 1, sched::get_num_active_tasks(), 
         sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks());
     }
+}
+
+fn process_spawn() -> ! {
+    for _ in 0..2 {
+        sched::create_process(|| {
+            let proc_id = sched::get_current_process().unwrap().lock().get_id();
+            let thread_id = sched::get_current_task().unwrap().lock().get_id();
+            info!("Created process with id {}", proc_id);  
+
+            for _ in 0..2 {
+                sched::create_thread(|| {
+                    let thread_id = sched::get_current_task().unwrap().lock().get_id();
+                    let proc_id = sched::get_current_process().unwrap().lock().get_id();
+                    info!("Created new thread with id {}", thread_id);
+
+                    loop {
+                        info!("Running thread with id {} with process id {} on core {}", thread_id, proc_id, hal::get_core());
+                        delay_ns(1_000_000_000);
+                    }
+                }).expect("Failed to create new thread");
+            }
+
+            loop {
+                info!("Running thread with id {} with process id {} on core {}", thread_id, proc_id, hal::get_core());
+                
+                info!("Waiting for event..");
+                KEYBOARD_EVENT.get().unwrap().wait().unwrap();
+                
+                // Test self kill (exit)
+                sched::kill_process(proc_id);
+            }
+        }).expect("Failed to create process");
+    }
+
+    // This pattern should be never followed in a real scenario, but this is just here for testing
+    let sem = KSem::new(0, 1);
+
+    info!("Init Thread going to wait state");
+    sem.wait().expect("Failed to wait on semaphore");
+
+    info!("Should never reach here");
+    hal::halt();
 }
 
 fn kern_main() -> ! {
@@ -156,11 +186,11 @@ fn kern_main() -> ! {
     clear_keyboard_output_buffer();
     install_interrupt_handler(1, key_notifier, true, true);
 
-
     sched::init();
 
     {
-        let spawn_task = sched::create_task(task_spawn).unwrap();
+        sched::create_process(process_spawn).expect("Failed to create second process");
+        let spawn_task = sched::create_thread(task_spawn).unwrap();
 
         info!("Main task waiting for task id 1 to complete");
         spawn_task.wait().expect("Unable to wait on task id 1");
@@ -206,8 +236,6 @@ fn key_notifier(_: usize) {
         }
     };
 
-    info!("Notifier: Active_tasks={}, Waiting_tasks={}, terminated_tasks={}", sched::get_num_active_tasks(),
-    sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks()); 
     KEYBOARD_EVENT.get().unwrap().signal();
     clear_keyboard_output_buffer();
 }

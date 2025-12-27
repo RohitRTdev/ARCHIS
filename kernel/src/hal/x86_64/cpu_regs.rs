@@ -10,6 +10,9 @@ pub struct CR0;
 pub struct CR4;
 pub struct RFLAGS;
 pub struct EFER;
+
+pub struct PAT;
+
 struct CPUReg<T: Reg> {
     _mark: PhantomData<T>
 }
@@ -108,10 +111,15 @@ impl EFER {
     pub const LMA: u64 = 1 << 10;
 }
 
+impl PAT {
+    pub const ADDRESS: u32 = 0x277;
+}
+
 #[cfg(debug_assertions)]
 fn log_registers() {
     unsafe {
-        debug!("CR0={:#X}, CR4={:#X}, EFER={:#X}, RFLAGS={:#X}", asm::read_cr0(), asm::read_cr4(), asm::rdmsr(EFER::ADDRESS), asm::read_rflags());
+        debug!("CR0={:#X}, CR4={:#X}, EFER={:#X}, RFLAGS={:#X}, PAT={:#X}", asm::read_cr0(), asm::read_cr4(), asm::rdmsr(EFER::ADDRESS), asm::read_rflags(),
+    asm::rdmsr(PAT::ADDRESS));
     }
 }
 

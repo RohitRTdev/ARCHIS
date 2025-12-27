@@ -9,7 +9,8 @@ use core::fmt;
 pub enum KError {
     Success,
     InvalidArgument,
-    OutOfMemory
+    OutOfMemory,
+    ProcessTerminated
 }
 
 impl<T> From<Result<T, KError>> for KError {
@@ -24,6 +25,7 @@ impl fmt::Display for KError {
         let description = match self {
             KError::InvalidArgument => "Invalid argument",
             KError::OutOfMemory => "Out of memory",
+            KError::ProcessTerminated => "Process terminated",
             KError::Success => "Success"
         };
         write!(f, "{}", description)
