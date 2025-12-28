@@ -213,7 +213,7 @@ fn timer_handler(_vector: usize) {
     crate::sched::schedule();
 
     // Reload the timer
-    lapic::setup_timer_value(timer::BASE_COUNT.load(Ordering::Relaxed) as u32);
+    lapic::setup_timer_value(timer::BASE_COUNT.local().load(Ordering::Relaxed) as u32);
 }
 
 // Do the same thing as timer handler, except we don't reload the timer register and we won't send EOI
@@ -280,12 +280,11 @@ fn ipi_handler(_vector: usize) {
         let req_info: &ListNode<IPIRequest> = unsafe {&*req.as_ptr()};
         match req_info.req_type {
             IPIRequestType::SchedChange => {
-                debug!("Got IPI for new task...");
                 enable_scheduler_timer();
                 crate::sched::schedule();
             },
             IPIRequestType::Shutdown => {
-                info!("Got IPI for shutdown...");
+                debug!("Got IPI for shutdown...");
                 halt();
             }
         }
@@ -312,6 +311,5 @@ pub fn notify_core(req_type: IPIRequestType, target_core: usize) -> Result<KSem,
     IPI_REQUESTS.lock().add_node(req)?;
 
     lapic::send_ipi(apic_id as u32, IPI_VECTOR as u8);
-    debug!("Issued IPI from core {} to core {}", super::get_core(), target_core);
     Ok(wait_sem)
 }

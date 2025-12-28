@@ -7,6 +7,7 @@ use crate::sched::*;
 use crate::sync::Spinlock;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::ptr::NonNull;
+use core::mem::take;
 use kernel_intf::info;
 
 static PROCESS_ID: AtomicUsize = AtomicUsize::new(0);
@@ -17,7 +18,6 @@ pub type KThreadWeak = Weak<Spinlock<Task>, PoolAllocatorGlobal>;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum ProcessStatus {
-    Created,
     Ready,
     Terminated
 }
@@ -28,7 +28,7 @@ pub struct Process {
     // Intuitively it should be the other way around, however this way it makes it easier code wise.
     // When tasks are dropped, the process struct will be automatically dropped
     threads: DynList<usize>,
-    //addr_space: VCB,
+    addr_space: VCB,
     status: ProcessStatus
 }
 
@@ -40,8 +40,8 @@ impl Process {
         let proc = Arc::new_in(Spinlock::new(Self {
             id,
             threads: List::new(),
-            //addr_space: mem::get_kernel_addr_space(),
-            status: ProcessStatus::Created 
+            addr_space: mem::get_kernel_addr_space(),
+            status: ProcessStatus::Ready 
         }), PoolAllocatorGlobal);
         
         info!("Creating new process with id {}", id);
@@ -62,8 +62,6 @@ impl Process {
     }
 
     pub fn remove_thread(&mut self, thread_id: usize) {
-        assert!(self.status != ProcessStatus::Created);
-        
         if self.status == ProcessStatus::Terminated {
             return;
         }
@@ -120,6 +118,10 @@ pub fn get_current_process() -> Option<KProcess> {
     guard.get_process()
 }
 
+pub fn get_current_process_id() -> Option<usize> {
+    Some(get_current_process()?.lock().get_id())
+}
+
 pub fn get_process_info(proc_id: usize) -> Option<KProcess> {
     let proc_map = PROCESSES.lock();
 
@@ -130,20 +132,12 @@ pub fn get_process_info(proc_id: usize) -> Option<KProcess> {
 
 pub fn create_process(start_function: fn() -> !) -> Result<KProcess, KError> {
     let process = Process::new();
-    let proc_id = process.lock().id;
+    
     let thread = sched::create_init_thread(start_function, Arc::clone(&process))?;
     let core = thread.lock().get_core();
-    let thread_id = thread.lock().get_id();
 
-    {
-        let mut guard = process.lock();
-        guard.threads.add_node(thread_id)?;
-
-        guard.status = ProcessStatus::Ready;
-        start_task(&thread, core)?;
-    }
+    start_task(&thread, core, &process, &PROCESSES)?;
     
-    PROCESSES.lock().insert(proc_id, Arc::clone(&process));
     Ok(process)
 }
 
@@ -153,8 +147,12 @@ pub fn kill_process(proc_id: usize) {
         return;
     }
 
+    assert!(proc_id != 0, "Attempted to kill system process!");
+
     let proc = proc.unwrap();
-    let cur_task_info = get_current_task();
+    let cur_task_id = get_current_task_id();
+    
+    // We manually move the list here since we don't want to hold the lock
     let threads = {
         let mut guard = proc.lock();
         if guard.status != ProcessStatus::Ready {
@@ -163,15 +161,13 @@ pub fn kill_process(proc_id: usize) {
 
         guard.status = ProcessStatus::Terminated;
 
-        unsafe {
-            guard.threads.move_list()
-        }
+        take(&mut guard.threads)
     };
 
     kernel_intf::debug!("Killing process {}", proc_id);
 
-    let is_idle_task = cur_task_info.is_none();
-    let cur_task_id = if cur_task_info.is_some() {cur_task_info.as_ref().unwrap().lock().get_id()} else {0};
+    let is_idle_task = cur_task_id.is_none();
+    let cur_task_id = if cur_task_id.is_some() {cur_task_id.unwrap()} else {0};
     let mut is_exit = false; 
 
     // Kill all the tasks within the process
@@ -191,9 +187,16 @@ pub fn kill_process(proc_id: usize) {
 
     // Kill the current thread last
     if is_exit {
-        // Drop these explicitly since we are not going to return from this call
+        // Drop it explicitly since we are not going to return from this call
         drop(proc);
-        drop(cur_task_info.unwrap());
         sched::kill_thread(cur_task_id);
     }
+}
+
+pub fn exit_process() -> ! {
+    let proc_id = get_current_process_id().expect("Attempted to kill idle process!!");
+
+    kill_process(proc_id);
+
+    panic!("exit_process unreachable reached!!");
 }

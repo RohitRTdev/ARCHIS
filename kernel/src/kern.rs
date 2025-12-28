@@ -35,6 +35,7 @@ use crate::mem::Regions::*;
 use crate::ds::*;
 use crate::sched::KThread;
 use crate::sched::get_current_process;
+use crate::sched::kill_process;
 use crate::sync::KSem;
 
 static BOOT_INFO: Once<BootInfo> = Once::new();
@@ -82,24 +83,18 @@ fn task_spawn() -> ! {
 
     for _ in 0..5 {
         tasks.push_back(sched::create_thread(|| {
-            let id = sched::get_current_task().unwrap().lock().get_id(); 
+            let id = sched::get_current_task_id().unwrap(); 
             info!("Running task: {}", id);
             TASK_COUNTER.get().unwrap().signal();
 
             info!("id:{}, Active_tasks={}, Waiting_tasks={}, terminated_tasks={}", id, sched::get_num_active_tasks(), 
             sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks());
             
-            // Task 4, 5 and 6 should be in wait queue
-            if id >= 4 {
-                WAIT_EVENT.get().unwrap().wait().unwrap();
-            }
-
-            // Task 2 and 3 will be part of active list
             loop {
-                info!("id:{}, Active_tasks={}, Waiting_tasks={}, terminated_tasks={}", id, sched::get_num_active_tasks(), 
-                sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks());
+                info!("id:{}, Active_tasks={}, Waiting_tasks={}, terminated_tasks={}, core={}", id, sched::get_num_active_tasks(), 
+                sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks(), hal::get_core());
             
-                delay_ns(1_000_000_000);
+                sched::delay_ms(1000);
             }
         }).unwrap());
     }
@@ -120,11 +115,11 @@ fn task_spawn() -> ! {
             sched::kill_thread(id);
         }
         else {
-            let cur_thread_id = sched::get_current_task().unwrap().lock().get_id();
+            let cur_thread_id = sched::get_current_task_id().unwrap();
             info!("Killing thread 1");
             sched::kill_thread(1);
             info!("Killing self");
-            sched::kill_thread(cur_thread_id);
+            sched::exit_thread();
             info!("This shouldn't be printed");
         }
         
@@ -136,19 +131,19 @@ fn task_spawn() -> ! {
 fn process_spawn() -> ! {
     for _ in 0..2 {
         sched::create_process(|| {
-            let proc_id = sched::get_current_process().unwrap().lock().get_id();
-            let thread_id = sched::get_current_task().unwrap().lock().get_id();
+            let proc_id = sched::get_current_process_id().unwrap();
+            let thread_id = sched::get_current_task_id().unwrap();
             info!("Created process with id {}", proc_id);  
 
             for _ in 0..2 {
                 sched::create_thread(|| {
-                    let thread_id = sched::get_current_task().unwrap().lock().get_id();
-                    let proc_id = sched::get_current_process().unwrap().lock().get_id();
+                    let thread_id = sched::get_current_task_id().unwrap();
+                    let proc_id = sched::get_current_process_id().unwrap();
                     info!("Created new thread with id {}", thread_id);
 
                     loop {
                         info!("Running thread with id {} with process id {} on core {}", thread_id, proc_id, hal::get_core());
-                        delay_ns(1_000_000_000);
+                        sched::delay_ms(1000);
                     }
                 }).expect("Failed to create new thread");
             }
@@ -160,7 +155,7 @@ fn process_spawn() -> ! {
                 KEYBOARD_EVENT.get().unwrap().wait().unwrap();
                 
                 // Test self kill (exit)
-                sched::kill_process(proc_id);
+                sched::exit_process();
             }
         }).expect("Failed to create process");
     }
@@ -187,6 +182,18 @@ fn kern_main() -> ! {
     install_interrupt_handler(1, key_notifier, true, true);
 
     sched::init();
+    //sched::create_thread(|| {
+    //    loop {
+    //        sched::delay_ms(1000); 
+    //        info!("One second elapsed");
+    //    }
+    //}).unwrap();
+    //sched::create_thread(|| {
+    //    loop {
+    //        sched::delay_ms(5000);
+    //        info!("5 seconds elapsed");
+    //    }
+    //}).unwrap().wait().unwrap();
 
     {
         sched::create_process(process_spawn).expect("Failed to create second process");
@@ -195,7 +202,29 @@ fn kern_main() -> ! {
         info!("Main task waiting for task id 1 to complete");
         spawn_task.wait().expect("Unable to wait on task id 1");
     }
-    
+
+    //sched::create_thread(|| {
+    //    loop {
+    //        info!("Running on core {}", hal::get_core());
+    //        delay_ns(1_000_000_000);
+    //    }
+    //}).unwrap();
+
+    //sched::create_thread(|| {
+    //    let mut counter = 10;
+    //    loop {
+    //        info!("Running on core {}", hal::get_core());
+    //        delay_ns(1_000_000_000);
+
+    //        counter += 1;
+    //        if counter >= 10 {
+    //            let task = sched::get_current_task().unwrap().lock().get_id();
+    //            sched::exit_thread();
+    //        }
+    //    }
+    //}).unwrap();
+
+
     info!("Main task going to sleep");
     hal::sleep();
 }

@@ -39,11 +39,6 @@ impl<T> ListNode<T> {
     }
 }
 
-
-// Important note here. Right now list doesn't have an auto clean up when dropping it
-// If you want to clear list, then user must iterate over each element and remove the 
-// corresponding ListNode element (call remove_node). Failure to do so, would just 
-// leak memory
 pub struct List<T, A: Allocator<ListNode<T>>> {
     head: Option<*mut ListNode<T>>,
     tail: Option<*mut ListNode<T>>,
@@ -52,6 +47,12 @@ pub struct List<T, A: Allocator<ListNode<T>>> {
 }
 
 unsafe impl<T: Send, A: Allocator<ListNode<T>>> Send for List<T, A>{}
+
+impl<T, A: Allocator<ListNode<T>>> Default for List<T, A> {
+    fn default() -> Self {
+        List::new()
+    }
+}
 
 impl<T, A: Allocator<ListNode<T>>> Deref for ListNodeGuard<T, A> {
     type Target = T;
@@ -93,6 +94,12 @@ impl<T, A: Allocator<ListNode<T>>> Drop for ListNodeGuard<T, A> {
     }
 }
 
+impl<T, A: Allocator<ListNode<T>>> Drop for List<T, A> {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
 impl<T, A: Allocator<ListNode<T>>> List<T, A> {
     pub const fn new() -> Self {
         List {
@@ -124,24 +131,6 @@ impl<T, A: Allocator<ListNode<T>>> List<T, A> {
             }
         }
     }
-
-    // This function does a manual move of the list structure
-    // Under normal circumstances this is bad, but in certain cases it's useful
-    // since it allows us to bypass rust's move semantics
-    pub unsafe fn move_list(&mut self) -> Self {
-        let moved_list = Self {
-            head: self.head,
-            tail: self.tail,
-            num_nodes: self.num_nodes,
-            _marker: PhantomData
-        };
-
-        self.head = None;
-        self.tail = None;
-        self.num_nodes = 0;
-
-        moved_list
-    } 
 
     pub fn add_node(&mut self, data: T) -> Result<(), KError> {
         let layout = Layout::from_size_align(size_of::<ListNode<T>>(), align_of::<ListNode<T>>()).unwrap();

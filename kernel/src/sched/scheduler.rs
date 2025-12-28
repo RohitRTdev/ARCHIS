@@ -4,9 +4,10 @@ use crate::hal::{self, IPIRequestType, create_kernel_context, disable_scheduler_
 use crate::mem::PoolAllocatorGlobal;
 use crate::{ds::*, sched};
 use crate::sync::{KSem, KSemInnerType, Spinlock};
-use super::{KProcess, ProcessStatus, get_current_process, get_process_info};
+use super::{KProcess, ProcessStatus, get_current_process, get_process_info, KTimerInnerType};
 use core::sync::atomic::{AtomicU8,AtomicUsize, Ordering};
 use core::ptr::NonNull;
+use core::mem::take;
 use alloc::collections::BTreeMap;
 use kernel_intf::{KError, debug, info};
 
@@ -26,7 +27,6 @@ const _: () = {
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum TaskStatus {
-    CREATED,
     RUNNING,
     ACTIVE,
     WAITING,
@@ -48,18 +48,22 @@ pub struct Task {
 
 impl Task {
     fn new(alloc_stack: bool, core: usize) -> Result<KThread, KError> {
+        // We don't want stack to be partially allocated
+        // Otherwise, thread could panic when dropped
+        disable_preemption();
         let stack  = if alloc_stack {
-            Some(Stack::new()?)
+            Some(Stack::new().map_err(|err| {
+                enable_preemption();
+                err
+            })?)
         } else {
             None
         };
+        enable_preemption();
         let id = TASK_ID.fetch_add(1, Ordering::Relaxed);  
 
         if alloc_stack {
-            let base = stack.as_ref().unwrap().get_stack_top();
-            let phys = crate::mem::get_physical_address(base).unwrap();
-            debug!("Creating task with ID:{} and stack_addr={:#X}, phys={:#X}", id, stack.as_ref().unwrap().get_stack_base(),
-        phys);
+            debug!("Creating task with ID:{} and stack_addr={:#X}", id, stack.as_ref().unwrap().get_stack_base());
         } 
         else {
             debug!("Creating task with ID:{}", id);
@@ -69,7 +73,7 @@ impl Task {
             id,
             core, 
             stack,
-            status: TaskStatus::CREATED,
+            status: TaskStatus::ACTIVE,
             context: core::ptr::null(),
             quanta: INIT_QUANTA,
             panic_base: 0,
@@ -117,11 +121,13 @@ pub struct TaskQueue {
     active_tasks: DynList<KThread>,
     waiting_tasks: DynList<KThread>,
     terminated_tasks: DynList<KThread>,
+    notifier_list: DynList<KSem>,
+    timer_list: DynList<KTimerInnerType>,
     running_task: Option<NonNull<ListNode<KThread>>>,
     idle_task_stack: NonNull<u8>,
     leftover_stack: DynList<Stack>,
     flip_flop: bool,
-    disable_preemption: bool
+    preemption_count: usize
 }
 
 unsafe impl Send for TaskQueue{}
@@ -132,11 +138,13 @@ impl TaskQueue {
             active_tasks: List::new(),
             waiting_tasks: List::new(),
             terminated_tasks: List::new(),
+            notifier_list: List::new(),
+            timer_list: List::new(),
             running_task: None,
             idle_task_stack: NonNull::dangling(),
             leftover_stack: List::new(),
             flip_flop: false,
-            disable_preemption: false
+            preemption_count: 0
         }
     }
 }
@@ -154,6 +162,8 @@ pub fn get_task_info(task_id: usize) -> Option<KThread> {
 }
 
 // None indicates that idle task is currently running
+// Be careful while calling these functions as they increment the strong count
+// Once done with retreiving the info you want, it's important that you drop them
 pub fn get_current_task() -> Option<KThread> {
     let cb = SCHEDULER_CON_BLK.local().lock().running_task;
 
@@ -164,6 +174,11 @@ pub fn get_current_task() -> Option<KThread> {
     Some(Arc::clone(unsafe {
         &**cb.unwrap().as_ptr()
     }))
+}
+
+// Use this, if you just want the id
+pub fn get_current_task_id() -> Option<usize> {
+    Some(get_current_task()?.lock().get_id())
 }
 
 pub fn get_num_active_tasks() -> usize {
@@ -283,7 +298,7 @@ pub fn signal_waiting_task(task_id: usize, wait_semaphore: KSemInnerType) {
     };
 
     // TERMINATED > WAITING, don't do anything
-    if this_task.lock().status == TaskStatus::CREATED || this_task.lock().status == TaskStatus::TERMINATED {
+    if this_task.lock().status == TaskStatus::TERMINATED {
         return;
     }
 
@@ -348,7 +363,7 @@ pub fn kill_thread(task_id: usize) {
         };
 
         let status = this_task.lock().status;
-        if status == TaskStatus::CREATED || status == TaskStatus::TERMINATED {
+        if status == TaskStatus::TERMINATED {
             return;
         }
 
@@ -405,10 +420,10 @@ pub fn kill_thread(task_id: usize) {
                 
                 // Since the task is currently running, we can't immediately drop it as it is using this stack
                 // So, delay the stack destruction
-                let stack = unsafe {
-                    // Stack is guaranteed to be present. Only init task has None value here
-                    this_task.lock().stack.as_mut().unwrap().move_stack()
-                };
+                
+                // Stack is guaranteed to be present. Only init task has None value here
+                let stack = take(this_task.lock().stack.as_mut().unwrap());
+                
                 info!("Killing running task");
                 sched_cb.leftover_stack.add_node(stack).expect("Unable to add stack node to leftover_stack list!");
                 sched_cb.flip_flop = true;
@@ -418,12 +433,12 @@ pub fn kill_thread(task_id: usize) {
                 yield_flag = hal::get_core() == core;
                 if yield_flag {
                     debug!("Self yielding");
-                    sched_cb.disable_preemption = true;
+                    sched_cb.preemption_count += 1;
                 }
             },
 
             _ => {
-                panic!("TaskStatus::TERMINATED or TaskStatus::CREATED state cannot be encountered!!");
+                panic!("TaskStatus::TERMINATED state cannot be encountered!!");
             }
         }
     }
@@ -461,17 +476,31 @@ pub fn kill_thread(task_id: usize) {
     }
 }
 
+pub fn exit_thread() -> ! {
+    let thread_id = get_current_task_id().expect("Attempted to kill idle task!!");
+
+    kill_thread(thread_id);
+
+    panic!("exit_thread() unreachable reached!!");
+}
+
+pub fn add_kernel_timer(timer: KTimerInnerType) -> Result<(), KError> {
+    let mut sched_cb = SCHEDULER_CON_BLK.local().lock();
+    sched_cb.timer_list.add_node(timer)
+}
+
 // We do all this moving out of stuff and into other stuff drama in order to avoid holding any lock during signal operation
-fn reap_tasks(mut term_list: DynList<KThread>) {
-    while term_list.get_nodes() != 0 {
-        let task = NonNull::from(term_list.first().unwrap());
+fn reap_tasks(sched_cb: &mut TaskQueue) {
+    while sched_cb.terminated_tasks.get_nodes() != 0 {
+        let task = NonNull::from(sched_cb.terminated_tasks.first().unwrap());
         let task_inner = unsafe {
             &*task.as_ptr()
         };
         
         let id = task_inner.lock().get_id();
-        task_inner.signal();
-        
+
+        sched_cb.notifier_list.add_node(task_inner.lock().term_notify.clone()).expect("Failed to add semaphore to notifier list!");
+
         // Extract the pointer, release the lock and then call remove_thread
         // Otherwise, we run the risk of deadlock
         let process_ref = task_inner.lock().process.as_ref().unwrap().clone();
@@ -479,23 +508,70 @@ fn reap_tasks(mut term_list: DynList<KThread>) {
 
         info!("Removing task {}", id);
         unsafe {
-            term_list.remove_node(task);
+            sched_cb.terminated_tasks.remove_node(task);
         }
         
         TASKS.lock().remove(&id);
     }   
 }
 
+fn update_timers(sched_cb: &mut TaskQueue) {
+    let mut idx = 0;
+    let list_size = sched_cb.timer_list.get_nodes();
+
+    while idx < list_size {
+        let timer = sched_cb.timer_list.first().unwrap();
+
+        let is_done = timer.lock().update_timer_count(QUANTUM);
+
+        if is_done {
+            let sem = timer.lock().get_semaphore();
+            sched_cb.notifier_list.add_node(sem).expect("Unable to add timer node semaphore into notifier list!");
+
+            unsafe {
+                sched_cb.timer_list.remove_node(NonNull::from(timer))
+            };
+        }
+        else {
+            let timer_ref = unsafe {
+                ListNode::into_inner(sched_cb.timer_list.remove_node(NonNull::from(timer)))
+            };
+            
+            sched_cb.timer_list.insert_node_at_tail(timer_ref);
+        }
+
+        idx += 1;
+    }
+}
+
+
+fn notify_watchers(notifier_list: &DynList<KSem>) {
+    for sem in notifier_list.iter() {
+        sem.signal();
+    }
+}
+
+pub fn disable_preemption() {
+    let mut sched_cb = SCHEDULER_CON_BLK.local().lock();
+    sched_cb.preemption_count += 1;
+}
+
 pub fn enable_preemption() {
     let mut sched_cb = SCHEDULER_CON_BLK.local().lock();
-    sched_cb.disable_preemption = false;
+    sched_cb.preemption_count = sched_cb.preemption_count.saturating_sub(1);
+}
+
+fn can_sleep(sched_cb: &mut TaskQueue) -> bool {
+    sched_cb.flip_flop == false && sched_cb.timer_list.get_nodes() == 0
 }
 
 // Main scheduler loop
 pub fn schedule() {
-    let term_tasks = {
+    let notifier_list = {
         let mut sched_cb = SCHEDULER_CON_BLK.local().lock();
-        if sched_cb.disable_preemption {
+        update_timers(&mut sched_cb);
+        
+        if sched_cb.preemption_count > 0 {
             return;
         }
 
@@ -595,12 +671,10 @@ pub fn schedule() {
 
                 set_panic_base(head_task_info.panic_base);
                 switch_context(new_context);
-                debug!("Moved out of idle task on core {}", hal::get_core());
             }
             else {
-                // If stack deletions are pending, don't go into idle task yet
-                if !sched_cb.flip_flop {
-                    info!("Disabling timer");
+                // If stack deletions / timers are pending, don't go into idle task yet
+                if can_sleep(&mut sched_cb) {
                     disable_scheduler_timer(); 
                 }
             }
@@ -610,19 +684,17 @@ pub fn schedule() {
         // But we won't be using it from the next schedule on
         if sched_cb.flip_flop {
             sched_cb.flip_flop = false;
-            info!("Flip flop deactivated on core {}!", hal::get_core());
         }
         else {
             // Any delayed stack deletions can be done here, since we have switched from that stack
             sched_cb.leftover_stack.clear();
         }
 
-        unsafe {
-            sched_cb.terminated_tasks.move_list()
-        }
+        reap_tasks(&mut sched_cb);
+        take(&mut sched_cb.notifier_list)
     };
 
-    reap_tasks(term_tasks);
+    notify_watchers(&notifier_list);
 }
 
 fn prep_idle_task(sched_cb: &mut TaskQueue) {
@@ -631,14 +703,12 @@ fn prep_idle_task(sched_cb: &mut TaskQueue) {
     set_panic_base(sched_cb.idle_task_stack.as_ptr() as usize);
     switch_context(context);
     
-    if !sched_cb.flip_flop {
-        info!("Disabling timer");
+    if can_sleep(sched_cb) {
         disable_scheduler_timer(); 
     }
 }
 
 fn idle_task() -> ! {
-    info!("Moving to idle task on core {}", hal::get_core());
     hal::sleep();
 }
 
@@ -648,7 +718,7 @@ fn notify_other_cpu(target_core: usize) {
         return;
     }
 
-    info!("Notifying cpu {} on new task", target_core);
+    debug!("Notifying cpu {} on task change", target_core);
     let _ = hal::notify_core(IPIRequestType::SchedChange, target_core);
 }
 
@@ -673,21 +743,32 @@ fn create_thread_common(handler: fn() -> !) -> Result<(KThread, usize), KError> 
 // Internal API: Do not call this
 pub fn create_init_thread(handler: fn() -> !, process: KProcess) -> Result<KThread, KError> {
     let (thread, core) = create_thread_common(handler)?;
-    debug!("Created init thread {} on process {} on core {}", thread.lock().get_id(), process.lock().get_id(), core);
+    let thread_id = thread.lock().get_id();
+    let proc_id = process.lock().get_id();
+    debug!("Created init thread {} on process {} on core {}", thread_id, proc_id, core);
+    
     thread.lock().process = Some(process);
 
     Ok(thread)
 }
 
-pub fn start_task(thread: &KThread, core: usize) -> Result<(), KError> {
-    unsafe {
+pub fn start_task(thread: &KThread, core: usize, process: &KProcess, registry: &Spinlock<BTreeMap<usize, KProcess>>) -> Result<(), KError> {
+    {
+        let mut sched_cb = unsafe {
+            SCHEDULER_CON_BLK.get(core).lock()
+        };
+        
+        let thread_id = thread.lock().get_id();
         // Add to ready queue
-        let mut sched_cb = SCHEDULER_CON_BLK.get(core).lock();
-        thread.lock().status = TaskStatus::ACTIVE;
         sched_cb.active_tasks.add_node(Arc::clone(&thread))?;
-    };
-    
-    TASKS.lock().insert(thread.lock().get_id(), Arc::clone(&thread));
+
+        let mut process_inner = process.lock();
+        let proc_id = process_inner.get_id();
+        process_inner.attach_thread_to_current_process(thread_id)?;
+        registry.lock().insert(proc_id, Arc::clone(&process));
+
+        TASKS.lock().insert(thread_id, Arc::clone(&thread));
+    }
     
     notify_other_cpu(core);
 
@@ -698,37 +779,40 @@ pub fn start_task(thread: &KThread, core: usize) -> Result<(), KError> {
 pub fn create_thread(handler: fn() -> !) -> Result<KThread, KError> {
     let (thread, core) = create_thread_common(handler)?;
     let thread_id = thread.lock().get_id();
-    if let Some(process) = get_current_process() {
-        let process_ref = Arc::clone(&process);
-        let mut guard = process.lock();
-        if guard.get_status() == ProcessStatus::Terminated {
-            return Err(KError::ProcessTerminated);
+    let cur_process = get_current_process();
+
+    // Lock order => Scheduler -> Process -> Task
+    {
+        let mut sched_cb = unsafe {
+            SCHEDULER_CON_BLK.get(core).lock()
+        };
+
+        if let Some(process) = cur_process {
+            let process_ref = Arc::clone(&process);
+            let mut guard = process.lock();
+            if guard.get_status() == ProcessStatus::Terminated {
+                return Err(KError::ProcessTerminated);
+            }
+
+            debug!("Creating thread id {} under process id {} on core {}", thread_id, guard.get_id(), core);
+
+            guard.attach_thread_to_current_process(thread_id)?;
+            thread.lock().process = Some(process_ref);
         }
-
-        info!("Creating thread id {} under process id {} on core {}", thread_id, guard.get_id(), core);
-
-        guard.attach_thread_to_current_process(thread_id)?;
-        thread.lock().process = Some(process_ref);
+        else {
+            panic!("create_thread() called from idle task!!");
+        }
+        
+        sched_cb.active_tasks.add_node(Arc::clone(&thread))?;
+        TASKS.lock().insert(thread.lock().get_id(), Arc::clone(&thread));
     }
-    else {
-        panic!("create_thread() called from idle task!!");
-    }
-
-    start_task(&thread, core)?; 
+    
+    notify_other_cpu(core);
 
     Ok(thread)
 }
 
 impl Spinlock<Task> {
-    fn signal(&self) {
-        let sem = {
-            let task = self.lock();
-            task.term_notify.clone() 
-        };
-
-        sem.signal();
-    }
-
     pub fn wait(&self) -> Result<(), KError> {
         let sem = {
             let task = self.lock();

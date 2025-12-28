@@ -2,7 +2,7 @@ use core::alloc::Layout;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::ptr::NonNull;
 use common::{PAGE_SIZE, align_up};
-use kernel_intf::{KError, info};
+use kernel_intf::{KError, info, debug};
 use crate::hal::get_core;
 use crate::infra::disable_early_panic_phase;
 use crate::{ds::*, hal};
@@ -51,20 +51,6 @@ impl Stack {
         }
     }
 
-    pub unsafe fn move_stack(&mut self) -> Self {
-        let moved_stack = Self {
-            guard_size: self.guard_size,
-            stack_size: self.stack_size,
-            base: self.base,
-            allocated: self.allocated
-        };
-
-        self.allocated = false;
-        self.base = NonNull::dangling();
-        
-        moved_stack
-    }
-
     // Create STACK + GUARD page. The guard page will remain unmapped
     // This is to allow us to catch any stack overflow scenarios
     pub fn new() -> Result<Self, KError> {
@@ -105,7 +91,7 @@ impl Stack {
             return;
         }
 
-        kernel_intf::info!("Destroying stack...");
+        debug!("Destroying stack...");
         deallocate_memory(self.get_stack_top() as *mut u8, Layout::from_size_align(self.stack_size, PAGE_SIZE).unwrap(), PageDescriptor::VIRTUAL)
         .expect("Stack base address wrong during unmap??");
         
@@ -161,6 +147,12 @@ impl Stack {
 impl Drop for Stack {
     fn drop(&mut self) {
         self.destroy();
+    }
+}
+
+impl Default for Stack {
+    fn default() -> Self {
+        Stack::create()
     }
 }
 

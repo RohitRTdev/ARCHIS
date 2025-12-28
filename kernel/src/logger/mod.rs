@@ -21,7 +21,8 @@ extern "C" fn serial_print_ffi(s: *const u8, len: usize) {
     uart::SERIAL.lock().write(s);
     
     // Write to framebuffer
-    //FRAMEBUFFER_LOGGER.lock().write(s);
+#[cfg(not(debug_assertions))]
+    FRAMEBUFFER_LOGGER.lock().write(s);
 }
 
 pub fn init() {

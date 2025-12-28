@@ -1,14 +1,12 @@
+use crate::cpu::{MAX_CPUS, PerCpu}; 
 use crate::devices::HPET;
 use crate::sched::QUANTUM;
 use super::asm;
-use super::get_core;
 use kernel_intf::info;
 use super::lapic;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-static BASE_FREQ: AtomicUsize = AtomicUsize::new(0); 
-static APIC_FREQ: AtomicUsize = AtomicUsize::new(0); 
-pub static BASE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static BASE_COUNT: PerCpu<AtomicUsize> = PerCpu::new_with([const {AtomicUsize::new(0)}; MAX_CPUS]);
 
 // Smallest granularity timer
 pub fn delay_ns(value: usize) {
@@ -35,44 +33,41 @@ pub fn init() {
     // Now measure APIC timer
     lapic::init_timer();
 
-    if get_core() == 0 {
-        // Measure the CPU clock frequency
-        let old = unsafe {
-            asm::rdtsc()
-        };
+    // Measure the CPU clock frequency
+    let old = unsafe {
+        asm::rdtsc()
+    };
 
-        //Let's wait for 100ms
-        delay_ns(100_000_000);
-        
-        let new = unsafe {
-            asm::rdtsc()
-        };
+    //Let's wait for 100ms
+    delay_ns(100_000_000);
+    
+    let new = unsafe {
+        asm::rdtsc()
+    };
 
-        let num_ticks_passed = new.wrapping_sub(old);
-        BASE_FREQ.store((num_ticks_passed * 10) as usize, Ordering::Relaxed);
-        
-        info!("CPU Base Clock frequency measured as {}Hz", BASE_FREQ.load(Ordering::Relaxed));
+    let num_ticks_passed = new.wrapping_sub(old);
+    let base_freq = num_ticks_passed * 10;
+    
+    info!("CPU Base Clock frequency measured as {}Hz", base_freq);
 
-        let old = lapic::get_timer_value();
+    let old = lapic::get_timer_value();
 
-        //Let's wait for 100ms
-        delay_ns(100_000_000);
+    //Let's wait for 100ms
+    delay_ns(100_000_000);
 
-        let new = lapic::get_timer_value();
-        // This is a countdown timer
-        let num_ticks_passed = old.wrapping_sub(new);
-        APIC_FREQ.store((num_ticks_passed * 10) as usize, Ordering::Relaxed);
-        let freq = APIC_FREQ.load(Ordering::Relaxed);   
-        
-        info!("CPU APIC Clock frequency measured as {}Hz", freq);
+    let new = lapic::get_timer_value();
+    // This is a countdown timer
+    let num_ticks_passed = old.wrapping_sub(new);
+    let apic_freq = num_ticks_passed * 10;
+    
+    info!("CPU APIC Clock frequency measured as {}Hz", apic_freq);
 
-        // Currently we use a divide factor of 128
-        let init_count = (freq / 128) / (1000 / QUANTUM);
-        assert!(init_count <= 0xffffffff);
-        info!("Init count calculated as {:#X}", init_count);
+    // Currently we use a divide factor of 128
+    let init_count = (apic_freq as usize / 128) / (1000 / QUANTUM);
+    assert!(init_count <= 0xffffffff);
+    info!("Init count calculated as {:#X}", init_count);
 
-        BASE_COUNT.store(init_count, Ordering::Relaxed);
-    } 
+    BASE_COUNT.local().store(init_count, Ordering::Relaxed);
     
     lapic::setup_timer();
 }

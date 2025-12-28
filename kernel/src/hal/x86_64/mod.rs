@@ -153,7 +153,7 @@ pub fn register_debug_fn(handler: fn()) {
 }
 
 pub fn enable_scheduler_timer() {
-    lapic::enable_timer(timer::BASE_COUNT.load(Ordering::Acquire) as u32);
+    lapic::enable_timer(timer::BASE_COUNT.local().load(Ordering::Acquire) as u32);
 }
 
 pub fn disable_scheduler_timer() {
