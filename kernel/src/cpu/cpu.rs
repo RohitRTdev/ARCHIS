@@ -9,7 +9,7 @@ use crate::{ds::*, hal};
 use crate::sync::Spinlock;
 use crate::mem::{PageDescriptor, Regions::*, allocate_memory, deallocate_memory, map_memory, unmap_memory};
 
-pub const INIT_STACK_SIZE: usize  = PAGE_SIZE * 3;
+pub const INIT_STACK_SIZE: usize  = PAGE_SIZE * 10;
 pub const INIT_GUARD_PAGE_SIZE: usize = PAGE_SIZE;
 pub const TOTAL_STACK_SIZE: usize = INIT_STACK_SIZE + INIT_GUARD_PAGE_SIZE;
 
@@ -91,7 +91,7 @@ impl Stack {
             return;
         }
 
-        debug!("Destroying stack...");
+        debug!("Destroying stack with alloc_base={:#X} and base={:#X}", self.get_alloc_base(), self.get_stack_base());
         deallocate_memory(self.get_stack_top() as *mut u8, Layout::from_size_align(self.stack_size, PAGE_SIZE).unwrap(), PageDescriptor::VIRTUAL)
         .expect("Stack base address wrong during unmap??");
         

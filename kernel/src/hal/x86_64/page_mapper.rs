@@ -29,7 +29,7 @@ enum PageLevel {
 static KERNEL_PML4: AtomicUsize = AtomicUsize::new(0);
 
 pub struct PageMapper {
-    pml4_phys: usize, 
+    pml4_phys: u64, 
     is_current: bool, 
 }
 
@@ -58,7 +58,7 @@ impl PageMapper {
         }
 
         Self {
-            pml4_phys: pml4_phy,
+            pml4_phys: pml4_phy as u64,
             is_current: false
         }
     }
@@ -70,7 +70,14 @@ impl PageMapper {
             is_current: false
         }
     }
-    
+
+    pub fn set_address_space(&mut self) {
+        self.is_current = true;
+        unsafe {
+            asm::write_cr3(self.pml4_phys);
+        }
+    }
+
     pub fn map_memory(&mut self, virt_addr: usize, phys_addr: usize, size: usize, flags: u8) {
         assert!(virt_addr & 0xfff == 0  && phys_addr & 0xfff == 0 && size & 0xfff == 0);
         let num_pages = ceil_div(size, PAGE_SIZE);
@@ -95,7 +102,7 @@ impl PageMapper {
         let (pml4_idx, pdpt_idx, pd_idx, pt_idx) = Self::split_indices(virt_addr);
         let vaddr = if !self.is_current {
             unsafe {
-                let pml_addr = mem::get_virtual_address(self.pml4_phys, MapFetchType::Any).expect("Page base table is expected to be mapped to caller virtual memory");
+                let pml_addr = mem::get_virtual_address(self.pml4_phys as usize, MapFetchType::Any).expect("Page base table is expected to be mapped to caller virtual memory");
                 let pdpt = *(pml_addr as *mut u64).add(pml4_idx) & PTE::PHY_ADDR_MASK;
                 let pdpt_addr = mem::get_virtual_address(pdpt as usize, MapFetchType::Any).expect("PDPT is expected to be mapped to caller virtual memory");
                 let pd = *(pdpt_addr as *mut u64).add(pdpt_idx) & PTE::PHY_ADDR_MASK;
@@ -126,7 +133,7 @@ impl PageMapper {
         let (pml4_idx, pdpt_idx, pd_idx, pt_idx) = Self::split_indices(virt_addr);
 
         let pml_base = if !self.is_current {
-            mem::get_virtual_address(self.pml4_phys, MapFetchType::Any).expect("Page base table is expected to be mapped to caller virtual memory")
+            mem::get_virtual_address(self.pml4_phys as usize, MapFetchType::Any).expect("Page base table is expected to be mapped to caller virtual memory")
         }
         else {
             0

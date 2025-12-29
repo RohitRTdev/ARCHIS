@@ -49,6 +49,10 @@ impl Process {
         proc
     }
 
+    pub fn get_vcb(&self) -> VCB {
+        self.addr_space
+    }
+
     pub fn get_status(&self) -> ProcessStatus {
         self.status
     }

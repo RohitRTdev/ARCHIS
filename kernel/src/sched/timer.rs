@@ -45,23 +45,21 @@ impl KTimer {
     }
 
     pub fn wait(&self) -> Result<(), KError> {
-        let sem  = {
+        let inner_clones  = {
             let inner = self.inner.lock();
 
             if inner.init_count > 0 {
-                let inner_clone = Arc::clone(&self.inner);
+                let timer_clone = Arc::clone(&self.inner);
 
-                add_kernel_timer(inner_clone)?;
-
-                Some(inner.wait_sem.clone())
+                Some((inner.wait_sem.clone(), timer_clone))
             }
             else {
                 None
             }
         };
 
-        if let Some(inner) = sem {
-            return inner.wait();
+        if let Some(clones) = inner_clones {
+            return clones.0.wait_with_timer(clones.1);
         }
 
         Ok(())

@@ -62,6 +62,12 @@ impl Spinlock {
             self.0.get().write(0);
         }
     }
+
+    pub fn try_lock(&self) -> bool {
+        unsafe {
+            asm::try_acquire_lock(self.0.get()) != 0
+        }
+    }
 } 
 
 #[cfg(not(test))]

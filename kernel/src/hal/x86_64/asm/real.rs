@@ -20,6 +20,7 @@ extern "C" {
 
     pub fn cpuid(fn_number: u32, opt_fn_number: u32, result: *mut u8);
     pub fn write_cr0(val: u64);
+    pub fn write_cr3(val: u64);
     pub fn write_cr4(val: u64);
     pub fn write_rflags(val: u64);
     pub fn read_rflags() -> u64;

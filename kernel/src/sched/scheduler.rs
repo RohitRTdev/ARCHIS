@@ -1,7 +1,7 @@
 use alloc::sync::Arc;
 use crate::cpu::{MAX_CPUS, PerCpu, Stack, get_panic_base, set_panic_base, get_total_cores, get_worker_stack};
 use crate::hal::{self, IPIRequestType, create_kernel_context, disable_scheduler_timer, enable_scheduler_timer, fetch_context, switch_context};
-use crate::mem::PoolAllocatorGlobal;
+use crate::mem::{PoolAllocatorGlobal, VCB, get_kernel_addr_space, set_address_space};
 use crate::{ds::*, sched};
 use crate::sync::{KSem, KSemInnerType, Spinlock};
 use super::{KProcess, ProcessStatus, get_current_process, get_process_info, KTimerInnerType};
@@ -43,7 +43,8 @@ pub struct Task {
     panic_base: usize,
     wait_semaphores: DynList<KSemInnerType>,
     term_notify: KSem,
-    process: Option<KProcess>
+    process: Option<KProcess>,
+    vcb: Option<VCB>
 }
 
 impl Task {
@@ -79,7 +80,8 @@ impl Task {
             panic_base: 0,
             wait_semaphores: List::new(),
             term_notify: KSem::new(0, 1),
-            process: None
+            process: None,
+            vcb: None
         }), PoolAllocatorGlobal);
 
 
@@ -166,14 +168,12 @@ pub fn get_task_info(task_id: usize) -> Option<KThread> {
 // Once done with retreiving the info you want, it's important that you drop them
 pub fn get_current_task() -> Option<KThread> {
     let cb = SCHEDULER_CON_BLK.local().lock().running_task;
-
     if cb.is_none() {
         return None;
     }
-
-    Some(Arc::clone(unsafe {
-        &**cb.unwrap().as_ptr()
-    }))
+    
+    
+    Some(Arc::clone(unsafe { &**cb.unwrap().as_ptr() }))
 }
 
 // Use this, if you just want the id
@@ -213,6 +213,7 @@ pub fn init() {
     init_task.lock().status = TaskStatus::RUNNING;
     init_task.lock().panic_base = get_panic_base();
     init_task.lock().process = Some(init_proc);
+    init_task.lock().vcb = Some(get_kernel_addr_space());
 
     {
         let mut sched_cb = SCHEDULER_CON_BLK.local().lock();
@@ -250,11 +251,18 @@ pub fn init() {
 pub fn add_cur_task_to_wait_queue(wait_semaphore: KSemInnerType) {
     let cur_task = get_current_task()
     .expect("add_cur_task_to_wait_queue() called from idle task!!");
+
+    // Important to obtain scheduler lock here since all other code assumes that task 
+    // status change requires holding the scheduler lock (This is a conservative step)
+    let _sched_cb = SCHEDULER_CON_BLK.local().lock();
+
     let mut task = cur_task.lock();
     // TERMINATED > WAITING, don't do anything
     if task.status == TaskStatus::TERMINATED {
         return;
     }
+
+    debug!("Adding task {} to wait queue", task.id);
 
     task.wait_semaphores.add_node(wait_semaphore)
     .expect("System in bad state.. Could not add semaphore to task list");
@@ -292,61 +300,65 @@ pub fn signal_waiting_task(task_id: usize, wait_semaphore: KSemInnerType) {
     }
 
     let this_task = this_task.unwrap();
-
-    let mut sched_cb = unsafe {
-        SCHEDULER_CON_BLK.get(this_task.lock().core).lock() 
-    };
-
-    // TERMINATED > WAITING, don't do anything
-    if this_task.lock().status == TaskStatus::TERMINATED {
-        return;
-    }
-
-    let mut waiting_task= None;
-    for task in sched_cb.waiting_tasks.iter() {
-        if task.lock().get_id() == task_id {
-            waiting_task = Some(NonNull::from(task));
-            break;
-        }
-    }
-
-    // This happens when signal task is called even before the waiting task gets a chance to be put into the wait queue
-    if waiting_task.is_none() {
-        let mut task = unsafe {
-            (*sched_cb.running_task.unwrap().as_ptr()).lock()
+    let core = this_task.lock().core;
+    let mut skip_notify = false;
+    disable_preemption();
+    {
+        let mut sched_cb = unsafe {
+            SCHEDULER_CON_BLK.get(core).lock() 
         };
 
-        assert!(task.status == TaskStatus::WAITING);
+        let status = this_task.lock().status;
+        match status {
+            TaskStatus::WAITING => {
+                let mut waiting_task = None;
+                for task in sched_cb.waiting_tasks.iter() {
+                    if task.lock().get_id() == task_id {
+                        waiting_task = Some(NonNull::from(task));
+                        break;
+                    }
+                }
+                
+                let mut task = this_task.lock();
+                // This happens when signal task is called even before the waiting task gets a chance to be put into the wait queue
+                if waiting_task.is_none() {
+                    // Let task run again with high priority
+                    task.status = TaskStatus::RUNNING;
+                    task.quanta = INIT_QUANTA;
+                }
+                else {
+                    let signal_task = unsafe {
+                        ListNode::into_inner(sched_cb.waiting_tasks.remove_node(waiting_task.unwrap()))
+                    };
+                    
+                    sched_cb.active_tasks.insert_node_at_head(signal_task);
+                    task.status = TaskStatus::ACTIVE;
+                }
 
-        // Let task run again with high priority
-        task.status = TaskStatus::RUNNING;
-        task.quanta = INIT_QUANTA;
+                remove_wait_semaphore(&mut *task, wait_semaphore);
+            },
 
-        notify_other_cpu(task.core);
-        remove_wait_semaphore(&mut *task, wait_semaphore);
-        return;
+            TaskStatus::TERMINATED => {
+                skip_notify = true;
+            },
+
+            TaskStatus::ACTIVE | TaskStatus::RUNNING => {
+                panic!("Signalled task {} which was in ACTIVE/RUNNING state??", task_id);
+            }
+        }
+    }
+    
+    if !skip_notify {
+        notify_other_cpu(core);
     }
 
-    let signal_task = unsafe {
-        ListNode::into_inner(sched_cb.waiting_tasks.remove_node(waiting_task.unwrap()))
-    };
-
-    let mut task = unsafe {
-        (**signal_task.as_ptr()).lock()
-    };
-
-    task.status = TaskStatus::ACTIVE;
-
-    remove_wait_semaphore(&mut *task, wait_semaphore);
-
-    // Give this task the highest priority
-    sched_cb.active_tasks.insert_node_at_head(signal_task);
-    notify_other_cpu(task.core);
+    enable_preemption();
 }
 
 pub fn kill_thread(task_id: usize) {
     let mut yield_flag = false;
     let mut drop_task  = false;
+    let mut skip_notify  = false;
     let this_task = get_task_info(task_id);
 
     if this_task.is_none() {
@@ -355,24 +367,26 @@ pub fn kill_thread(task_id: usize) {
 
     let this_task  = this_task.unwrap();
     let core = this_task.lock().core;
-    assert!(task_id != 0, "Attempted to kill init task!!!");
+    
+    disable_preemption();
 
+    assert!(task_id != 0, "Attempted to kill init task!!!");
     {
         let mut sched_cb = unsafe {
             SCHEDULER_CON_BLK.get(core).lock()
         };
 
-        let status = this_task.lock().status;
-        if status == TaskStatus::TERMINATED {
-            return;
-        }
-
-        this_task.lock().status = TaskStatus::TERMINATED;
+        let status = {
+            let mut task_locked= this_task.lock();
+            let status = task_locked.status;
+            task_locked.status = TaskStatus::TERMINATED;
+            status 
+        };
 
         // Remove task from active list and add to terminated list
         match status {
             TaskStatus::ACTIVE => {
-                let mut task_l: Option<NonNull<ListNode<Arc<Spinlock<Task>, PoolAllocatorGlobal>>>> = None;
+                let mut task_l = None;
                 for active_task in sched_cb.active_tasks.iter() {
                     if active_task.lock().id == task_id {
                         task_l = Some(NonNull::from(active_task));
@@ -380,6 +394,7 @@ pub fn kill_thread(task_id: usize) {
                     }
                 }
 
+                debug!("Killing active task..");
                 assert!(task_l.is_some());
                 let task_node = unsafe {
                     ListNode::into_inner(sched_cb.active_tasks.remove_node(task_l.unwrap()))
@@ -396,6 +411,8 @@ pub fn kill_thread(task_id: usize) {
                         break;
                     }
                 }
+                
+                debug!("Killing waiting task..");
 
                 if task_l.is_some() {
                     let task_node = unsafe {
@@ -433,17 +450,19 @@ pub fn kill_thread(task_id: usize) {
                 yield_flag = hal::get_core() == core;
                 if yield_flag {
                     debug!("Self yielding");
-                    sched_cb.preemption_count += 1;
                 }
             },
 
-            _ => {
-                panic!("TaskStatus::TERMINATED state cannot be encountered!!");
+            TaskStatus::TERMINATED => {
+                debug!("Task {} already terminated..", task_id);
+                skip_notify = true;
             }
         }
     }
 
-    notify_other_cpu(core);
+    if !skip_notify {
+        notify_other_cpu(core);
+    }
 
     // Inform semaphore that this task is about to be killed, remove it from the blocked list
     if drop_task {
@@ -451,7 +470,7 @@ pub fn kill_thread(task_id: usize) {
             // We do it in this weird fashion since we don't want the task to be locked during call to drop_task
             let (sem_wrap, sem_inner) = {
                 let task = this_task.lock();
-                let sem: Option<&ListNode<Arc<Spinlock<crate::sync::KSemInner>, PoolAllocatorGlobal>>> = task.wait_semaphores.first();
+                let sem = task.wait_semaphores.first();
                 (Arc::clone(&**sem.unwrap()), NonNull::from(sem.unwrap()))
             };
 
@@ -463,15 +482,17 @@ pub fn kill_thread(task_id: usize) {
         } 
     }
 
-    // The current running task is killed, yield remaining context
     if yield_flag {
-        info!("Yielding task {}", task_id);
         // Drop it explicitly since we won't return from here and rust thinks that 
         // this stack frame here is preserved, which means that this reference gets leaked
         drop(this_task);
+    }
 
-        // Need to ensure that drop(this_task) is called, this is why we disable/enable preemption
-        enable_preemption();
+    enable_preemption();
+
+    // The current running task is killed, yield remaining context
+    if yield_flag {
+        info!("Yielding task {}", task_id);
         yield_cpu();
     }
 }
@@ -506,7 +527,7 @@ fn reap_tasks(sched_cb: &mut TaskQueue) {
         let process_ref = task_inner.lock().process.as_ref().unwrap().clone();
         process_ref.lock().remove_thread(id);
 
-        info!("Removing task {}", id);
+        info!("Removing task {} on core {}", id, hal::get_core());
         unsafe {
             sched_cb.terminated_tasks.remove_node(task);
         }
@@ -565,6 +586,24 @@ fn can_sleep(sched_cb: &mut TaskQueue) -> bool {
     sched_cb.flip_flop == false && sched_cb.timer_list.get_nodes() == 0
 }
 
+#[inline]
+fn switch_address_space(old_vcb: VCB, new_vcb: VCB) {
+    if old_vcb != new_vcb {
+        debug!("Address space don't match! Switching...");
+        unsafe {
+            set_address_space(new_vcb);
+        }
+    }
+}
+
+#[inline]
+fn switch_address_space_for_idle(old_vcb: VCB) {
+    let new_vcb = get_kernel_addr_space();
+
+    switch_address_space(old_vcb, new_vcb);
+}
+
+
 // Main scheduler loop
 pub fn schedule() {
     let notifier_list = {
@@ -572,17 +611,20 @@ pub fn schedule() {
         update_timers(&mut sched_cb);
         
         if sched_cb.preemption_count > 0 {
+            debug!("Returning due to preemption disabled {} on core {}", sched_cb.preemption_count, hal::get_core());
             return;
         }
 
         if sched_cb.running_task.is_some() {
             let current_task = sched_cb.running_task.unwrap(); 
+
             let mut task_info = unsafe {
                 current_task.as_ref().lock()
             };
 
             task_info.quanta = task_info.quanta.saturating_sub(1);
-            
+            let old_vcb = task_info.vcb.expect("VCB is none");
+
             // Switch to new task
             if task_info.status == TaskStatus::WAITING || task_info.status == TaskStatus::TERMINATED ||
             task_info.quanta == 0 {
@@ -601,7 +643,8 @@ pub fn schedule() {
                     head_task_info.status = TaskStatus::RUNNING;
                     head_task_info.quanta = INIT_QUANTA;
                     let new_context = head_task_info.context;
-                    
+                    let new_vcb = head_task_info.vcb.expect("VCB is none");
+
                     let prev_context = fetch_context();
                     task_info.context = prev_context;
                     if task_info.status == TaskStatus::RUNNING {
@@ -625,6 +668,7 @@ pub fn schedule() {
 
                     sched_cb.running_task = Some(head_task);
 
+                    switch_address_space(old_vcb, new_vcb);
                     set_panic_base(head_task_info.panic_base);
                     switch_context(new_context);
                 }
@@ -639,7 +683,8 @@ pub fn schedule() {
                         else if task_info.status == TaskStatus::TERMINATED {
                             sched_cb.terminated_tasks.insert_node_at_tail(current_task);
                         }
-                        prep_idle_task(&mut sched_cb);
+
+                        prep_idle_task(&mut sched_cb, old_vcb);
                     }
                     else {
                         // No other task to run. Continue with this task
@@ -668,13 +713,18 @@ pub fn schedule() {
                     ListNode::into_inner(sched_cb.active_tasks.remove_node(head_task.unwrap()))
                 };
                 sched_cb.running_task = Some(head_task);
+                
+                // Idle task uses the default kernel virtual address space
+                let old_vcb = get_kernel_addr_space();
 
+                switch_address_space_for_idle(old_vcb);
                 set_panic_base(head_task_info.panic_base);
                 switch_context(new_context);
             }
             else {
                 // If stack deletions / timers are pending, don't go into idle task yet
                 if can_sleep(&mut sched_cb) {
+                    debug!("Disabling timer on core {}", hal::get_core());
                     disable_scheduler_timer(); 
                 }
             }
@@ -683,10 +733,23 @@ pub fn schedule() {
         // We do the flip flop technique since we are still using the same terminated task stack at this point
         // But we won't be using it from the next schedule on
         if sched_cb.flip_flop {
+            debug!("Deactivated flip flop on core {}", hal::get_core());
             sched_cb.flip_flop = false;
         }
         else {
             // Any delayed stack deletions can be done here, since we have switched from that stack
+            // Debug-safety check: ensure we are not freeing a stack which currently contains
+            // the saved CPU context. This guards against use-after-free of active contexts.
+            #[cfg(debug_assertions)]
+            {
+                let cur_ctx = crate::hal::fetch_context() as usize;
+                for st in sched_cb.leftover_stack.iter() {
+                    let alloc_base = st.get_alloc_base();
+                    let top = st.get_stack_base();
+                    assert!(cur_ctx < alloc_base || cur_ctx >= top, "Attempting to destroy a stack that contains the current CPU context!");
+                }
+            }
+
             sched_cb.leftover_stack.clear();
         }
 
@@ -697,9 +760,12 @@ pub fn schedule() {
     notify_watchers(&notifier_list);
 }
 
-fn prep_idle_task(sched_cb: &mut TaskQueue) {
+fn prep_idle_task(sched_cb: &mut TaskQueue, old_vcb: VCB) {
+    debug!("Preparing to switch to idle task on core {}", hal::get_core());
     sched_cb.running_task = None;
     let context = create_kernel_context(idle_task, sched_cb.idle_task_stack.as_ptr() as *mut u8);
+    
+    switch_address_space_for_idle(old_vcb);
     set_panic_base(sched_cb.idle_task_stack.as_ptr() as usize);
     switch_context(context);
     
@@ -709,6 +775,7 @@ fn prep_idle_task(sched_cb: &mut TaskQueue) {
 }
 
 fn idle_task() -> ! {
+    debug!("Idle task on core {}", hal::get_core());
     hal::sleep();
 }
 
@@ -745,14 +812,16 @@ pub fn create_init_thread(handler: fn() -> !, process: KProcess) -> Result<KThre
     let (thread, core) = create_thread_common(handler)?;
     let thread_id = thread.lock().get_id();
     let proc_id = process.lock().get_id();
+    let proc_addr_space = process.lock().get_vcb();
     debug!("Created init thread {} on process {} on core {}", thread_id, proc_id, core);
     
     thread.lock().process = Some(process);
-
+    thread.lock().vcb = Some(proc_addr_space);
     Ok(thread)
 }
 
 pub fn start_task(thread: &KThread, core: usize, process: &KProcess, registry: &Spinlock<BTreeMap<usize, KProcess>>) -> Result<(), KError> {
+    disable_preemption();
     {
         let mut sched_cb = unsafe {
             SCHEDULER_CON_BLK.get(core).lock()
@@ -769,8 +838,8 @@ pub fn start_task(thread: &KThread, core: usize, process: &KProcess, registry: &
 
         TASKS.lock().insert(thread_id, Arc::clone(&thread));
     }
-    
     notify_other_cpu(core);
+    enable_preemption();
 
     Ok(())
 }
@@ -782,6 +851,7 @@ pub fn create_thread(handler: fn() -> !) -> Result<KThread, KError> {
     let cur_process = get_current_process();
 
     // Lock order => Scheduler -> Process -> Task
+    disable_preemption();
     {
         let mut sched_cb = unsafe {
             SCHEDULER_CON_BLK.get(core).lock()
@@ -790,6 +860,7 @@ pub fn create_thread(handler: fn() -> !) -> Result<KThread, KError> {
         if let Some(process) = cur_process {
             let process_ref = Arc::clone(&process);
             let mut guard = process.lock();
+            let proc_addr_space = guard.get_vcb();
             if guard.get_status() == ProcessStatus::Terminated {
                 return Err(KError::ProcessTerminated);
             }
@@ -798,16 +869,17 @@ pub fn create_thread(handler: fn() -> !) -> Result<KThread, KError> {
 
             guard.attach_thread_to_current_process(thread_id)?;
             thread.lock().process = Some(process_ref);
+            thread.lock().vcb = Some(proc_addr_space);
         }
         else {
             panic!("create_thread() called from idle task!!");
         }
         
         sched_cb.active_tasks.add_node(Arc::clone(&thread))?;
-        TASKS.lock().insert(thread.lock().get_id(), Arc::clone(&thread));
+        TASKS.lock().insert(thread_id, Arc::clone(&thread));
     }
-    
     notify_other_cpu(core);
+    enable_preemption();
 
     Ok(thread)
 }

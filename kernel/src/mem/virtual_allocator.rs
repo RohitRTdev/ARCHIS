@@ -69,7 +69,7 @@ impl VirtMemConBlk {
             proc_id: 0 
         }
     }
-  
+
     fn find_best_fit(&mut self, pages: usize, is_user: bool) -> Result<*mut u8, KError> {
         let mut smallest_blk: Option<&mut ListNode<PageDescriptor>> = None;
 
@@ -394,9 +394,14 @@ impl VirtMemConBlk {
     }
 }
 
+// This is only to be called from scheduler (when scheduler lock is held)
+pub unsafe fn set_address_space(vcb: VCB) {
+    PER_CPU_ACTIVE_VCB.local().store(vcb.as_ptr() as *mut _, Ordering::Release);
+
+    vcb.as_ref().lock().page_mapper.set_address_space();
+}
 
 pub fn get_kernel_addr_space() -> VCB {
-    let val = &**ADDRESS_SPACES.get().unwrap().lock().first().unwrap();
     NonNull::from(&**ADDRESS_SPACES.get().unwrap().lock().first().unwrap())
 }
 

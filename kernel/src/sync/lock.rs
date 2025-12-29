@@ -70,7 +70,7 @@ impl<T> Spinlock<T> {
 #[cfg(not(test))]
     pub fn lock(&self) -> SpinlockGuard<'_, T> {
         let int_status = hal::disable_interrupts();
-        self.lock.lock();
+        self.lock.lock(); 
         SpinlockGuard { lock: &self.lock, int_status, data: self.data.get()}
     }
 

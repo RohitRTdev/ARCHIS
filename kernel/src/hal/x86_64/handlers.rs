@@ -4,6 +4,7 @@ use core::ptr::NonNull;
 use crate::cpu::{self, MAX_CPUS, PerCpu, general_interrupt_handler};
 use crate::hal::{delay_ns, enable_scheduler_timer, get_core};
 use crate::infra;
+use crate::sched::{disable_preemption, enable_preemption};
 use crate::sync::{KSem, Spinlock};
 use super::{lapic, timer};
 use crate::mem::on_page_fault;
@@ -243,15 +244,18 @@ pub fn switch_context(new_context: *const u8) {
 
 pub fn create_kernel_context(handler: fn() -> !, stack_base: *mut u8) -> *const u8 {
     let mut sp = stack_base as usize;
-    
+
     // 16 byte alignment is maintained since stack_base already aligned to 4096 bytes
     sp -= core::mem::size_of::<CPUContext>();
+
+    // Sanity: ensure stack pointer remains 16-byte aligned after allocating the CPUContext
+    debug_assert_eq!(sp & 0xF, 0, "create_kernel_context produced an unaligned stack pointer");
 
     let mut context = CPUContext::new(); 
     context.rip = handler as u64;
     context.rbp = stack_base.addr() as u64;
     context.rsp = stack_base.addr() as u64;
-    
+
     // Kernel code + Kernel data
     context.cs = 0x8;
     context.ss = 0x10;
@@ -266,35 +270,52 @@ pub fn create_kernel_context(handler: fn() -> !, stack_base: *mut u8) -> *const 
 }
 
 fn ipi_handler(_vector: usize) {
-    // Search the requests list to find the first request aimed at this cpu
-    let mut ipi_queue = IPI_REQUESTS.lock();
-    let mut ipi_req = None;
-    for req in ipi_queue.iter() {
-        if req.core == get_core() {
-            ipi_req = Some(NonNull::from(req));
-            break;
-        }
-    }
-
-    if let Some(req) = ipi_req {
-        let req_info: &ListNode<IPIRequest> = unsafe {&*req.as_ptr()};
-        match req_info.req_type {
-            IPIRequestType::SchedChange => {
-                enable_scheduler_timer();
-                crate::sched::schedule();
-            },
-            IPIRequestType::Shutdown => {
-                debug!("Got IPI for shutdown...");
-                halt();
+    let core = get_core();
+    debug!("Got IPI for core {}", core);
+    let req = {
+        let mut ipi_queue = IPI_REQUESTS.lock();
+        let mut ipi_req = None;
+        
+        // Search the requests list to find the first request aimed at this cpu
+        for req in ipi_queue.iter() {
+            if req.core == core {
+                ipi_req = Some(NonNull::from(req));
+                break;
             }
         }
 
-        req_info.wait_mutex.signal();
+        if let Some(req) = ipi_req {
+            unsafe {
+                Some(ipi_queue.remove_node(req))
+            }
+        }
+        else {
+            None
+        }
+    };
 
-        unsafe {
-            ipi_queue.remove_node(req);
+    // Release the IPI_REQUESTS lock now so that other cpu's can continue notifying and receiving requests
+
+    if req.is_none() {
+        return;
+    }
+
+    let req_info = req.unwrap();
+    match req_info.req_type {
+        IPIRequestType::SchedChange => {
+            debug!("Got IPI for scheduler change");
+            enable_scheduler_timer();
+            crate::sched::schedule();
+        },
+        IPIRequestType::Shutdown => {
+            debug!("Got IPI for shutdown...");
+            halt();
         }
     }
+
+    debug!("IPI Requests list size={}", IPI_REQUESTS.lock().get_nodes());
+
+    req_info.wait_mutex.signal();
 }
 
 // Function should only be called after scheduler is up
@@ -309,6 +330,7 @@ pub fn notify_core(req_type: IPIRequestType, target_core: usize) -> Result<KSem,
     };
 
     IPI_REQUESTS.lock().add_node(req)?;
+    debug!("IPI Requests list size={}", IPI_REQUESTS.lock().get_nodes());
 
     lapic::send_ipi(apic_id as u32, IPI_VECTOR as u8);
     Ok(wait_sem)

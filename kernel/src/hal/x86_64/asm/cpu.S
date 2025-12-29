@@ -75,6 +75,11 @@ FUNC write_cr0
     ret
 ENDF write_cr0
 
+FUNC write_cr3
+    movq %rdi, %cr3
+    ret
+ENDF write_cr3
+
 FUNC write_cr4
     movq %rdi, %cr4
     ret
