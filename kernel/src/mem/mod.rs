@@ -22,12 +22,13 @@ pub trait Allocator<T> {
     unsafe fn dealloc(address: NonNull<T>, layout: Layout); 
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PageDescriptor {
     num_pages: usize,
     start_phy_address: usize,
     start_virt_address: usize,
-    flags: u8
+    flags: u8,
+    is_mapped: bool
 }
 
 

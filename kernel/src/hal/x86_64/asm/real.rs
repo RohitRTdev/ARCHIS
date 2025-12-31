@@ -26,6 +26,7 @@ extern "C" {
     pub fn read_rflags() -> u64;
     pub fn read_cr0() -> u64;
     pub fn read_cr2() -> u64;
+    pub fn read_cr3() -> u64;
     pub fn read_cr4() -> u64;
     pub fn rdmsr(address: u32) -> u64;
     pub fn wrmsr(address: u32, data: u64);

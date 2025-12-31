@@ -72,7 +72,7 @@ macro_rules! level_print {
         }
         
         if timestamp {
-            $crate::println!("[{}]-[{}]-[{}]: {}", $level, unsafe {$crate::read_rtc()}, unsafe {$crate::read_timestamp()}, format_args!($($arg)*));
+            $crate::println!("[{}]-[{}]-[{}]-[{}]: {}", $level, unsafe {$crate::read_rtc()}, unsafe {$crate::read_timestamp()}, crate::hal::get_core(), format_args!($($arg)*));
         } else {
             $crate::println!("[{}]: {}", $level, format_args!($($arg)*));
         }

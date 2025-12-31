@@ -1,4 +1,5 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
+use core::alloc::Layout;
 
 use alloc::{collections::BTreeMap};
 use common::{elf::*, ArrayTable, PAGE_SIZE};
@@ -7,7 +8,7 @@ use crate::{RemapEntry, RemapType::*, BOOT_INFO, REMAP_LIST};
 use crate::ds::{FixedList, List};
 use crate::sync::Spinlock;
 use kernel_intf::{info, debug};
-use crate::mem::{self, MapFetchType, Regions::*};
+use crate::mem::{self, MapFetchType, PageDescriptor, Regions::*};
 
 pub struct ModuleDescriptor {
     pub name: &'static str,
@@ -240,7 +241,7 @@ pub fn complete_handoff() {
     }
     
     // The module name needs to be patched up to new address
-    let name_ptr = mem::get_virtual_address(mod_cb.name.as_ptr() as usize, MapFetchType::Kernel).expect("Unable to find virtual address for module name");
+    let name_ptr = mem::get_virtual_address(mod_cb.name.as_ptr() as usize, 0,  MapFetchType::Kernel).expect("Unable to find virtual address for module name");
     
     mod_cb.name = unsafe {
         let slice = core::slice::from_raw_parts(name_ptr as *const u8, mod_cb.name.len());
@@ -270,8 +271,9 @@ pub fn complete_handoff() {
     
     // We have moved the init-fs metadata into kernel binary
     // So we can remove the descriptors we had
-    // We can't call mem::deallocate_memory as the physical memory was allocated by blr. So we just unmap instead
-    mem::unmap_memory(boot_info.init_fs.start as *mut u8, boot_info.init_fs.size).expect("Could not deallocate init-fs descriptor memory");
-
+    // We can't call mem::deallocate_memory with VIRTUAL flag alone as the physical memory was allocated by blr. So we just unmap instead
+    mem::unmap_memory(boot_info.init_fs.start, boot_info.init_fs.size, 0).expect("Could not deallocate init-fs descriptor memory");
+    mem::deallocate_memory(boot_info.init_fs.start as *mut u8, Layout::from_size_align(boot_info.init_fs.size, PAGE_SIZE).unwrap(), PageDescriptor::VIRTUAL | PageDescriptor::NO_ALLOC)
+    .expect("Unable to unreserve virtual address space for init fs");
     info!("Handoff procedure completed");
 }

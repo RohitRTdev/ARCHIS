@@ -28,12 +28,9 @@ pub fn common_panic_handler(mod_name: &str, info: &PanicInfo) -> ! {
                 let _ = notify_core(IPIRequestType::Shutdown, cpu);
             }
         }
-        
-        // At this point, we cannot rely on wait mechanisms for processors to shutdown, so instead we delay for a while
-        hal::delay_ns(1_000_000);
     }
     
-    logger::clear_screen();
+    logger::set_panic_mode();
 
     if early_panic_phase || DISABLE_CALLSTACK.load(Ordering::Acquire) {
         println!("Kernel panic on core {}!!", core);

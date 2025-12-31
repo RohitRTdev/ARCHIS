@@ -195,7 +195,6 @@ fn phy_alloc_test() {
     // Now we should have (8) - (2 + 6 + 2)
     assert_eq!(addr as usize, 0);
     
-    
     let layout = Layout::from_size_align(8 * common::PAGE_SIZE + 16, 4096).unwrap();
     let addr = mem::allocate_memory(layout, 0);
 

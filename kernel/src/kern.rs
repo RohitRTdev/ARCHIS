@@ -78,10 +78,9 @@ fn task_spawn() -> ! {
         KSem::new(0, 1)
     });
 
-    info!("Active_tasks={}, Waiting_tasks={}, terminated_tasks={} in spawner", sched::get_num_active_tasks(), 
-    sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks());
-
     let task_id = sched::get_current_task_id().unwrap();
+    info!("Starting task spawner, id={}", task_id);
+
 
     for idx in 0..5 {
         info!("Creating task {} in task spawner", idx);
@@ -90,12 +89,10 @@ fn task_spawn() -> ! {
             info!("Running task: {}", id);
             TASK_COUNTER.get().unwrap().signal();
 
-            info!("id:{}, Active_tasks={}, Waiting_tasks={}, terminated_tasks={}", id, sched::get_num_active_tasks(), 
-            sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks());
+            info!("id={}", id);
             
             loop {
-                info!("id:{}, Active_tasks={}, Waiting_tasks={}, terminated_tasks={}, core={}", id, sched::get_num_active_tasks(), 
-                sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks(), hal::get_core());
+                info!("id:{}", id);
             
                 sched::delay_ms(1000);
             }
@@ -104,14 +101,12 @@ fn task_spawn() -> ! {
 
     info!("Task spawner going to wait!");
     TASK_COUNTER.get().unwrap().wait().unwrap();
-    info!("Active_tasks={}, Waiting_tasks={}, terminated_tasks={} in spawner", sched::get_num_active_tasks(), 
-    sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks());
+    info!("Task spawner starting kill spree");
 
     loop {
+        info!("Task spawner waiting for keyboard event");
         KEYBOARD_EVENT.get().unwrap().wait().unwrap();
-        info!("id:{}, Active_tasks={}, Waiting_tasks={}, terminated_tasks={} before", task_id, sched::get_num_active_tasks(), 
-        sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks());
-
+        info!("Task spawner springing to action");
         if !tasks.is_empty() {
             let task = tasks.pop_front().unwrap();
             let id = task.lock().get_id();
@@ -125,9 +120,6 @@ fn task_spawn() -> ! {
             sched::exit_thread();
             info!("This shouldn't be printed");
         }
-        
-        info!("id:{}, Active_tasks={}, Waiting_tasks={}, terminated_tasks={} after", task_id, sched::get_num_active_tasks(), 
-        sched::get_num_waiting_tasks(), sched::get_num_terminated_tasks());
     }
 }
 
@@ -152,9 +144,8 @@ fn process_spawn() -> ! {
             }
 
             loop {
-                info!("Running thread with id {} with process id {} on core {}", thread_id, proc_id, hal::get_core());
-                
-                info!("Waiting for event..");
+                info!("Running thread with id {} with process id {}", thread_id, proc_id);
+                info!("Process {} waiting for event..", proc_id);
                 KEYBOARD_EVENT.get().unwrap().wait().unwrap();
                 
                 // Test self kill (exit)
@@ -255,6 +246,7 @@ unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
 static KEYBOARD_EVENT: Once<KSem> = Once::new();
 
 fn key_notifier(_: usize) {
+    debug!("Got key notifier..");
     let task = sched::get_current_task();
     if task.is_none() {
         info!("Called keyboard handler from idle task on core {}", hal::get_core());

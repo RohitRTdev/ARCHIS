@@ -2,7 +2,7 @@ use alloc::sync::{Arc, Weak};
 use alloc::collections::BTreeMap;
 use kernel_intf::KError;
 use crate::{ds::*, sched};
-use crate::mem::{self, PoolAllocatorGlobal, VCB};
+use crate::mem::{self, PoolAllocatorGlobal, VCB, VirtMemConBlk};
 use crate::sched::*;
 use crate::sync::Spinlock;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -35,18 +35,26 @@ pub struct Process {
 unsafe impl Send for Process {}
 
 impl Process {
-    fn new() -> KProcess {
+    fn new(clone_addr_space: bool) -> Result<KProcess, KError> {
         let id = PROCESS_ID.fetch_add(1, Ordering::Relaxed);  
+        let kernel_addr_space = mem::get_kernel_addr_space();
+        let new_addr_space = if clone_addr_space {
+            VirtMemConBlk::clone(kernel_addr_space, id)?     
+        }
+        else {
+            kernel_addr_space
+        };
+
         let proc = Arc::new_in(Spinlock::new(Self {
             id,
             threads: List::new(),
-            addr_space: mem::get_kernel_addr_space(),
+            addr_space: new_addr_space,
             status: ProcessStatus::Ready 
         }), PoolAllocatorGlobal);
         
         info!("Creating new process with id {}", id);
 
-        proc
+        Ok(proc)
     }
 
     pub fn get_vcb(&self) -> VCB {
@@ -106,7 +114,9 @@ impl Drop for Process {
 
 pub fn init() {
     // Create init process and attach init task (task id = 0) to it
-    let init_proc = Process::new();
+    let init_proc = Process::new(false)
+    .expect("Failed to create init process");
+
     PROCESSES.lock().insert(0, Arc::clone(&init_proc));
 
     let mut proc = init_proc.lock();
@@ -135,13 +145,15 @@ pub fn get_process_info(proc_id: usize) -> Option<KProcess> {
 }
 
 pub fn create_process(start_function: fn() -> !) -> Result<KProcess, KError> {
-    let process = Process::new();
+    disable_preemption();
+    let process = Process::new(true)?;
     
     let thread = sched::create_init_thread(start_function, Arc::clone(&process))?;
     let core = thread.lock().get_core();
 
     start_task(&thread, core, &process, &PROCESSES)?;
-    
+
+    enable_preemption();    
     Ok(process)
 }
 
@@ -155,7 +167,9 @@ pub fn kill_process(proc_id: usize) {
 
     let proc = proc.unwrap();
     let cur_task_id = get_current_task_id();
-    
+
+    disable_preemption();
+
     // We manually move the list here since we don't want to hold the lock
     let threads = {
         let mut guard = proc.lock();
@@ -188,6 +202,9 @@ pub fn kill_process(proc_id: usize) {
     }
     
     proc.lock().destroy_process();
+
+    
+    enable_preemption();
 
     // Kill the current thread last
     if is_exit {

@@ -149,7 +149,7 @@ pub fn init() -> ! {
     let stack_base = crate::cpu::get_current_stack_base();
 
     switch_to_new_address_space(page_mapper::get_kernel_pml4(), stack_base,
-        crate::mem::get_virtual_address(tables::kern_addr_space_start as *const () as usize, MapFetchType::Kernel).expect("kern_addr_space_start virtual address not found!"));
+        crate::mem::get_virtual_address(tables::kern_addr_space_start as *const () as usize, 0,  MapFetchType::Kernel).expect("kern_addr_space_start virtual address not found!"));
 }
 
 pub fn register_debug_fn(handler: fn()) {

@@ -60,7 +60,7 @@ impl PhyMemConBlk {
             }
 
             self.alloc_block_list.add_node(PageDescriptor { num_pages: pages, start_phy_address: start_address as usize, 
-                start_virt_address: 0x0, flags: 0x0 })?;
+                start_virt_address: 0x0, flags: 0x0, is_mapped: false })?;
 
             return Ok(start_address);
         }
@@ -169,7 +169,7 @@ impl PhyMemConBlk {
         else {
             // If no block to which the fragmented region can be merged, just create a new block to describe the free region
             // If it fails at this point, it's hard to recover
-            self.free_block_list.add_node(PageDescriptor { num_pages, start_phy_address: addr, start_virt_address: 0, flags: 0 })
+            self.free_block_list.add_node(PageDescriptor { num_pages, start_phy_address: addr, start_virt_address: 0, flags: 0, is_mapped: false })
             .expect("System in bad state. Critical memory failure!");
         }
         Ok(())
@@ -208,13 +208,13 @@ pub fn frame_allocator_init() {
         match &desc.mem_type {
             MemType::Free => {
                 init_mem_cb.free_block_list.add_node(PageDescriptor { num_pages: common::ceil_div(desc.val.size, PAGE_SIZE), 
-                    start_phy_address: desc.val.base_address, start_virt_address: 0, flags: 0 }).unwrap();
+                    start_phy_address: desc.val.base_address, start_virt_address: 0, flags: 0, is_mapped: false }).unwrap();
                 
                 init_mem_cb.avl_memory += desc.val.size;
             },
             MemType::Allocated | MemType::Identity => {
                 init_mem_cb.alloc_block_list.add_node(PageDescriptor { num_pages: common::ceil_div(desc.val.size, PAGE_SIZE), 
-                    start_phy_address: desc.val.base_address, start_virt_address: 0, flags: 0 }).unwrap();
+                    start_phy_address: desc.val.base_address, start_virt_address: 0, flags: 0, is_mapped: false }).unwrap();
             
                     if desc.mem_type == MemType::Identity {
                         REMAP_LIST.lock().add_node(RemapEntry { 
@@ -241,21 +241,24 @@ pub fn test_init_allocator() {
         num_pages: 10,
         start_phy_address: 0x0,
         start_virt_address: 0x0,
-        flags: 0x0
+        flags: 0x0,
+        is_mapped: false
     };
 
     let desc2 = PageDescriptor {
         num_pages: 2,
         start_phy_address: 20 * PAGE_SIZE,
         start_virt_address: 0x0,
-        flags: 0x0
+        flags: 0x0,
+        is_mapped: false
     };
 
     let desc3 = PageDescriptor {
         num_pages: 6,
         start_phy_address: 40 * PAGE_SIZE,
         start_virt_address: 0x0,
-        flags: 0x0
+        flags: 0x0,
+        is_mapped: false
     };
     
     let mut free_block_list= List::new();
@@ -289,7 +292,8 @@ pub fn test_init_allocator_for_virtual() {
         num_pages: 100,
         start_phy_address: 0xf000,
         start_virt_address: 0x0,
-        flags: 0x0
+        flags: 0x0,
+        is_mapped: false
     };
 
     let mut free_block_list= List::new();

@@ -49,6 +49,12 @@ FUNC read_cr2
     ret
 ENDF read_cr2
 
+FUNC read_cr3
+    movq %cr3, %rax
+    ret
+ENDF read_cr3
+
+
 FUNC read_cr4
     movq %cr4, %rax
     ret

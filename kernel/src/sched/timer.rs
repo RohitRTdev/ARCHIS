@@ -1,4 +1,3 @@
-use crate::sched::add_kernel_timer;
 use crate::sync::{KSem, Spinlock};
 use crate::mem::PoolAllocatorGlobal;
 use alloc::sync::Arc;

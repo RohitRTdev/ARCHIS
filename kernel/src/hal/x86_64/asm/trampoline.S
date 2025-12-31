@@ -53,7 +53,7 @@ pmode_entry:
     movw %ax, %ss
 
     movl %cr4, %eax
-    orl  $(1 << 5), %eax       
+    orl  $(1 << 5), %eax      // CR4.PAE   
     movl %eax, %cr4
 
 _patch3:

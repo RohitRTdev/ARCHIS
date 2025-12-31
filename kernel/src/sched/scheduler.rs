@@ -49,22 +49,15 @@ pub struct Task {
 
 impl Task {
     fn new(alloc_stack: bool, core: usize) -> Result<KThread, KError> {
-        // We don't want stack to be partially allocated
-        // Otherwise, thread could panic when dropped
-        disable_preemption();
         let stack  = if alloc_stack {
-            Some(Stack::new().map_err(|err| {
-                enable_preemption();
-                err
-            })?)
+            Some(Stack::new()?)
         } else {
             None
         };
-        enable_preemption();
         let id = TASK_ID.fetch_add(1, Ordering::Relaxed);  
 
         if alloc_stack {
-            debug!("Creating task with ID:{} and stack_addr={:#X}", id, stack.as_ref().unwrap().get_stack_base());
+            debug!("Creating task with ID:{} and stack_addr={:#X} on core {}", id, stack.as_ref().unwrap().get_stack_base(), core);
         } 
         else {
             debug!("Creating task with ID:{}", id);
@@ -83,7 +76,6 @@ impl Task {
             process: None,
             vcb: None
         }), PoolAllocatorGlobal);
-
 
         Ok(task)
     }
@@ -181,19 +173,6 @@ pub fn get_current_task_id() -> Option<usize> {
     Some(get_current_task()?.lock().get_id())
 }
 
-pub fn get_num_active_tasks() -> usize {
-    let sched_cb = SCHEDULER_CON_BLK.local().lock();
-    sched_cb.active_tasks.get_nodes() + if sched_cb.running_task.is_some() {1} else {0}
-}
-
-pub fn get_num_waiting_tasks() -> usize {
-    SCHEDULER_CON_BLK.local().lock().waiting_tasks.get_nodes()
-}
-
-pub fn get_num_terminated_tasks() -> usize {
-    SCHEDULER_CON_BLK.local().lock().terminated_tasks.get_nodes()
-}
-
 pub fn yield_cpu() {
     // Remove all remaining run time
     get_current_task()
@@ -248,26 +227,60 @@ pub fn init() {
     enable_scheduler_timer();
 }
 
-pub fn add_cur_task_to_wait_queue(wait_semaphore: KSemInnerType) {
-    let cur_task = get_current_task()
-    .expect("add_cur_task_to_wait_queue() called from idle task!!");
-
-    // Important to obtain scheduler lock here since all other code assumes that task 
-    // status change requires holding the scheduler lock (This is a conservative step)
-    let _sched_cb = SCHEDULER_CON_BLK.local().lock();
-
+// Set task to waiting and add the timer atomically
+pub fn add_cur_task_to_wait_queue_with_timer(wait_semaphore: KSemInnerType, timer: KTimerInnerType) -> bool {
+    let mut sched_cb = SCHEDULER_CON_BLK.local().lock();
+    let cb = sched_cb.running_task;
+    if cb.is_none() {
+        panic!("add_cur_task_to_wait_queue_with_timer() called from idle task!!");
+    }
+    
+    let cur_task = unsafe { &**cb.unwrap().as_ptr() };
     let mut task = cur_task.lock();
+    
     // TERMINATED > WAITING, don't do anything
     if task.status == TaskStatus::TERMINATED {
-        return;
+        return false;
+    }
+    
+    let res = sched_cb.timer_list.add_node(timer);
+    if res.is_err() {
+        return false;
     }
 
-    debug!("Adding task {} to wait queue", task.id);
-
-    task.wait_semaphores.add_node(wait_semaphore)
-    .expect("System in bad state.. Could not add semaphore to task list");
+    let res = task.wait_semaphores.add_node(wait_semaphore);
+    if res.is_err() {
+        sched_cb.timer_list.pop_node();
+        return false;
+    }
 
     task.status = TaskStatus::WAITING;
+    true
+}
+
+pub fn add_cur_task_to_wait_queue(wait_semaphore: KSemInnerType) -> bool {
+    let sched_cb = SCHEDULER_CON_BLK.local().lock();
+    let cb = sched_cb.running_task;
+    if cb.is_none() {
+        panic!("add_cur_task_to_wait_queue() called from idle task!!");
+    }
+    
+    let cur_task = unsafe { &**cb.unwrap().as_ptr() };
+
+    let mut task = cur_task.lock();
+    
+    // TERMINATED > WAITING, don't do anything
+    if task.status == TaskStatus::TERMINATED {
+        return false;
+    }
+
+    let res = task.wait_semaphores.add_node(wait_semaphore);
+    if res.is_err() {
+        return false;
+    }
+
+    task.status = TaskStatus::WAITING;
+    true
 }
 
 fn remove_wait_semaphore(task: &mut Task, wait_semaphore: KSemInnerType) {
@@ -355,6 +368,15 @@ pub fn signal_waiting_task(task_id: usize, wait_semaphore: KSemInnerType) {
     enable_preemption();
 }
 
+
+// Killing a thread is an unsafe process in general
+// This procedure must be called in a coordinated manner, otherwise it simply
+// destroys a task/process asynchronously. Most of the time it's fine. However this
+// could lead to memory leaks. A task could have a heap reference Arc pointer on it's stack.
+// If task is killed at this point, the destructor is never run and the memory is leaked
+// Note that there is no stack unwinding destructor calls to avoid this problem within the kernel
+// Doing stack unwinding for every process/task destruction is not practical and can cause lot
+// of bookkeeping and performance issues
 pub fn kill_thread(task_id: usize) {
     let mut yield_flag = false;
     let mut drop_task  = false;
@@ -505,11 +527,6 @@ pub fn exit_thread() -> ! {
     panic!("exit_thread() unreachable reached!!");
 }
 
-pub fn add_kernel_timer(timer: KTimerInnerType) -> Result<(), KError> {
-    let mut sched_cb = SCHEDULER_CON_BLK.local().lock();
-    sched_cb.timer_list.add_node(timer)
-}
-
 // We do all this moving out of stuff and into other stuff drama in order to avoid holding any lock during signal operation
 fn reap_tasks(sched_cb: &mut TaskQueue) {
     while sched_cb.terminated_tasks.get_nodes() != 0 {
@@ -589,7 +606,6 @@ fn can_sleep(sched_cb: &mut TaskQueue) -> bool {
 #[inline]
 fn switch_address_space(old_vcb: VCB, new_vcb: VCB) {
     if old_vcb != new_vcb {
-        debug!("Address space don't match! Switching...");
         unsafe {
             set_address_space(new_vcb);
         }
@@ -603,6 +619,13 @@ fn switch_address_space_for_idle(old_vcb: VCB) {
     switch_address_space(old_vcb, new_vcb);
 }
 
+#[inline]
+fn switch_address_space_from_idle(new_vcb: VCB) {
+    let old_vcb = get_kernel_addr_space();
+
+    switch_address_space(old_vcb, new_vcb);
+}
+
 
 // Main scheduler loop
 pub fn schedule() {
@@ -611,7 +634,6 @@ pub fn schedule() {
         update_timers(&mut sched_cb);
         
         if sched_cb.preemption_count > 0 {
-            debug!("Returning due to preemption disabled {} on core {}", sched_cb.preemption_count, hal::get_core());
             return;
         }
 
@@ -715,9 +737,9 @@ pub fn schedule() {
                 sched_cb.running_task = Some(head_task);
                 
                 // Idle task uses the default kernel virtual address space
-                let old_vcb = get_kernel_addr_space();
+                let new_vcb = head_task_info.vcb.unwrap();
 
-                switch_address_space_for_idle(old_vcb);
+                switch_address_space_from_idle(new_vcb);
                 set_panic_base(head_task_info.panic_base);
                 switch_context(new_context);
             }
@@ -733,7 +755,6 @@ pub fn schedule() {
         // We do the flip flop technique since we are still using the same terminated task stack at this point
         // But we won't be using it from the next schedule on
         if sched_cb.flip_flop {
-            debug!("Deactivated flip flop on core {}", hal::get_core());
             sched_cb.flip_flop = false;
         }
         else {
@@ -821,7 +842,6 @@ pub fn create_init_thread(handler: fn() -> !, process: KProcess) -> Result<KThre
 }
 
 pub fn start_task(thread: &KThread, core: usize, process: &KProcess, registry: &Spinlock<BTreeMap<usize, KProcess>>) -> Result<(), KError> {
-    disable_preemption();
     {
         let mut sched_cb = unsafe {
             SCHEDULER_CON_BLK.get(core).lock()
@@ -839,19 +859,18 @@ pub fn start_task(thread: &KThread, core: usize, process: &KProcess, registry: &
         TASKS.lock().insert(thread_id, Arc::clone(&thread));
     }
     notify_other_cpu(core);
-    enable_preemption();
 
     Ok(())
 }
 
 // Must be called from valid process context 
 pub fn create_thread(handler: fn() -> !) -> Result<KThread, KError> {
+    disable_preemption();
     let (thread, core) = create_thread_common(handler)?;
     let thread_id = thread.lock().get_id();
     let cur_process = get_current_process();
 
     // Lock order => Scheduler -> Process -> Task
-    disable_preemption();
     {
         let mut sched_cb = unsafe {
             SCHEDULER_CON_BLK.get(core).lock()
@@ -878,6 +897,7 @@ pub fn create_thread(handler: fn() -> !) -> Result<KThread, KError> {
         sched_cb.active_tasks.add_node(Arc::clone(&thread))?;
         TASKS.lock().insert(thread_id, Arc::clone(&thread));
     }
+
     notify_other_cpu(core);
     enable_preemption();
 

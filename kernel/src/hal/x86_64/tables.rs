@@ -159,7 +159,7 @@ pub fn build_gdt() {
     });
 
     let tss_base = CPU_TSS.local().get().unwrap() as *const _ as u64;
-    let tss_desc =  TSSDescriptor::new(tss_base + size_of::<TaskStateSegment>() as u64 - 1, tss_base);  
+    let tss_desc =  TSSDescriptor::new(size_of::<TaskStateSegment>() as u64 - 1, tss_base);  
     
     let mut cpu_table = CPU_TABLE_DATA.local().lock();
     cpu_table.gdt_array = [

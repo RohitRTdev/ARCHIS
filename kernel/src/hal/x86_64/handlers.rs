@@ -2,7 +2,7 @@ use kernel_intf::{KError, debug, info};
 use core::sync::atomic::{AtomicUsize, AtomicPtr, Ordering};
 use core::ptr::NonNull;
 use crate::cpu::{self, MAX_CPUS, PerCpu, general_interrupt_handler};
-use crate::hal::{delay_ns, enable_scheduler_timer, get_core};
+use crate::hal::{VirtAddr, delay_ns, enable_scheduler_timer, get_core};
 use crate::infra;
 use crate::sched::{disable_preemption, enable_preemption};
 use crate::sync::{KSem, Spinlock};
@@ -15,6 +15,7 @@ use super::asm;
 use crate::hal::halt;
 use crate::devices::ioapic::add_redirection_entry;
 use crate::ds::*;
+use crate::mem::Regions::Region4;
 
 pub const PAGE_FAULT_VECTOR: usize = 14;
 pub const DOUBLE_FAULT_VECTOR: usize = 8;
@@ -29,13 +30,13 @@ const USER_VECTOR_START: usize = 38;
 
 pub enum IPIRequestType {
     SchedChange,
+    TlbInvalidate,
     Shutdown
 }
 
 pub struct IPIRequest {
     req_type: IPIRequestType,
-    core: usize,
-    wait_mutex: KSem
+    core: usize
 }
 
 
@@ -50,7 +51,7 @@ static PER_CPU_GLOBAL_CONTEXT: PerCpu<AtomicPtr<u8>> = PerCpu::new_with(
     [const {AtomicPtr::new(core::ptr::null_mut())}; MAX_CPUS]
 );
 
-static IPI_REQUESTS: Spinlock<DynList<IPIRequest>> = Spinlock::new(List::new());
+static IPI_REQUESTS: Spinlock<FixedList<IPIRequest, {Region4 as usize}>> = Spinlock::new(List::new());
 
 static mut VECTOR_TABLE: [fn(usize); MAX_INTERRUPT_VECTORS] = [default_handler; MAX_INTERRUPT_VECTORS];
 const UNDEFINED_STRING: &'static str = "Undefined";
@@ -140,7 +141,7 @@ extern "C" fn global_interrupt_handler(vector: u64, cpu_context: *const CPUConte
     if vector as usize > DEBUG_VECTOR {
         eoi();
     }
-
+    
     PER_CPU_GLOBAL_CONTEXT.local().load(Ordering::Relaxed) as *const CPUContext
 }
 
@@ -251,6 +252,8 @@ pub fn create_kernel_context(handler: fn() -> !, stack_base: *mut u8) -> *const 
     // Sanity: ensure stack pointer remains 16-byte aligned after allocating the CPUContext
     debug_assert_eq!(sp & 0xF, 0, "create_kernel_context produced an unaligned stack pointer");
 
+    debug!("Creating stack context for handler={:#X} and base={:#X}", handler as usize, stack_base as usize);
+
     let mut context = CPUContext::new(); 
     context.rip = handler as u64;
     context.rbp = stack_base.addr() as u64;
@@ -307,6 +310,14 @@ fn ipi_handler(_vector: usize) {
             enable_scheduler_timer();
             crate::sched::schedule();
         },
+        IPIRequestType::TlbInvalidate => {
+            debug!("Got IPI for tlb invalidate");
+            // Reload cr3
+            unsafe {
+                let cr3 = asm::read_cr3();
+                asm::write_cr3(cr3);
+            }
+        },
         IPIRequestType::Shutdown => {
             debug!("Got IPI for shutdown...");
             halt();
@@ -314,24 +325,21 @@ fn ipi_handler(_vector: usize) {
     }
 
     debug!("IPI Requests list size={}", IPI_REQUESTS.lock().get_nodes());
-
-    req_info.wait_mutex.signal();
 }
 
 // Function should only be called after scheduler is up
-pub fn notify_core(req_type: IPIRequestType, target_core: usize) -> Result<KSem, KError> {
+pub fn notify_core(req_type: IPIRequestType, target_core: usize) -> Result<(), KError> {
     assert!(target_core < cpu::get_total_cores());
     
     let apic_id = super::get_apic_id(target_core);
 
-    let wait_sem = KSem::new(0, 1);
     let req = IPIRequest {
-        req_type, core: target_core, wait_mutex: wait_sem.clone()
+        req_type, core: target_core
     };
 
     IPI_REQUESTS.lock().add_node(req)?;
     debug!("IPI Requests list size={}", IPI_REQUESTS.lock().get_nodes());
 
     lapic::send_ipi(apic_id as u32, IPI_VECTOR as u8);
-    Ok(wait_sem)
+    Ok(())
 }

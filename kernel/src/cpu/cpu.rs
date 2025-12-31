@@ -73,7 +73,7 @@ impl Stack {
         #[cfg(not(feature = "stack_down"))]
         let stack_base = stack_raw;
 
-        map_memory(stack_raw_phys.addr(), stack_base.addr(), stack_size, PageDescriptor::VIRTUAL)?;
+        map_memory(stack_raw_phys.addr(), stack_base.addr(), stack_size, 0)?;
 
         Ok(Self {guard_size: guard_size, stack_size: stack_size, base: NonNull::new(stack_raw).unwrap(), 
         allocated: true })
@@ -100,7 +100,7 @@ impl Stack {
             deallocate_memory(
                 self.get_alloc_base() as *mut u8,
                 Layout::from_size_align(self.guard_size, PAGE_SIZE).unwrap()
-            , PageDescriptor::VIRTUAL)
+            , PageDescriptor::VIRTUAL | PageDescriptor::NO_ALLOC)
             .expect("Failed to deallocate memory for stack");
         }
 

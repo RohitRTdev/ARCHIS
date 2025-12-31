@@ -1,4 +1,5 @@
-use crate::{hal::get_bsp_lapic_id, mem::{PageDescriptor, map_memory}};
+use crate::hal::get_bsp_lapic_id;
+use crate::mem::{PageDescriptor, map_memory, reserve_virtual_memory};
 use crate::infra;
 use core::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 use crate::BOOT_INFO;
@@ -200,6 +201,9 @@ pub fn init() {
 
     info!("Trampoline mapped to region: {:#X}", ap_start_code.addr());
 
+    reserve_virtual_memory(ap_start_code.addr(), Layout::from_size_align(tramp_size, PAGE_SIZE).unwrap())
+    .expect("Failed to reserve identity mapped address for trampoline in kernel address space");
+
     map_memory(ap_start_code as usize, ap_start_code as usize, tramp_size, PageDescriptor::VIRTUAL)
     .expect("Failed to identity map ap trampoline region to kernel address space!");
 
@@ -271,8 +275,9 @@ pub fn init() {
     while AP_CORES_INIT.load(Ordering::Acquire) < total_cores {
         core::hint::spin_loop();
     }
-
+    
     infra::enable_mp_init(); 
+    super::enable_invalidation();
 }
 
 fn activate_local_core_nmi_trap() {

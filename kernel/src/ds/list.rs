@@ -132,6 +132,28 @@ impl<T, A: Allocator<ListNode<T>>> List<T, A> {
         }
     }
 
+    pub fn last(&self) -> Option<&ListNode<T>> {
+        if self.tail.is_none() {
+            None
+        }
+        else {
+            unsafe {
+                Some(&*self.tail.unwrap())
+            }
+        }
+    }
+
+    pub fn clone(&self) -> Result<Self, KError>
+    where T: Clone {
+        let mut new_list = Self::new();
+
+        for node in self.iter() {
+            new_list.add_node((*node).clone())?;
+        }
+
+        Ok(new_list)
+    }
+
     pub fn add_node(&mut self, data: T) -> Result<(), KError> {
         let layout = Layout::from_size_align(size_of::<ListNode<T>>(), align_of::<ListNode<T>>()).unwrap();
         let addr = A::alloc(layout)?.as_ptr();
@@ -188,6 +210,18 @@ impl<T, A: Allocator<ListNode<T>>> List<T, A> {
         }
 
         self.num_nodes += 1;
+    }
+
+    pub fn pop_node(&mut self) {
+        let node = self.last();
+        if node.is_none() {
+            return;
+        }
+        else {
+            unsafe {
+                self.remove_node(NonNull::from(node.unwrap()));
+            }
+        }
     }
 
     pub fn insert_node_at_tail(&mut self, this: NonNull<ListNode<T>>) {

@@ -7,9 +7,9 @@ use kernel_intf::KError;
 use kernel_intf::{info, debug};
 use crate::RemapType::*;
 use core::alloc::Layout;
-use core::ptr::NonNull;
+use core::ptr::{null_mut, NonNull};
 use core::hint::likely;
-use core::sync::atomic::{AtomicPtr, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicBool, AtomicPtr, Ordering};
 use common::{PAGE_SIZE, ceil_div, ptr_to_ref_mut};
 use super::PHY_MEM_CB;
 
@@ -30,7 +30,16 @@ pub struct VirtMemConBlk {
     proc_id: usize
 }
 
+static IS_ADDR_SPACE_INIT: AtomicBool = AtomicBool::new(false);
 static ADDRESS_SPACES: Once<Spinlock<FixedList<Spinlock<VirtMemConBlk>, {Region1 as usize}>>> = Once::new();
+static KERN_ADDR_SPACE: Once<AtomicPtr<Spinlock<VirtMemConBlk>>> = Once::new();
+
+#[cfg(target_arch="x86_64")]
+static RESERVED_SPACE: [usize; 4] = [KERNEL_HALF_OFFSET, KERNEL_HALF_OFFSET + PAGE_SIZE, KERNEL_HALF_OFFSET + 2 * PAGE_SIZE, KERNEL_HALF_OFFSET + 3 * PAGE_SIZE];
+
+#[cfg(target_arch="x86_64")]
+static NEXT_AVL_SPACE: AtomicU8 = AtomicU8::new(0);
+
 
 // We cannot use Arc or something similar since this is activated prior to heap initialization
 static PER_CPU_ACTIVE_VCB: PerCpu<AtomicPtr<Spinlock<VirtMemConBlk>>> = PerCpu::new_with(
@@ -40,24 +49,27 @@ static PER_CPU_ACTIVE_VCB: PerCpu<AtomicPtr<Spinlock<VirtMemConBlk>>> = PerCpu::
 pub type VCB = NonNull<Spinlock<VirtMemConBlk>>;
 
 impl VirtMemConBlk {
+    // Only used for process 0 address space creation
     #[cfg(target_arch="x86_64")]
-    pub fn new(is_init_address_space: bool) -> Self {
+    fn new(is_init_address_space: bool) -> Self {
         // Since virtual address has max size of 48 bits
         // But from address 0x1ff << 39 onwards we reserve for page tables, so don't use it for conventional memory
         // We decrement one page, since we don't want page 0 in virtual address space
 
         let total_memory = (0x1ff << 39) - PAGE_SIZE;
         let num_pages_user = ceil_div(KERNEL_HALF_OFFSET_RAW - PAGE_SIZE, PAGE_SIZE);
-        let num_pages_kernel = ceil_div((0x1ff << 39) - KERNEL_HALF_OFFSET_RAW, PAGE_SIZE);
+
+        // -4 since we reserve those pages for kernel address space page table
+        let num_pages_kernel = ceil_div((0x1ff << 39) - KERNEL_HALF_OFFSET_RAW, PAGE_SIZE) - 4;
         let mut free_block_list= List::new();
         
         // Create separate blocks for user and kernel memory
         free_block_list.add_node(PageDescriptor {
-            num_pages: num_pages_user, start_phy_address: 0, start_virt_address: PAGE_SIZE, flags: 0
+            num_pages: num_pages_user, start_phy_address: 0, start_virt_address: PAGE_SIZE, flags: 0, is_mapped: false
         }).unwrap();
         
         free_block_list.add_node(PageDescriptor {
-            num_pages: num_pages_kernel, start_phy_address: 0, start_virt_address: KERNEL_HALF_OFFSET, flags: 0
+            num_pages: num_pages_kernel, start_phy_address: 0, start_virt_address: KERNEL_HALF_OFFSET + 4 * PAGE_SIZE, flags: 0, is_mapped: false
         }).unwrap();
 
         Self {
@@ -65,7 +77,7 @@ impl VirtMemConBlk {
             avl_memory: total_memory,
             free_block_list,
             alloc_block_list: List::new(),
-            page_mapper: PageMapper::new(is_init_address_space),
+            page_mapper: PageMapper::new(is_init_address_space, 0),
             proc_id: 0 
         }
     }
@@ -149,48 +161,90 @@ impl VirtMemConBlk {
         else {
             // If no block to which the fragmented region can be merged, just create a new block to describe the free region
             // If it fails at this point, it's hard to recover
-            self.free_block_list.add_node(PageDescriptor { num_pages, start_phy_address: 0, start_virt_address: addr as usize, flags: 0 })
+            self.free_block_list.add_node(PageDescriptor { num_pages, start_phy_address: 0, start_virt_address: addr as usize, flags: 0, is_mapped: false })
             .expect(ERROR_MESSAGE);
         }
     }
 
-    fn allocate(&mut self, layout: Layout, flags: u8) -> Result<*mut u8, KError> {
+    fn reserve_virtual_space(&mut self, virt_addr: usize, layout: Layout) -> Result<(), KError> {
+        let size = layout.size() + (layout.size() as *const u8).align_offset(PAGE_SIZE);
+        
+        // Find a superset of the region that the user is interested in
+        let blk = self.free_block_list.iter().find(|item| {
+            virt_addr >= item.start_virt_address 
+            && virt_addr + size <= item.start_virt_address + item.num_pages * PAGE_SIZE
+        });
+        
+        if let Some(desc) = blk {
+            let top = PageDescriptor {
+                num_pages: ceil_div(virt_addr - desc.start_virt_address, PAGE_SIZE),
+                start_phy_address: 0,
+                start_virt_address: desc.start_virt_address,
+                flags: 0,
+                is_mapped: false
+            };
+
+            let middle = PageDescriptor {
+                num_pages: ceil_div(size, PAGE_SIZE),
+                start_phy_address: 0,
+                start_virt_address: virt_addr,
+                flags: 0,
+                is_mapped: false
+            };
+
+            let bottom = PageDescriptor {
+                num_pages: ceil_div(desc.num_pages * PAGE_SIZE  - ((virt_addr + size) - desc.start_virt_address), PAGE_SIZE),
+                start_phy_address: 0,
+                start_virt_address: virt_addr + size,
+                flags: 0,
+                is_mapped: false
+            };
+            
+            unsafe {
+                self.free_block_list.remove_node(NonNull::from(desc));
+            }
+
+            for descriptor in [top, bottom] {
+                if descriptor.num_pages != 0 {
+                    self.free_block_list.add_node(descriptor).expect(ERROR_MESSAGE);
+                }
+            }
+
+            self.alloc_block_list.add_node(middle).expect(ERROR_MESSAGE);
+        }
+        else {
+            debug!("alloc_block_list={:?}, free_block_list={:?}", self.alloc_block_list, self.free_block_list);
+            info!("reserve_virtual_space could not reserve memory of size:{} at address:{:#X}", size, virt_addr);
+            return Err(KError::OutOfMemory);
+        }
+    
+        Ok(())
+    }
+
+    // Finds a suitable block in virtual address space and reserves it
+    fn allocate(&mut self, layout: Layout, is_user: bool) -> Result<*mut u8, KError> {
         if layout.size() >= self.avl_memory || layout.size() > self.total_memory {
             return Err(KError::OutOfMemory);
         }
 
-        if layout.align() > PAGE_SIZE || flags & PageDescriptor::VIRTUAL == 0 {
+        if layout.align() > PAGE_SIZE {
             return Err(KError::InvalidArgument);
         }
 
         let num_pages = ceil_div(layout.size(), PAGE_SIZE);
-        let virt_addr = self.find_best_fit(num_pages, flags & PageDescriptor::USER != 0)?;    
+        let virt_addr = self.find_best_fit(num_pages, is_user)?;    
+        self.avl_memory -= num_pages * PAGE_SIZE;
 
-        // The user only wants to allocate new address in virtual space
-        // This is useful when the user already has some physical memory, but needs to map it to some virtual location
-        if flags & PageDescriptor::NO_ALLOC != 0 {
-            // Mark block as NO_ALLOC, this tells allocator that user has allocated but it's yet to map this region
-            // Required so that phy-virt and virt-phy translation functions continue to work properly
-            self.alloc_block_list.add_node(PageDescriptor { num_pages, start_phy_address: 0, 
-                start_virt_address: virt_addr as usize, flags: PageDescriptor::NO_ALLOC})
-                .expect(ERROR_MESSAGE);
-            
-            return Ok(virt_addr);
-        }
-        // Now we have got virtual address, get physical memory
-        let phys_addr = PHY_MEM_CB.get().unwrap().lock().allocate(layout)?;
-        // Current design choice is such that page_mapper should not fail (Kernel panics if it does)
-        #[cfg(not(test))]
-        self.page_mapper.map_memory(virt_addr as usize, phys_addr as usize, num_pages * PAGE_SIZE, flags);
-
-        self.alloc_block_list.add_node(PageDescriptor { num_pages, start_phy_address: phys_addr as usize, 
-            start_virt_address: virt_addr as usize, flags})
+        // Now we have got virtual address
+        self.alloc_block_list.add_node(PageDescriptor { num_pages, start_phy_address: 0, 
+            start_virt_address: virt_addr as usize, flags: 0, is_mapped: false})
             .expect(ERROR_MESSAGE);
 
-        self.avl_memory -= num_pages * PAGE_SIZE;
         Ok(virt_addr)
     }
 
+    // Removes the allocation from the virtual address space
+    // Page must be unmapped first
     fn deallocate(&mut self, addr: *mut u8, layout: Layout) -> Result<(), KError> {
         if layout.align() > PAGE_SIZE {
             return Err(KError::InvalidArgument);
@@ -201,21 +255,20 @@ impl VirtMemConBlk {
 
         // Remove node from alloc_block_list
         let mut alloc_blk = None;
-        let mut is_no_alloc = false;
         for blk in self.alloc_block_list.iter() {
             if blk.start_virt_address == addr as usize && blk.num_pages == num_pages {
                 alloc_blk = Some(NonNull::from(blk));
-                is_no_alloc = (blk.flags & PageDescriptor::NO_ALLOC) != 0;
-                // It is required for the memory being deallocated to have been mapped to physical memory
-                debug_assert!((blk.flags & PageDescriptor::VIRTUAL != 0) || is_no_alloc);
+                
+                // It is required for the memory being deallocated to not have been mapped to physical memory
+                if blk.is_mapped {
+                    return Err(KError::InvalidArgument);
+                }
                 break;
             }
         }
+
         if let Some(blk) = alloc_blk {
             unsafe {
-                if !is_no_alloc {
-                    PHY_MEM_CB.get().unwrap().lock().deallocate(blk.as_ref().start_phy_address as *mut u8, layout).expect(ERROR_MESSAGE);
-                } 
                 self.alloc_block_list.remove_node(blk);
             }
         }
@@ -224,11 +277,6 @@ impl VirtMemConBlk {
             return Err(KError::InvalidArgument);
         } 
 
-        #[cfg(not(test))]
-        if !is_no_alloc {
-            self.page_mapper.unmap_memory(addr as usize, num_size);
-        }
-        
         self.coalesce_block(addr as usize, num_pages);
         self.avl_memory += num_size;
 
@@ -239,7 +287,7 @@ impl VirtMemConBlk {
         // Check all locations linearly to get the physical address
         for blk in self.alloc_block_list.iter() {
             if blk.start_virt_address <= virt_addr && blk.start_virt_address + blk.num_pages * PAGE_SIZE > virt_addr
-            && blk.flags & PageDescriptor::VIRTUAL != 0 {
+            && blk.is_mapped {
                 return Some(blk.start_phy_address + virt_addr - blk.start_virt_address);
             }
         }
@@ -252,7 +300,7 @@ impl VirtMemConBlk {
         let mut lowest_address = None;
         for blk in self.alloc_block_list.iter() {
             if blk.start_phy_address <= phys_addr && blk.start_phy_address + blk.num_pages * PAGE_SIZE > phys_addr 
-            && blk.flags & PageDescriptor::VIRTUAL != 0 {
+            && blk.is_mapped {
                 let new_addr = blk.start_virt_address + phys_addr - blk.start_phy_address;  
                 if lowest_address.is_none() {
                     lowest_address = Some(new_addr);
@@ -279,75 +327,63 @@ impl VirtMemConBlk {
         lowest_address
     }
 
-    // Allowed to map memory only if the address is not already allocated
+    // Allowed to map memory only if the address is reserved in the virtual address space
     // In case user wants to map new physical address to existing virtual address, then first unmap the memory
     // and then map the new physical address 
     fn map_memory(&mut self, phys_addr: usize, virt_addr: usize, size: usize, flags: u8) -> Result<(), KError> {
-        if size == 0 {
-            return Ok(())
-        }
-
         let size = size + (size as *const u8).align_offset(PAGE_SIZE);
     
-        if phys_addr & (PAGE_SIZE - 1) != 0 || virt_addr & (PAGE_SIZE - 1) != 0 
-        || (flags & PageDescriptor::NO_ALLOC) != 0 {
+        if phys_addr & (PAGE_SIZE - 1) != 0 || virt_addr & (PAGE_SIZE - 1) != 0 {
             return Err(KError::InvalidArgument);
         }
 
-        // Try to find a block which is either allocated but not mapped, or that is not allocated
-        // The range we're interested in should be a superset of the region the user provided
-        let blk = self.alloc_block_list.iter().chain(self.free_block_list.iter()).find(|item| {
-            virt_addr >= item.start_virt_address 
-            && virt_addr < item.start_virt_address + item.num_pages * PAGE_SIZE 
-            && virt_addr + size <= item.start_virt_address + item.num_pages * PAGE_SIZE
-            && (item.flags & PageDescriptor::NO_ALLOC != 0 || item.flags == 0)
+        // Only kernel virtual address space handles any allocations made to kernel memory
+        // Other address spaces simply need to allocate it within their page tables
+        if self.proc_id != 0 && (flags & PageDescriptor::USER == 0) {
+            self.page_mapper.map_memory(virt_addr, phys_addr, size, flags);
+            return Ok(())
+        }
+
+        // Try to find a block that is reserved in the virtual address space and that is unmapped
+        // The range we're trying to find is a superset of the range that the caller is interested in (Previously reserved using allocate/reserve_virtual_space)
+        let blk = self.alloc_block_list.iter().find(|item| {
+            virt_addr >= item.start_virt_address
+            && virt_addr + size <= item.start_virt_address + item.num_pages * PAGE_SIZE 
+            && !item.is_mapped
         });
         
-        // Ensure that resulting block is described as virtual memory
-        let flags = flags | PageDescriptor::VIRTUAL; 
         if let Some(desc) = blk {
             let top = PageDescriptor {
                 num_pages: ceil_div(virt_addr - desc.start_virt_address, PAGE_SIZE),
                 start_phy_address: 0,
                 start_virt_address: desc.start_virt_address,
-                flags: desc.flags 
+                flags: 0,
+                is_mapped: false
             };
 
             let middle = PageDescriptor {
                 num_pages: ceil_div(size, PAGE_SIZE),
                 start_phy_address: phys_addr,
                 start_virt_address: virt_addr,
-                flags 
+                flags,
+                is_mapped: true
             };
 
             let bottom = PageDescriptor {
                 num_pages: ceil_div(desc.num_pages * PAGE_SIZE  - ((virt_addr + size) - desc.start_virt_address), PAGE_SIZE),
                 start_phy_address: 0,
                 start_virt_address: virt_addr + size,
-                flags: desc.flags
+                flags: 0,
+                is_mapped: false
             };
             
-            // Need to copy over the flags here to not cause borrowing issues
-            let flags = desc.flags;
-            if flags == 0 {
-                unsafe {
-                    self.free_block_list.remove_node(NonNull::from(desc));
-                }
+            unsafe {
+                self.alloc_block_list.remove_node(NonNull::from(desc));
             }
-            else {
-                unsafe {
-                    self.alloc_block_list.remove_node(NonNull::from(desc));
-                }
-            }
-
+            
             for descriptor in [top, bottom] {
                 if descriptor.num_pages != 0 {
-                    if flags == 0 {
-                        self.free_block_list.add_node(descriptor).expect(ERROR_MESSAGE);
-                    }
-                    else {
-                        self.alloc_block_list.add_node(descriptor).expect(ERROR_MESSAGE);
-                    }
+                    self.alloc_block_list.add_node(descriptor).expect(ERROR_MESSAGE);
                 }
             }
 
@@ -363,7 +399,8 @@ impl VirtMemConBlk {
         Ok(())
     }
 
-    fn unmap_memory(&mut self, virt_addr: *mut u8, size: usize) -> Result<(), KError> {
+    // This unmaps the memory, but the virtual address space would still be reserved
+    fn unmap_memory(&mut self, virt_addr: usize, size: usize, is_user: bool) -> Result<*mut u8, KError> {
         let size = size + (size as *const u8).align_offset(PAGE_SIZE);  
         
         let num_pages = ceil_div(size, PAGE_SIZE);
@@ -371,15 +408,22 @@ impl VirtMemConBlk {
             return Err(KError::InvalidArgument);
         }
 
-        let blk = self.alloc_block_list.iter().find(|item| {
-            item.start_virt_address == virt_addr as usize && item.num_pages == num_pages && item.flags & PageDescriptor::VIRTUAL != 0 
+        if self.proc_id != 0 && !is_user {
+            self.page_mapper.unmap_memory(virt_addr, size);
+            return Ok(null_mut());
+        }
+
+        // There should be an exact block in the allocated list (Previously reserved by allocate/reserve_virtual_space and mapped by map_memory)
+        let blk = self.alloc_block_list.iter_mut().find(|item| {
+            item.start_virt_address == virt_addr && item.num_pages == num_pages && item.is_mapped
         });
-        
-        
+
+        let phy_addr; 
         if let Some(desc) = blk {
-            unsafe {
-                self.alloc_block_list.remove_node(NonNull::from(desc));
-            }
+            desc.is_mapped = false;
+
+            phy_addr = desc.start_phy_address;
+            desc.start_phy_address = 0;
         }
         else {
             // In case caller tries to free memory which has not been allocated, then we return here
@@ -387,32 +431,88 @@ impl VirtMemConBlk {
             return Err(KError::InvalidArgument);
         } 
         
-        self.page_mapper.unmap_memory(virt_addr as usize, size);
-        self.coalesce_block(virt_addr as usize, num_pages);
+        self.page_mapper.unmap_memory(virt_addr, size);
     
-        Ok(())
+        Ok(phy_addr as *mut u8)
+    }
+
+
+    pub fn clone(parent_vcb: VCB, proc_id: usize) -> Result<VCB, KError> {
+        let (alloc_list, total_mem, avl_mem) = {
+            let parent_vcb = unsafe {
+                (*parent_vcb.as_ptr()).lock()
+            };
+
+            assert_eq!(parent_vcb.proc_id, 0, "Only kernel virtual address space can be cloned!");
+
+            let alloc_list = parent_vcb.alloc_block_list.clone()?;
+            let total_mem = parent_vcb.total_memory;
+            let avl_mem = parent_vcb.avl_memory;
+
+
+            (alloc_list, total_mem, avl_mem)
+        };
+
+        debug!("Cloning kernel virtual address space for process id {}", proc_id);
+        let mut page_mapper = PageMapper::new(false, proc_id);
+
+        for blk in alloc_list.iter() {
+            if blk.is_mapped {
+                // If page mapper fails, kernel panics, right now we don't have a fallback
+                debug!("Mapping memory blk => Virtual={:#X}, physical={:#X}, pages={:#X}, is_mmio={}",
+            blk.start_virt_address, blk.start_phy_address, blk.num_pages, blk.flags & PageDescriptor::MMIO != 0);
+
+                page_mapper.map_memory(blk.start_virt_address, blk.start_phy_address,
+                    blk.num_pages * PAGE_SIZE, blk.flags);
+            }
+        }
+
+        let new_virtual_allocator = Self {
+            total_memory: total_mem,
+            avl_memory: avl_mem,
+            free_block_list: List::new(),
+            alloc_block_list: alloc_list,
+            page_mapper,
+            proc_id
+        };
+
+        let mut addr_space_list = ADDRESS_SPACES.get().unwrap().lock();
+        addr_space_list.add_node(Spinlock::new(new_virtual_allocator))?;
+
+    
+        let new_vcb = NonNull::from(&**addr_space_list.last().unwrap());
+        
+        Ok(new_vcb)
     }
 }
 
 // This is only to be called from scheduler (when scheduler lock is held)
 pub unsafe fn set_address_space(vcb: VCB) {
-    PER_CPU_ACTIVE_VCB.local().store(vcb.as_ptr() as *mut _, Ordering::Release);
+    let old_vcb = get_active_vcb();
+    unsafe {
+        (*old_vcb.as_ptr()).lock().page_mapper.dec_active_count();
+    }
+    PER_CPU_ACTIVE_VCB.local().store(vcb.as_ptr() as *mut _, Ordering::SeqCst);
 
     vcb.as_ref().lock().page_mapper.set_address_space();
 }
 
 pub fn get_kernel_addr_space() -> VCB {
-    NonNull::from(&**ADDRESS_SPACES.get().unwrap().lock().first().unwrap())
+    NonNull::new(KERN_ADDR_SPACE.get().unwrap().load(Ordering::Relaxed)).unwrap()
 }
 
-fn get_active_vcb() -> Option<NonNull<Spinlock<VirtMemConBlk>>> {
+pub fn get_active_vcb_for_core(core: usize) -> NonNull<Spinlock<VirtMemConBlk>> {
+    let vcb = unsafe {
+        PER_CPU_ACTIVE_VCB.get(core).load(Ordering::Acquire)
+    };
+
+    NonNull::new(vcb).unwrap()
+}
+
+fn get_active_vcb() -> NonNull<Spinlock<VirtMemConBlk>> {
     let vcb = PER_CPU_ACTIVE_VCB.local().load(Ordering::Acquire);
 
-    if vcb.is_null() {
-        return None;
-    }
-
-    Some(NonNull::new(vcb).unwrap())
+    NonNull::new(vcb).unwrap()
 }
 
 pub fn ap_init() {
@@ -420,43 +520,247 @@ pub fn ap_init() {
         PER_CPU_ACTIVE_VCB.get(0).load(Ordering::Acquire)
     };
 
+    unsafe {
+        (*kernel_addr_space).lock().page_mapper.inc_active_count();
+    }
+
     // All AP will use the same kernel virtual address space
     PER_CPU_ACTIVE_VCB.local().store(kernel_addr_space, Ordering::Release);
 }
 
-// Central API to call into both physical and virtual allocator
-pub fn allocate_memory(layout: Layout, flags: u8) -> Result<*mut u8, KError> {
-    let active_vcb = get_active_vcb();
-    if (flags & PageDescriptor::VIRTUAL != 0) && active_vcb.is_some() {
-        let allocator = active_vcb.unwrap();
+
+// When the page mapper needs to map page to current address space, but the page mapper
+// is not the active mapper, so it uses this utility function
+// This temporarily maps the page table onto the current active address space so that page mapper can access it
+#[cfg(target_arch="x86_64")]
+pub fn map_page_table(phy_addr: usize, proc_id: usize) -> Result<usize, KError> {
+    if likely(IS_ADDR_SPACE_INIT.load(Ordering::Relaxed)) {
+        let kernel_addr_space = get_kernel_addr_space();
+        let active_vcb = get_active_vcb();
+
         unsafe {
-            (*allocator.as_ptr()).lock().allocate(layout, flags)
+            // Kernel address space is not the active address space, but it's requesting page table
+            // In this case, retrieve pre-allocated virtual address
+            // This is safe to do here, since kernel address space lock is held and no other task can request from the reserved space 
+            let virt_addr = if proc_id == 0 {
+                RESERVED_SPACE[(NEXT_AVL_SPACE.fetch_add(1, Ordering::Relaxed) % 4) as usize] as *mut u8
+            }
+            else {
+                // Reserve some virtual space from kernel address space for the page table
+                // The physical memory for this is already allocated by the page mapper
+                (*kernel_addr_space.as_ptr()).lock().allocate(Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap(), false)?
+            };
+
+
+            (*active_vcb.as_ptr()).lock().map_memory(phy_addr, virt_addr.addr(), PAGE_SIZE, 0)?;
+        
+            Ok(virt_addr as usize)
         }
     }
     else {
+        Ok(phy_addr)
+    }
+}
+
+// When the page mapper needs to unmap page from current address space, but the page mapper
+// is not the active mapper, so it uses this utility function
+pub fn unmap_page_table(virt_addr: usize, proc_id: usize) -> Result<(), KError> {
+    if likely(IS_ADDR_SPACE_INIT.load(Ordering::Relaxed)) {
+        let kernel_addr_space = get_kernel_addr_space();
+        let active_vcb = get_active_vcb();
+
+        unsafe {
+            (*active_vcb.as_ptr()).lock().unmap_memory(virt_addr,  PAGE_SIZE, false)?;
+            if proc_id != 0 {
+                (*kernel_addr_space.as_ptr()).lock().deallocate(virt_addr as *mut u8, Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap())?;
+            }
+        }
+    }
+    else {
+        // Do nothing
+    }
+
+    Ok(())
+}
+
+pub fn reserve_virtual_memory(virt_addr: usize, layout: Layout) -> Result<(), KError> {
+    assert!(IS_ADDR_SPACE_INIT.load(Ordering::Relaxed));
+    
+    let kern_addr_space = get_kernel_addr_space();
+    unsafe {
+        (*kern_addr_space.as_ptr()).lock().reserve_virtual_space(virt_addr, layout)
+    }
+}
+
+
+// Flags => VIRTUAL = allocate virtual memory + phy memory + map to current virtual address space
+// Flags => NO_ALLOC = Reserve some space in the virtual address space
+pub fn allocate_memory(layout: Layout, flags: u8) -> Result<*mut u8, KError> {
+    if IS_ADDR_SPACE_INIT.load(Ordering::Relaxed) && (flags & PageDescriptor::VIRTUAL != 0) {
+        if flags & PageDescriptor::USER != 0 {
+            // If user memory is requested, we don't need to map it into all the address spaces
+            // Hence just allocate it in the requested address space
+            assert!(!(flags & PageDescriptor::USER != 0 && flags & PageDescriptor::NO_ALLOC != 0), "USER and NO_ALLOC flag combination not supported right now");
+
+            let active_addr_space = get_active_vcb();
+            let virt_addr = unsafe {
+                (*active_addr_space.as_ptr()).lock().allocate(layout, true)?
+            };
+
+            let phy_addr = PHY_MEM_CB.get().unwrap().lock().allocate(layout)?;
+
+            unsafe {&*active_addr_space.as_ptr()}
+            .lock().map_memory(phy_addr.addr(), virt_addr.addr(), layout.size(), flags)?;
+
+            Ok(virt_addr as *mut u8)
+        }
+        else {
+            // For kernel memory, all address spaces must have same mapping
+            // So, we will have the virtual allocation done only on one VCB
+            // The rest of them simply will map it in their corresponding page tables
+
+            // Allocate the virtual address from kernel address space.
+            let kern_addr_space = get_kernel_addr_space();
+
+            // First, reserve space in virtual address space
+            let virt_addr = unsafe {
+                (*kern_addr_space.as_ptr()).lock().allocate(layout, false)?
+            };
+
+            if flags & PageDescriptor::NO_ALLOC == 0 {
+                let phy_addr = PHY_MEM_CB.get().unwrap().lock().allocate(layout)?;                
+
+                // Now map that memory into all the address spaces that are present
+                for addr_space in ADDRESS_SPACES.get().unwrap().lock().iter() {
+                    addr_space.lock().map_memory(phy_addr as usize, virt_addr as usize, layout.size(), flags)?;
+                }
+            }
+            
+            Ok(virt_addr as *mut u8)
+        }
+    }
+    else {
+        assert!(flags == 0);
         // Perform only physical allocation
         PHY_MEM_CB.get().unwrap().lock().allocate(layout)
     }
 }
 
+
+// It is important to provide same flags that were provided to allocate_memory for this address
 pub fn deallocate_memory(addr: *mut u8, layout: Layout, flags: u8) -> Result<(), KError> {
-    let active_vcb = get_active_vcb();
-    if (flags & PageDescriptor::VIRTUAL != 0) && active_vcb.is_some() {
-        let allocator = active_vcb.unwrap();
-        unsafe {
-            (*allocator.as_ptr()).lock().deallocate(addr, layout)
+    if IS_ADDR_SPACE_INIT.load(Ordering::Relaxed) & (flags & PageDescriptor::VIRTUAL != 0) {
+        let phy_addr = if flags & PageDescriptor::USER != 0 {
+            let active_addr_space = get_active_vcb();
+            assert!(!(flags & PageDescriptor::USER != 0 && flags & PageDescriptor::NO_ALLOC != 0), "USER and NO_ALLOC flag combination not supported right now");
+            
+            let phy_addr = unsafe {&*active_addr_space.as_ptr()}
+            .lock().unmap_memory(addr as usize, layout.size(), true)?;
+            
+            unsafe {
+                (*active_addr_space.as_ptr()).lock().deallocate(addr, layout)?
+            };
+
+            phy_addr
         }
+        else {
+            // Deallocate the virtual address from kernel address space.
+            let kern_addr_space = get_kernel_addr_space();
+            
+            // Unmap this memory from all address spaces
+            let mut phy_addr = null_mut();
+            if flags & PageDescriptor::NO_ALLOC == 0 {
+                for addr_space in ADDRESS_SPACES.get().unwrap().lock().iter() {
+                    if addr_space.lock().proc_id == 0 {
+                        phy_addr = addr_space.lock().unmap_memory(addr as usize, layout.size(), false)?;            
+                    }
+                    else {
+                        addr_space.lock().unmap_memory(addr as usize, layout.size(), false)?;            
+                    }
+                }
+            }
+
+            // Unreserve the virtual address from the kernel address space
+            unsafe {
+                (*kern_addr_space.as_ptr()).lock().deallocate(addr, layout)?;
+            };
+
+            phy_addr
+        };
+
+        if flags & PageDescriptor::NO_ALLOC == 0 {
+            PHY_MEM_CB.get().unwrap().lock().deallocate(phy_addr, layout)?;
+        }
+        
+        Ok(())
     }
     else {
+        assert!(flags == 0);
         PHY_MEM_CB.get().unwrap().lock().deallocate(addr, layout)
     }
 }
 
-pub fn get_physical_address(virt_addr: usize) -> Option<usize> {
-    let active_vcb = get_active_vcb();
-    if likely(active_vcb.is_some()) {
-        unsafe {
-            (*active_vcb.unwrap().as_ptr()).lock().get_phys_address(virt_addr)
+
+// This is to be called only on virtual address that has been allocated with NO_ALLOC
+// Here, the user is responsible for the physical memory
+pub fn map_memory(phys_addr: usize, virt_addr: usize, size: usize, flags: u8) -> Result<(), KError> {
+    if likely(IS_ADDR_SPACE_INIT.load(Ordering::Relaxed)) {
+        if flags & PageDescriptor::USER != 0 {
+            let active_addr_space = get_active_vcb();
+            unsafe {
+                (*active_addr_space.as_ptr()).lock().map_memory(phys_addr, virt_addr, size, flags)?;
+            }
+        }
+        else {
+            // Map that memory into all the address spaces that are present
+            for addr_space in ADDRESS_SPACES.get().unwrap().lock().iter() {
+                addr_space.lock().map_memory(phys_addr, virt_addr, size, flags)?;
+            }
+        }
+    }
+    else {
+        // Identity mapped, don't do anything
+    }
+    
+    Ok(())
+}
+
+// Only to be called when memory has been previously mapped using map_memory
+pub fn unmap_memory(virt_addr: usize, size: usize, flags: u8) -> Result<(), KError> {
+    if likely(IS_ADDR_SPACE_INIT.load(Ordering::Relaxed)) {
+        if flags & PageDescriptor::USER != 0 {
+            let active_addr_space = get_active_vcb();
+            unsafe {
+                (*active_addr_space.as_ptr()).lock().unmap_memory(virt_addr, size, true)?;
+            }
+        }
+        else {
+            // Unmap this memory from all the address spaces that are present
+            for addr_space in ADDRESS_SPACES.get().unwrap().lock().iter() {
+                addr_space.lock().unmap_memory(virt_addr, size, false)?;
+            }
+        }
+    }
+    else {
+        // Identity mapped, don't do anything
+    }
+    
+    Ok(())
+}
+
+pub fn get_physical_address(virt_addr: usize, flags: u8) -> Option<usize> {
+    if IS_ADDR_SPACE_INIT.load(Ordering::Relaxed) {
+        if flags & PageDescriptor::USER != 0 {
+            let active_addr_space = get_active_vcb();
+            unsafe {
+                (*active_addr_space.as_ptr()).lock().get_phys_address(virt_addr)
+            }
+        }
+        else {
+            let kern_addr_space = get_kernel_addr_space();
+            unsafe {
+                (*kern_addr_space.as_ptr()).lock().get_phys_address(virt_addr)
+            }
         }
     }
     else {
@@ -470,62 +774,25 @@ pub fn get_physical_address(virt_addr: usize) -> Option<usize> {
 // Following rules are applicable only when there is more than one virtual address for given physical address
 // Kernel -> If present, fetch the lowest address that is > KERNEL_HALF_OFFSET
 // Any -> Fetch the lowest virtual address region
-pub fn get_virtual_address(phys_addr: usize, fetch_type: MapFetchType) -> Option<usize> {
-    let active_vcb = get_active_vcb();
-    if likely(active_vcb.is_some()) {
-        unsafe {
-            (*active_vcb.unwrap().as_ptr()).lock().get_virt_address(phys_addr, fetch_type)
+pub fn get_virtual_address(phys_addr: usize, flags: u8, fetch_type: MapFetchType) -> Option<usize> {
+    if IS_ADDR_SPACE_INIT.load(Ordering::Relaxed) {
+        if flags & PageDescriptor::USER != 0 {
+            let active_addr_space = get_active_vcb();
+            unsafe {
+                (*active_addr_space.as_ptr()).lock().get_virt_address(phys_addr, fetch_type)
+            }
+        }
+        else {
+            let kern_addr_space = get_kernel_addr_space();
+            unsafe {
+                (*kern_addr_space.as_ptr()).lock().get_virt_address(phys_addr, fetch_type)
+            } 
         }
     }
     else {
         // Since virtual_mem = physical_mem
         Some(hal::canonicalize_virtual(phys_addr))
     }
-}
-
-pub fn map_memory(phys_addr: usize, virt_addr: usize, size: usize, flags: u8) -> Result<(), KError> {
-    let active_vcb = get_active_vcb();
-    if likely(active_vcb.is_some()) {
-        unsafe {
-            (*active_vcb.unwrap().as_ptr()).lock().map_memory(phys_addr, virt_addr, size, flags)
-        }
-    }
-    else {
-        Ok(())
-    }
-}
-
-// Here we also need to add type of memory we're unmapping (kernel or user)
-// This is important, since if it's kernel memory, we need to unmap that memory in all address spaces
-pub fn unmap_memory(virt_addr: *mut u8, size: usize) -> Result<(), KError> {
-    let active_vcb = get_active_vcb();
-    if likely(active_vcb.is_some()) {
-        unsafe {
-            (*active_vcb.unwrap().as_ptr()).lock().unmap_memory(virt_addr, size)
-        }
-    }
-    else {
-        Ok(())
-    }
-}
-#[no_mangle]
-extern "C" fn map_memory_ffi(phys_addr: usize, virt_addr: usize, size: usize, flags: u8) -> KError {
-    map_memory(phys_addr, virt_addr, size, flags).into()
-}
-
-#[no_mangle]
-extern "C" fn unmap_memory_ffi(virt_addr: *mut u8, size: usize) -> KError {
-    unmap_memory(virt_addr, size).into() 
-}
-
-#[no_mangle]
-extern "C" fn allocate_memory_ffi(size: usize, align: usize, flags: u8) -> KError {
-    allocate_memory(Layout::from_size_align(size, align).unwrap(), flags).into()
-}
-
-#[no_mangle]
-extern "C" fn deallocate_memory_ffi(addr: *mut u8, size: usize, align: usize, flags: u8) -> KError {
-    deallocate_memory(addr, Layout::from_size_align(size, align).unwrap(), flags).into()
 }
 
 pub fn virtual_allocator_init() {
@@ -548,6 +815,10 @@ pub fn virtual_allocator_init() {
     }).for_each(|item| {
         info!("Identity mapping region of size:{} with physical address:{:#X}", 
         item.value.size, item.value.base_address);
+        let layout = Layout::from_size_align(item.value.size, PAGE_SIZE).unwrap();
+        kernel_addr_space.reserve_virtual_space(item.value.base_address, layout)
+        .expect("Failed to reserve identity mapped address in kernel virtual address space!");
+
         kernel_addr_space.map_memory(
             item.value.base_address, item.value.base_address, 
             item.value.size, item.flags).unwrap();
@@ -558,23 +829,23 @@ pub fn virtual_allocator_init() {
         !matches!(item.map_type, IdentityMapped)
     }).for_each(|item| {
         let layout = Layout::from_size_align(item.value.size, PAGE_SIZE).unwrap();
-        let virt_addr = kernel_addr_space.allocate(layout, PageDescriptor::VIRTUAL | PageDescriptor::NO_ALLOC)
-        .expect("System could not find suitable memory in higher half kernel space") as usize;
+        let virt_addr = kernel_addr_space.allocate(layout, false)
+        .expect("System could not find suitable memory in higher half kernel space");
         
         info!("Mapping region of size:{} with physical address:{:#X} to virtual address:{:#X}", 
-        item.value.size, item.value.base_address, virt_addr);
+        item.value.size, item.value.base_address, virt_addr as usize);
 
-        kernel_addr_space.map_memory(item.value.base_address, virt_addr, item.value.size, item.flags).unwrap();
+        kernel_addr_space.map_memory(item.value.base_address, virt_addr as usize, item.value.size, item.flags).unwrap();
         
         // Update user of new location
         if let OffsetMapped(f) = &item.map_type {
-            f(virt_addr);
+            f(virt_addr as usize);
         }
     });
     
     // Create a new stack for boot cpu
-    let stack_raw = kernel_addr_space.allocate(Layout::from_size_align(cpu::TOTAL_STACK_SIZE, PAGE_SIZE).unwrap()
-    , PageDescriptor::VIRTUAL | PageDescriptor::NO_ALLOC).expect("Failed to create space in virtual address for boot cpu stack");
+    let stack_raw= kernel_addr_space.allocate(Layout::from_size_align(cpu::TOTAL_STACK_SIZE, PAGE_SIZE).unwrap()
+    , false).expect("Failed to create space in virtual address for boot cpu stack");
 
     let stack_raw_phys = PHY_MEM_CB.get().unwrap().lock().allocate(Layout::from_size_align(cpu::INIT_STACK_SIZE, PAGE_SIZE).unwrap())
     .expect("Failed to create space for physical address space for boot cpu stack");
@@ -587,7 +858,7 @@ pub fn virtual_allocator_init() {
     #[cfg(not(feature = "stack_down"))]
     let stack_base = stack_raw;
 
-    kernel_addr_space.map_memory(stack_raw_phys.addr(), stack_base.addr(), cpu::INIT_STACK_SIZE, PageDescriptor::VIRTUAL)
+    kernel_addr_space.map_memory(stack_raw_phys.addr(), stack_base.addr(), cpu::INIT_STACK_SIZE, 0)
     .expect("Failed to map boot cpu stack to kernel virtual address space!");
 
     debug!("Created boot cpu stack with virtual address: {:#X} and physical address: {:#X}", stack_base.addr(), stack_raw_phys.addr());
@@ -610,6 +881,12 @@ pub fn virtual_allocator_init() {
         Ordering::Release
     );   
 
+    KERN_ADDR_SPACE.call_once(|| {
+        AtomicPtr::new(ptr_to_ref_mut(&**ADDRESS_SPACES.get().unwrap().lock().first().unwrap()))
+    });
+
+    IS_ADDR_SPACE_INIT.store(true, Ordering::SeqCst);
+
     info!("Created kernel address space"); 
 }
 
@@ -619,20 +896,20 @@ pub fn virtual_allocator_test() {
 
     // Check allocating from user memory
     let layout = Layout::from_size_align(10 * PAGE_SIZE, 4096).unwrap();
-    let ptr = allocator.allocate(layout, PageDescriptor::VIRTUAL | PageDescriptor::USER).unwrap();
+    let ptr= allocator.allocate(layout, true).unwrap();
 
     assert_eq!(ptr as usize, 4096);
     assert!(allocator.free_block_list.get_nodes() == 2 && allocator.free_block_list.first().unwrap().start_virt_address == 11 * PAGE_SIZE);
 
-    let ptr1 = allocator.allocate(layout, PageDescriptor::VIRTUAL | PageDescriptor::USER).unwrap();
+    let ptr1 = allocator.allocate(layout, true).unwrap();
     assert_eq!(ptr1 as usize, 11 * PAGE_SIZE);
 
-    let ptr2: *mut u8 = allocator.allocate(layout, PageDescriptor::VIRTUAL | PageDescriptor::USER).unwrap();
+    let ptr2 = allocator.allocate(layout, true).unwrap();
     assert_eq!(ptr2 as usize, 21 * PAGE_SIZE);
 
     allocator.deallocate(ptr1, layout).unwrap();
     assert_eq!(allocator.free_block_list.get_nodes(), 3);    
-    let nodes = [31 * PAGE_SIZE, KERNEL_HALF_OFFSET, 11 * common::PAGE_SIZE];
+    let nodes = [31 * PAGE_SIZE, KERNEL_HALF_OFFSET + 4 * PAGE_SIZE, 11 * common::PAGE_SIZE];
     allocator.free_block_list.iter().zip(nodes).for_each(|(blk, address)| {
         assert_eq!(blk.start_virt_address, address);
     });
@@ -640,7 +917,7 @@ pub fn virtual_allocator_test() {
     // Check coalescing
     allocator.deallocate(ptr, layout).unwrap();
     assert_eq!(allocator.free_block_list.get_nodes(), 3);
-    let nodes = [31 * PAGE_SIZE, KERNEL_HALF_OFFSET, common::PAGE_SIZE];
+    let nodes = [31 * PAGE_SIZE, KERNEL_HALF_OFFSET + 4 * PAGE_SIZE, common::PAGE_SIZE];
     allocator.free_block_list.iter().zip(nodes).for_each(|(blk, address)| {
         assert_eq!(blk.start_virt_address, address);
     });
@@ -652,27 +929,27 @@ pub fn virtual_allocator_test() {
     allocator.deallocate(ptr2, layout).unwrap();
     assert_eq!(allocator.free_block_list.get_nodes(), 2);
     
-    let nodes = [KERNEL_HALF_OFFSET, PAGE_SIZE];
+    let nodes = [KERNEL_HALF_OFFSET + 4 * PAGE_SIZE, PAGE_SIZE];
     allocator.free_block_list.iter().zip(nodes).for_each(|(blk, address)| {
         assert_eq!(blk.start_virt_address, address);
     });
 
     // Try allocating from kernel memory and checking
-    let ptr = allocator.allocate(layout, PageDescriptor::VIRTUAL).unwrap();
-    assert_eq!(ptr as usize, KERNEL_HALF_OFFSET);
+    let ptr = allocator.allocate(layout, false).unwrap();
+    assert_eq!(ptr as usize, KERNEL_HALF_OFFSET + 4 * PAGE_SIZE);
 
-    let ptr1 = allocator.allocate(layout, PageDescriptor::VIRTUAL).unwrap();
-    assert_eq!(ptr1 as usize, KERNEL_HALF_OFFSET + 10 * PAGE_SIZE);
+    let ptr1 = allocator.allocate(layout, false).unwrap();
+    assert_eq!(ptr1 as usize, KERNEL_HALF_OFFSET + 14 * PAGE_SIZE);
     assert_eq!(allocator.free_block_list.get_nodes(), 2);
     
-    let nodes = [KERNEL_HALF_OFFSET + 20 * PAGE_SIZE, common::PAGE_SIZE];
+    let nodes = [KERNEL_HALF_OFFSET + 24 * PAGE_SIZE, common::PAGE_SIZE];
     allocator.free_block_list.iter().zip(nodes).for_each(|(blk, address)| {
         assert_eq!(blk.start_virt_address, address);
     });
 
     allocator.deallocate(ptr, layout).unwrap();
     assert_eq!(allocator.free_block_list.get_nodes(), 3);
-    let nodes = [KERNEL_HALF_OFFSET + 20 * PAGE_SIZE, common::PAGE_SIZE, KERNEL_HALF_OFFSET];
+    let nodes = [KERNEL_HALF_OFFSET + 24 * PAGE_SIZE, common::PAGE_SIZE, KERNEL_HALF_OFFSET + 4 * PAGE_SIZE];
     allocator.free_block_list.iter().zip(nodes).for_each(|(blk, address)| {
         assert_eq!(blk.start_virt_address, address);
     });
@@ -680,7 +957,7 @@ pub fn virtual_allocator_test() {
     // Back to square 1
     allocator.deallocate(ptr1, layout).unwrap();
     assert_eq!(allocator.free_block_list.get_nodes(), 2);
-    let nodes = [PAGE_SIZE, KERNEL_HALF_OFFSET];
+    let nodes = [PAGE_SIZE, KERNEL_HALF_OFFSET + 4 * PAGE_SIZE];
     allocator.free_block_list.iter().zip(nodes).for_each(|(blk, address)| {
         assert_eq!(blk.start_virt_address, address);
     });

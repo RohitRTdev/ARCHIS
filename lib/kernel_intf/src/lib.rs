@@ -10,7 +10,8 @@ pub enum KError {
     Success,
     InvalidArgument,
     OutOfMemory,
-    ProcessTerminated
+    ProcessTerminated,
+    WaitFailed
 }
 
 impl<T> From<Result<T, KError>> for KError {
@@ -26,6 +27,7 @@ impl fmt::Display for KError {
             KError::InvalidArgument => "Invalid argument",
             KError::OutOfMemory => "Out of memory",
             KError::ProcessTerminated => "Process terminated",
+            KError::WaitFailed => "Wait internal failure",
             KError::Success => "Success"
         };
         write!(f, "{}", description)

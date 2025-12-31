@@ -28,7 +28,6 @@ FUNC interrupt_context_save
     call global_interrupt_handler
 
     // Restore the returned cpu context
-    // Note that the returned value *must* point to valid context
     movq %rax, %rsp
     jmp switch_context
 ENDF interrupt_context_save

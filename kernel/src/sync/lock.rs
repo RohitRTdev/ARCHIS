@@ -70,7 +70,22 @@ impl<T> Spinlock<T> {
 #[cfg(not(test))]
     pub fn lock(&self) -> SpinlockGuard<'_, T> {
         let int_status = hal::disable_interrupts();
-        self.lock.lock(); 
+        let mut count = 0;        
+        while self.lock.try_lock() {
+            count += 1;
+
+            if count > 10000000 {
+                break;
+            }
+        }
+        
+        if count > 10000000 {
+            self.lock.unlock();
+            panic!("Lock acquisition expired!!");
+        }
+        
+        //self.lock.lock();
+
         SpinlockGuard { lock: &self.lock, int_status, data: self.data.get()}
     }
 
@@ -94,7 +109,19 @@ extern "C" fn create_spinlock(lock: &mut Lock) {
 extern "C" fn acquire_spinlock(lock: &mut Lock) {
     unsafe {
         let stat = hal::disable_interrupts();
-        (*ptr_to_ref_mut::<_, hal::Spinlock>(&lock.lock)).lock(); 
+        (*ptr_to_ref_mut::<_, hal::Spinlock>(&lock.lock)).lock();
+        //let mut count = 0;
+        //while (*ptr_to_ref_mut::<_, hal::Spinlock>(&lock.lock)).try_lock() {
+        //    count += 1;
+        //    if count > 1000000 {
+        //        break;
+        //    }
+        //} 
+
+        //if count > 1000000 {
+        //   (*ptr_to_ref_mut::<_, hal::Spinlock>(&lock.lock)).unlock();
+        //   panic!("Lock acquisition failed on logger lock..."); 
+        //}
         
         lock.int_status = stat;
     }

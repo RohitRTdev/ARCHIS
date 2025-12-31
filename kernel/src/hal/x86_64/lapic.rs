@@ -120,8 +120,6 @@ pub fn init() {
     let apic_base_addr = apic_base & 0xfffff000;
     let is_bsp = ((apic_base >> 8) & 0x1) != 0;
 
-    info!("LAPIC base: {:#X}, is_bsp: {}", apic_base & 0xfffff000, is_bsp);
-
     if unsafe {X2APIC_ENABLED} {
         // Enable APIC + x2APIC mode
         unsafe {
@@ -144,7 +142,7 @@ pub fn init() {
             .expect("map_memory failed for apic register space");
             
             unsafe {
-                APIC_BASE = get_virtual_address(apic_base_addr as usize, MapFetchType::Any)
+                APIC_BASE = get_virtual_address(apic_base_addr as usize, 0, MapFetchType::Any)
             .expect("Unable to get APIC base register space virtual address");
             }
         }
@@ -219,8 +217,9 @@ pub fn setup_timer() {
 }
 
 pub fn enable_timer(init_count: u32) {
-    setup_timer_value(init_count);
+    setup_timer_value(0);
     lapic_write(TIMER_LVT, TIMER_VECTOR as u64);
+    setup_timer_value(init_count);
 }
 
 pub fn disable_timer() {
