@@ -1,6 +1,7 @@
-use alloc::sync::{Arc, Weak};
+use alloc::sync::Arc;
 use alloc::collections::BTreeMap;
 use kernel_intf::KError;
+use crate::hal::disable_interrupts;
 use crate::{ds::*, sched};
 use crate::mem::{self, PoolAllocatorGlobal, VCB, VirtMemConBlk};
 use crate::sched::*;
@@ -14,7 +15,6 @@ static PROCESS_ID: AtomicUsize = AtomicUsize::new(0);
 static PROCESSES: Spinlock<BTreeMap<usize, KProcess>> = Spinlock::new(BTreeMap::new());
 
 pub type KProcess = Arc<Spinlock<Process>, PoolAllocatorGlobal>;
-pub type KThreadWeak = Weak<Spinlock<Task>, PoolAllocatorGlobal>;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum ProcessStatus {
@@ -146,6 +146,7 @@ pub fn get_process_info(proc_id: usize) -> Option<KProcess> {
 
 pub fn create_process(start_function: fn() -> !) -> Result<KProcess, KError> {
     disable_preemption();
+    
     let process = Process::new(true)?;
     
     let thread = sched::create_init_thread(start_function, Arc::clone(&process))?;

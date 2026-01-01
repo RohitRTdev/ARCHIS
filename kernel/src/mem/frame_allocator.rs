@@ -275,47 +275,9 @@ pub fn test_init_allocator() {
         alloc_block_list: List::new()
     };
 
-    if let Some(val) = PHY_MEM_CB.get() {
-        *val.lock() = cb;
-    }
-    else {
-        PHY_MEM_CB.call_once(|| {
-            Spinlock::new(cb)
-        });
-    }
-}
-
-#[cfg(test)]
-pub fn test_init_allocator_for_virtual() {
-    common::test_log!("Initializing virtual allocator");
-    let desc = PageDescriptor {
-        num_pages: 100,
-        start_phy_address: 0xf000,
-        start_virt_address: 0x0,
-        flags: 0x0,
-        is_mapped: false
-    };
-
-    let mut free_block_list= List::new();
-    free_block_list.add_node(desc).unwrap();
-
-    let cb = PhyMemConBlk {
-        total_memory: 100 * PAGE_SIZE,
-        avl_memory: 100 * PAGE_SIZE,
-        hard_limit: ARCH_PHY_UPPER_LIMIT,
-        lower_limit: ARCH_PHY_LOWER_LIMIT,
-        free_block_list,
-        alloc_block_list: List::new()
-    };
-
-    if let Some(val) = PHY_MEM_CB.get() {
-        *val.lock() = cb;
-    }
-    else {
-        PHY_MEM_CB.call_once(|| {
-            Spinlock::new(cb)
-        });
-    }
+    PHY_MEM_CB.call_once(|| {
+        Spinlock::new(cb)
+    });
 }
 
 #[cfg(test)]

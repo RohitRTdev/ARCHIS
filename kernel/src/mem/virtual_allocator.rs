@@ -438,6 +438,10 @@ impl VirtMemConBlk {
 
 
     pub fn clone(parent_vcb: VCB, proc_id: usize) -> Result<VCB, KError> {
+        // We need to hold the lock here before mapping begins. 
+        // No other memory allocations must happen during this time
+        let mut addr_space_list = ADDRESS_SPACES.get().unwrap().lock();
+        
         let (alloc_list, total_mem, avl_mem) = {
             let parent_vcb = unsafe {
                 (*parent_vcb.as_ptr()).lock()
@@ -455,6 +459,7 @@ impl VirtMemConBlk {
 
         debug!("Cloning kernel virtual address space for process id {}", proc_id);
         let mut page_mapper = PageMapper::new(false, proc_id);
+
 
         for blk in alloc_list.iter() {
             if blk.is_mapped {
@@ -476,7 +481,6 @@ impl VirtMemConBlk {
             proc_id
         };
 
-        let mut addr_space_list = ADDRESS_SPACES.get().unwrap().lock();
         addr_space_list.add_node(Spinlock::new(new_virtual_allocator))?;
 
     
@@ -488,10 +492,6 @@ impl VirtMemConBlk {
 
 // This is only to be called from scheduler (when scheduler lock is held)
 pub unsafe fn set_address_space(vcb: VCB) {
-    let old_vcb = get_active_vcb();
-    unsafe {
-        (*old_vcb.as_ptr()).lock().page_mapper.dec_active_count();
-    }
     PER_CPU_ACTIVE_VCB.local().store(vcb.as_ptr() as *mut _, Ordering::SeqCst);
 
     vcb.as_ref().lock().page_mapper.set_address_space();
@@ -499,14 +499,6 @@ pub unsafe fn set_address_space(vcb: VCB) {
 
 pub fn get_kernel_addr_space() -> VCB {
     NonNull::new(KERN_ADDR_SPACE.get().unwrap().load(Ordering::Relaxed)).unwrap()
-}
-
-pub fn get_active_vcb_for_core(core: usize) -> NonNull<Spinlock<VirtMemConBlk>> {
-    let vcb = unsafe {
-        PER_CPU_ACTIVE_VCB.get(core).load(Ordering::Acquire)
-    };
-
-    NonNull::new(vcb).unwrap()
 }
 
 fn get_active_vcb() -> NonNull<Spinlock<VirtMemConBlk>> {
@@ -519,10 +511,6 @@ pub fn ap_init() {
     let kernel_addr_space = unsafe {
         PER_CPU_ACTIVE_VCB.get(0).load(Ordering::Acquire)
     };
-
-    unsafe {
-        (*kernel_addr_space).lock().page_mapper.inc_active_count();
-    }
 
     // All AP will use the same kernel virtual address space
     PER_CPU_ACTIVE_VCB.local().store(kernel_addr_space, Ordering::Release);
@@ -611,6 +599,8 @@ pub fn allocate_memory(layout: Layout, flags: u8) -> Result<*mut u8, KError> {
 
             unsafe {&*active_addr_space.as_ptr()}
             .lock().map_memory(phy_addr.addr(), virt_addr.addr(), layout.size(), flags)?;
+            
+            PageMapper::invalidate_other_cores();
 
             Ok(virt_addr as *mut u8)
         }
@@ -634,10 +624,12 @@ pub fn allocate_memory(layout: Layout, flags: u8) -> Result<*mut u8, KError> {
                 for addr_space in ADDRESS_SPACES.get().unwrap().lock().iter() {
                     addr_space.lock().map_memory(phy_addr as usize, virt_addr as usize, layout.size(), flags)?;
                 }
+                PageMapper::invalidate_other_cores();
             }
             
             Ok(virt_addr as *mut u8)
         }
+        
     }
     else {
         assert!(flags == 0);
@@ -660,6 +652,7 @@ pub fn deallocate_memory(addr: *mut u8, layout: Layout, flags: u8) -> Result<(),
             unsafe {
                 (*active_addr_space.as_ptr()).lock().deallocate(addr, layout)?
             };
+            PageMapper::invalidate_other_cores();
 
             phy_addr
         }
@@ -678,6 +671,8 @@ pub fn deallocate_memory(addr: *mut u8, layout: Layout, flags: u8) -> Result<(),
                         addr_space.lock().unmap_memory(addr as usize, layout.size(), false)?;            
                     }
                 }
+                
+                PageMapper::invalidate_other_cores();
             }
 
             // Unreserve the virtual address from the kernel address space
@@ -717,6 +712,7 @@ pub fn map_memory(phys_addr: usize, virt_addr: usize, size: usize, flags: u8) ->
                 addr_space.lock().map_memory(phys_addr, virt_addr, size, flags)?;
             }
         }
+        PageMapper::invalidate_other_cores();
     }
     else {
         // Identity mapped, don't do anything
@@ -740,6 +736,7 @@ pub fn unmap_memory(virt_addr: usize, size: usize, flags: u8) -> Result<(), KErr
                 addr_space.lock().unmap_memory(virt_addr, size, false)?;
             }
         }
+        PageMapper::invalidate_other_cores();
     }
     else {
         // Identity mapped, don't do anything
@@ -866,8 +863,6 @@ pub fn virtual_allocator_init() {
     cpu::set_worker_stack_for_boot_cpu(stack_raw);
 
     // Finalize address space creation
-    kernel_addr_space.page_mapper.bootstrap_activate();
-
     ADDRESS_SPACES.call_once(|| {
         let mut l = List::new();
         l.add_node(Spinlock::new(kernel_addr_space)).unwrap();

@@ -1,7 +1,6 @@
 use kernel_intf::info;
 use crate::mem::MapFetchType;
-use core::sync::atomic::Ordering;
-use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicU64, Ordering};
 mod asm;
 mod utils;
 mod features;
@@ -25,50 +24,57 @@ pub use timer::delay_ns;
 const MAX_INTERRUPT_VECTORS: usize = 256;
 
 pub fn disable_interrupts() -> bool {
+    core::sync::atomic::compiler_fence(Ordering::SeqCst);
+
     // RFLAGS register bit 9 is IF -> 1 is enabled
-    (unsafe { asm::cli() } & (1 << 9)) != 0
+    let flag = (unsafe { asm::cli() } & (1 << 9)) != 0;
+    
+    core::sync::atomic::compiler_fence(Ordering::SeqCst);
+
+    flag
 }
 
 pub fn enable_interrupts(int_status: bool) {
-    // If interrupts were disabled previously, then don't enable them here
-    if !int_status {
-        return;
+    core::sync::atomic::compiler_fence(Ordering::SeqCst);
+
+    if int_status {
+        unsafe { asm::sti(); }
     }
 
-    unsafe {
-        asm::sti();
-    }
+    core::sync::atomic::compiler_fence(Ordering::SeqCst);
 }
 
 pub use asm::read_port_u8;
 pub use asm::write_port_u8;
 
-pub struct Spinlock(UnsafeCell<u64>);
+pub struct Spinlock {
+    state: AtomicU64
+}
 
 impl Spinlock {
     pub const fn new() -> Self {
-        Self(UnsafeCell::new(0))
+        Self {
+            state: AtomicU64::new(0),
+        }
     }
 
+    #[inline]
     pub fn lock(&self) {
-        unsafe {
-            asm::acquire_lock(self.0.get());
-        }
-    }
-    
-    pub fn unlock(&self) {
-        unsafe {
-            // In x86_64, writes follow release semantics (Since no earlier load/store is reordered with a later store)
-            self.0.get().write(0);
+        while self.state.compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
+            core::hint::spin_loop();
         }
     }
 
+    #[inline]
     pub fn try_lock(&self) -> bool {
-        unsafe {
-            asm::try_acquire_lock(self.0.get()) != 0
-        }
+        self.state.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed).is_ok()
     }
-} 
+
+    #[inline]
+    pub fn unlock(&self) {
+        self.state.store(0, Ordering::Release);
+    }
+}
 
 #[cfg(not(test))]
 #[inline(always)]

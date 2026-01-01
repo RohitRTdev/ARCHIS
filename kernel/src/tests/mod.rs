@@ -224,6 +224,5 @@ fn virt_alloc_test() {
     mem::clear_heap();
     mem::setup_heap();
     test_log!("Starting virt_alloc_test");
-    mem::test_init_allocator_for_virtual();
     mem::virtual_allocator_test();
 }

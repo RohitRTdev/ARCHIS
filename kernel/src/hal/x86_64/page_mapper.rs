@@ -35,7 +35,7 @@ static mut DISABLE_INVALIDATION: bool = true;
 
 pub struct PageMapper {
     pml4_phys: u64, 
-    is_current: usize,
+    is_current: bool,
     proc_id: usize 
 }
 
@@ -65,7 +65,7 @@ impl PageMapper {
 
         Self {
             pml4_phys: pml4_phys as u64,
-            is_current: 0,
+            is_current: false,
             proc_id
         }
     }
@@ -74,74 +74,70 @@ impl PageMapper {
     pub fn new(_: bool, _: usize) -> Self {
         Self {
             pml4_phys: 0,
-            is_current: 0,
+            is_current: false,
             proc_id: 0
         }
     }
 
+    fn set_current(&mut self) {
+        let pml4 = unsafe {
+            asm::read_cr3() & PTE::PHY_ADDR_MASK
+        };
+
+        self.is_current = pml4 == self.pml4_phys;
+    }
+
     pub fn set_address_space(&mut self) {
-        self.is_current += 1;
+        self.is_current = true;
+        core::sync::atomic::compiler_fence(Ordering::SeqCst);
         unsafe {
-            asm::write_cr3(self.pml4_phys);
+            // Set page table as write through
+            asm::write_cr3((self.pml4_phys & PTE::PHY_ADDR_MASK) | PTE::PWT);
         }
     }
 
     pub fn map_memory(&mut self, virt_addr: usize, phys_addr: usize, size: usize, flags: u8) {
         assert!(virt_addr & 0xfff == 0  && phys_addr & 0xfff == 0 && size & 0xfff == 0);
         let num_pages = ceil_div(size, PAGE_SIZE);
+        self.set_current();
         for i in 0..num_pages {
             let va = virt_addr + i * PAGE_SIZE;
             let pa = phys_addr + i * PAGE_SIZE;
             self.map_page(va as u64, pa as u64, flags & mem::PageDescriptor::USER != 0, 
             flags & mem::PageDescriptor::MMIO != 0);
         }
+        core::sync::atomic::fence(Ordering::SeqCst);
     }
 
     pub fn unmap_memory(&mut self, virt_addr: usize, size: usize) {
         assert!(virt_addr & 0xfff == 0 && size & 0xfff == 0);
         let num_pages = ceil_div(size, PAGE_SIZE);
+        self.set_current();
         for i in 0..num_pages {
             let va = virt_addr + i * PAGE_SIZE;
             self.unmap_page(va as u64);
         }
+        core::sync::atomic::fence(Ordering::SeqCst);
     }
 
-    pub fn dec_active_count(&mut self) {
-        self.is_current = self.is_current.saturating_sub(1);
-    }
-    
-    pub fn inc_active_count(&mut self) {
-        self.is_current += 1;
-    }
-
-    fn invalidate_other_cores(&self) {
+    pub fn invalidate_other_cores() {
+        core::sync::atomic::fence(Ordering::SeqCst);
         let cur_core = super::get_core();
         let total_cores = cpu::get_total_cores();
         
-        // Right now, we're not tracking exactly which cpus this address space is current in
-        // So, we're just being conservative and sending invalidation IPIs to all other cpus
-        // TODO: Add some cpu bitmap which tracks which cpu this address space is active in
-        // Another design choice we could make is to only allow all tasks of a process to run in a single core
-        // This way, we can track the cpu with just a single variable and invalidate that.  
-        if self.is_current > 0 {
-            if unlikely(unsafe{DISABLE_INVALIDATION}) {
-                return;
-            }
+        if unlikely(unsafe{DISABLE_INVALIDATION}) {
+            return;
+        }
 
-            for core in 0..total_cores {
-                if core != cur_core {
-                    let _ = notify_core(IPIRequestType::TlbInvalidate, core);
-                }
+        for core in 0..total_cores {
+            if core != cur_core {
+                let _ = notify_core(IPIRequestType::TlbInvalidate, core);
             }
         }
     }
 
     fn invalidate_tlb(&self, virt_addr: usize) {
-        let cur_core = super::get_core();
-        let total_cores = cpu::get_total_cores();
-
-        if self.is_current > 0 {
-            // Invalidate tlb on current cpu (Note: This address space may not even be active on this cpu, but we have no choice but to be conservative here)
+        if self.is_current {
             unsafe { asm::invlpg(VirtAddr::new(virt_addr).get() as u64); }
         }
     }
@@ -151,7 +147,7 @@ impl PageMapper {
         let mut pml_addr = 0;
         let mut pdpt_addr = 0;
         let mut pd_addr = 0;
-        let pt = if self.is_current == 0 {
+        let pt = if !self.is_current {
             unsafe {
                 pml_addr = mem::map_page_table(self.pml4_phys as usize, self.proc_id).expect("Page table could not be mapped to process address space");
                 let pdpt = *(pml_addr as *mut u64).add(pml4_idx) & PTE::PHY_ADDR_MASK;
@@ -195,7 +191,7 @@ impl PageMapper {
     }
 
     fn unmap_page_tables(&mut self, pml4: usize, pdpt: usize, pd: usize, pt: usize) {
-        if self.is_current > 0 {
+        if self.is_current {
             return;
         }
 
@@ -209,7 +205,7 @@ impl PageMapper {
     // If this address space is not active, then caller is expected to fetch the virtual address to which this page table is mapped
     // level -> Indicates which level page table user wants to access
     fn get_table_mut(&self, level: PageLevel, pml_idx: usize, pdpt_idx: usize, pd_idx: usize, phy_addr: usize) -> &mut [u64; 512] {
-        let virt = if self.is_current > 0 {
+        let virt = if self.is_current {
             match level {
                 PageLevel::PML4 => Self::recursive_map_addr(RECURSIVE_SLOT, RECURSIVE_SLOT, RECURSIVE_SLOT),
                 PageLevel::PDPT => Self::recursive_map_addr(RECURSIVE_SLOT, RECURSIVE_SLOT, pml_idx as u64),
@@ -243,7 +239,7 @@ impl PageMapper {
         else {
             None
         };
-        let vaddr = if self.is_current > 0 {
+        let vaddr = if self.is_current {
             // This address is valid if this address space were active
             let rec_addr = match level {
                 PageLevel::PDPT => Self::recursive_map_addr(RECURSIVE_SLOT, RECURSIVE_SLOT, pml_idx as u64),
@@ -292,7 +288,7 @@ impl PageMapper {
     fn allocate_page_table(&self) -> (usize, usize) {
         // If current active space, then just give the physical memory as caller will recursively map it
         let layout = Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap();
-        if self.is_current > 0 {
+        if self.is_current {
             let phy_addr = mem::allocate_memory(layout, 0).expect("Page table allocation failed!") as usize;
             (phy_addr, phy_addr)
         }
@@ -305,25 +301,7 @@ impl PageMapper {
         }
     }
 
-    // This is purely for debugging, don't use this
-    #[cfg(debug_assertions)]
-    pub fn get_physical_address(&self, virt_addr: usize) -> usize {
-        let (pml4_idx, pdpt_idx, pd_idx, pt_idx) = Self::split_indices(virt_addr as u64);
-
-        //let pml4 = self.get_table_mut(PageLevel::PML4, pml4_idx, pdpt_idx, pd_idx, self.pml4_phys);
-        //let pdpt = self.get_table_mut(PageLevel::PDPT, pml4_idx, pdpt_idx, pd_idx, (pml4[pml4_idx] & PTE::PHY_ADDR_MASK) as usize); 
-        //let pd = self.get_table_mut(PageLevel::PD, pml4_idx, pdpt_idx, pd_idx, (pdpt[pdpt_idx] & PTE::PHY_ADDR_MASK) as usize); 
-        let pt = self.get_table_mut(PageLevel::PT, pml4_idx, pdpt_idx, pd_idx, 0); 
-
-        (pt[pt_idx]) as usize
-    }
-
-    // Used internally -> Setup initial address space
-    pub fn bootstrap_activate(&mut self) {
-        self.is_current = 1;
-    }
-
-    /// Compute the recursive mapping address for a page table at a given level and indices
+    // Compute the recursive mapping address for a page table at a given level and indices
     fn recursive_map_addr(pml: u64, pdpt: u64, pd: u64) -> u64 {
         // Since memory address needs to be canonical, we use 0xffffff instead of 0x1ff
         (0x1ffffff << 39) |

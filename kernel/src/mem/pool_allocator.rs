@@ -101,6 +101,7 @@ pub struct PoolAllocatorGlobal;
 impl<T> PoolAllocator<T> {
     // Push a range of slots as free blocks into the pool's free list
     fn push_free_blocks(pool: &mut Pool, base: *mut u8, slots: usize, block_size: usize) {
+        debug!("Push free blocks base = {:#X}, block_size={}", base.addr(), block_size);
         for i in 0..slots {
             let slot_ptr = unsafe { base.add(i * block_size) as *mut FreeBlock };
             unsafe {

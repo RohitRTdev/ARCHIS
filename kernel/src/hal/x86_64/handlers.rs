@@ -252,8 +252,6 @@ pub fn create_kernel_context(handler: fn() -> !, stack_base: *mut u8) -> *const 
     // Sanity: ensure stack pointer remains 16-byte aligned after allocating the CPUContext
     debug_assert_eq!(sp & 0xF, 0, "create_kernel_context produced an unaligned stack pointer");
 
-    debug!("Creating stack context for handler={:#X} and base={:#X}", handler as usize, stack_base as usize);
-
     let mut context = CPUContext::new(); 
     context.rip = handler as u64;
     context.rbp = stack_base.addr() as u64;
@@ -274,7 +272,6 @@ pub fn create_kernel_context(handler: fn() -> !, stack_base: *mut u8) -> *const 
 
 fn ipi_handler(_vector: usize) {
     let core = get_core();
-    debug!("Got IPI for core {}", core);
     let req = {
         let mut ipi_queue = IPI_REQUESTS.lock();
         let mut ipi_req = None;
@@ -306,12 +303,10 @@ fn ipi_handler(_vector: usize) {
     let req_info = req.unwrap();
     match req_info.req_type {
         IPIRequestType::SchedChange => {
-            debug!("Got IPI for scheduler change");
             enable_scheduler_timer();
             crate::sched::schedule();
         },
         IPIRequestType::TlbInvalidate => {
-            debug!("Got IPI for tlb invalidate");
             // Reload cr3
             unsafe {
                 let cr3 = asm::read_cr3();
@@ -319,12 +314,9 @@ fn ipi_handler(_vector: usize) {
             }
         },
         IPIRequestType::Shutdown => {
-            debug!("Got IPI for shutdown...");
             halt();
         }
     }
-
-    debug!("IPI Requests list size={}", IPI_REQUESTS.lock().get_nodes());
 }
 
 // Function should only be called after scheduler is up

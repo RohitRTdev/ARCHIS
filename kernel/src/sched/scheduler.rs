@@ -703,6 +703,7 @@ pub fn schedule() {
                             sched_cb.waiting_tasks.insert_node_at_tail(current_task);
                         }
                         else if task_info.status == TaskStatus::TERMINATED {
+                            debug!("Adding task {} to terminated list", task_info.id);
                             sched_cb.terminated_tasks.insert_node_at_tail(current_task);
                         }
 
@@ -770,7 +771,6 @@ pub fn schedule() {
                     assert!(cur_ctx < alloc_base || cur_ctx >= top, "Attempting to destroy a stack that contains the current CPU context!");
                 }
             }
-
             sched_cb.leftover_stack.clear();
         }
 
@@ -782,7 +782,6 @@ pub fn schedule() {
 }
 
 fn prep_idle_task(sched_cb: &mut TaskQueue, old_vcb: VCB) {
-    debug!("Preparing to switch to idle task on core {}", hal::get_core());
     sched_cb.running_task = None;
     let context = create_kernel_context(idle_task, sched_cb.idle_task_stack.as_ptr() as *mut u8);
     
@@ -796,7 +795,6 @@ fn prep_idle_task(sched_cb: &mut TaskQueue, old_vcb: VCB) {
 }
 
 fn idle_task() -> ! {
-    debug!("Idle task on core {}", hal::get_core());
     hal::sleep();
 }
 
@@ -806,7 +804,6 @@ fn notify_other_cpu(target_core: usize) {
         return;
     }
 
-    debug!("Notifying cpu {} on task change", target_core);
     let _ = hal::notify_core(IPIRequestType::SchedChange, target_core);
 }
 

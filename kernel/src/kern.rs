@@ -30,12 +30,10 @@ mod tests;
 
 use sync::{Once, Spinlock};
 use cpu::install_interrupt_handler;
-use crate::hal::{delay_ns, disable_interrupts, read_port_u8};
+use crate::hal::{disable_interrupts, read_port_u8};
 use crate::mem::Regions::*;
 use crate::ds::*;
 use crate::sched::KThread;
-use crate::sched::get_current_process;
-use crate::sched::kill_process;
 use crate::sync::KSem;
 
 static BOOT_INFO: Once<BootInfo> = Once::new();
