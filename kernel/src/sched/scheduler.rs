@@ -1,7 +1,8 @@
 use alloc::sync::Arc;
+use common::PAGE_SIZE;
 use crate::cpu::{MAX_CPUS, PerCpu, Stack, get_panic_base, set_panic_base, get_total_cores, get_worker_stack};
 use crate::hal::{self, IPIRequestType, create_kernel_context, disable_scheduler_timer, enable_scheduler_timer, fetch_context, switch_context};
-use crate::mem::{PoolAllocatorGlobal, VCB, get_kernel_addr_space, set_address_space};
+use crate::mem::{PoolAllocatorGlobal, VCB, VirtMemConBlk, get_kernel_addr_space, set_address_space};
 use crate::{ds::*, sched};
 use crate::sync::{KSem, KSemInnerType, Spinlock};
 use super::{KProcess, ProcessStatus, get_current_process, get_process_info, KTimerInnerType};
@@ -57,10 +58,10 @@ impl Task {
         let id = TASK_ID.fetch_add(1, Ordering::Relaxed);  
 
         if alloc_stack {
-            debug!("Creating task with ID:{} and stack_addr={:#X} on core {}", id, stack.as_ref().unwrap().get_stack_base(), core);
+            info!("Creating task with ID:{} and stack_addr={:#X} on core {}", id, stack.as_ref().unwrap().get_stack_base(), core);
         } 
         else {
-            debug!("Creating task with ID:{}", id);
+            info!("Creating task with ID:{}", id);
         }
 
         let task = Arc::new_in(Spinlock::new(Task {
@@ -215,7 +216,7 @@ pub fn init() {
 
         // We need to create separate stack for idle task on cpu 0, since the current stack is used by init task
         if core == 0 {
-            let stack = Stack::into_inner(&mut Stack::new().expect("Could not create worker stack for cpu 0"));
+            let stack = Stack::into_inner(&mut Stack::new_with(5 * PAGE_SIZE, PAGE_SIZE).expect("Could not create worker stack for cpu 0"));
             sched_cb.idle_task_stack = stack; 
         }
         else {
@@ -349,6 +350,7 @@ pub fn signal_waiting_task(task_id: usize, wait_semaphore: KSemInnerType) {
                 }
 
                 remove_wait_semaphore(&mut *task, wait_semaphore);
+                info!("Signalling waiting task {}", task.id);
             },
 
             TaskStatus::TERMINATED => {
@@ -759,18 +761,6 @@ pub fn schedule() {
             sched_cb.flip_flop = false;
         }
         else {
-            // Any delayed stack deletions can be done here, since we have switched from that stack
-            // Debug-safety check: ensure we are not freeing a stack which currently contains
-            // the saved CPU context. This guards against use-after-free of active contexts.
-            #[cfg(debug_assertions)]
-            {
-                let cur_ctx = crate::hal::fetch_context() as usize;
-                for st in sched_cb.leftover_stack.iter() {
-                    let alloc_base = st.get_alloc_base();
-                    let top = st.get_stack_base();
-                    assert!(cur_ctx < alloc_base || cur_ctx >= top, "Attempting to destroy a stack that contains the current CPU context!");
-                }
-            }
             sched_cb.leftover_stack.clear();
         }
 
@@ -804,7 +794,8 @@ fn notify_other_cpu(target_core: usize) {
         return;
     }
 
-    let _ = hal::notify_core(IPIRequestType::SchedChange, target_core);
+    info!("Notifying core {}", target_core);
+    hal::notify_core(IPIRequestType::SchedChange, target_core);
 }
 
 fn create_thread_common(handler: fn() -> !) -> Result<(KThread, usize), KError> {

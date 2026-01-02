@@ -28,10 +28,37 @@ fn list_clear_test() {
     let mut structure: FixedList<Sample, {mem::Regions::Region0 as usize}> = List::new();
     test_log!("Starting list_clear_test");
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
+    struct TestStruct {
+        a: u32,
+        b: u32
+    }
+
+    #[derive(Debug, Clone)]
     struct Sample {
+        list: FixedList<TestStruct, {mem::Regions::Region1 as usize}>,
         _a: u32,
         _b: u32
+    }
+
+    impl Sample {
+        fn new(_a: u32, _b: u32) -> Self {
+            let mut inst = Self {
+                list: List::new(),
+                _a,
+                _b
+            };
+            
+            inst.list.add_node(TestStruct{a: _a, b: _b}).unwrap();
+            inst.list.add_node(TestStruct{a: _a + 1, b: _b + 1}).unwrap();
+            inst
+        }
+    }
+
+    impl Drop for TestStruct {
+        fn drop(&mut self) {
+            test_log!("Dropping {:?}", self);
+        }
     }
 
     impl Drop for Sample {
@@ -40,13 +67,54 @@ fn list_clear_test() {
         }
     }
 
-    structure.add_node(Sample{_a:52, _b: 12}).unwrap();
-    structure.add_node(Sample{_a:32, _b: 13}).unwrap();
-    structure.add_node(Sample{_a:38, _b: 1000}).unwrap();
-    structure.add_node(Sample{_a:12035, _b: 2}).unwrap();
+    structure.add_node(Sample::new(52, 12)).unwrap();
+    structure.add_node(Sample::new(32, 13)).unwrap();
+    structure.add_node(Sample::new(38, 1000)).unwrap();
+    structure.add_node(Sample::new(12035, 2)).unwrap();
 
+
+    let (_, bitmap) = mem::get_heap(mem::Regions::Region1);
+    let mut passed = false;
+    let total_bitmap_size = (mem::BOOT_REGIONS[1] / mem::MIN_SLOT_SIZE) >> 3;
+    for byte in 0..total_bitmap_size {
+        let ptr = unsafe {bitmap.add(byte)};
+        if unsafe {*ptr} != 0 {
+            passed = true;
+            break;
+        }
+    }
+
+    assert!(passed);
+
+    test_log!("Structure={:?}", structure);
+    
+    {
+        let _new_list = structure.clone();
+        
+        passed = false;
+        for byte in 0..total_bitmap_size {
+            let ptr = unsafe {bitmap.add(byte)};
+            if unsafe {*ptr} != 0 {
+                passed = true;
+                break;
+            }
+        }
+
+        assert!(passed);
+        test_log!("Dropping new list...");
+        // Drop test
+    }
+
+    test_log!("Clearing structure");
     structure.clear();
-    test_log!("Cleared list...");
+    
+    for byte in 0..total_bitmap_size {
+        let ptr = unsafe {bitmap.add(byte)};
+        if unsafe {*ptr} != 0 {
+            assert!(false, "List deallocations failed!");
+        }
+    }
+
 }
 
 

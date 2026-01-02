@@ -159,11 +159,11 @@ pub fn init() {
                     infra::disable_callstack();
                 }
 
+                debug!("{:?}", unsafe {*(fetch_context() as *const CPUContext)});
                 if idx == DOUBLE_FAULT_VECTOR {
                     panic!("{} exception!\nPossible stack overflow??", EXCP_STRINGS[idx]);
                 }
                 else {
-                    debug!("{:?}", unsafe {*(fetch_context() as *const CPUContext)});
                     panic!("{} exception!", EXCP_STRINGS[idx]);
                 }
                 
@@ -231,6 +231,8 @@ fn page_fault_handler(_vector: usize) {
     let fault_address = unsafe {
         asm::read_cr2()
     };
+    
+    info!("{:?}", unsafe {*(fetch_context() as *const CPUContext)});
 
     on_page_fault(fault_address as usize);
 }
@@ -272,6 +274,7 @@ pub fn create_kernel_context(handler: fn() -> !, stack_base: *mut u8) -> *const 
 
 fn ipi_handler(_vector: usize) {
     let core = get_core();
+    info!("Got IPI for core {}", core);
     let req = {
         let mut ipi_queue = IPI_REQUESTS.lock();
         let mut ipi_req = None;
@@ -303,6 +306,7 @@ fn ipi_handler(_vector: usize) {
     let req_info = req.unwrap();
     match req_info.req_type {
         IPIRequestType::SchedChange => {
+            info!("Got sched change request for cpu {}", req_info.core);
             enable_scheduler_timer();
             crate::sched::schedule();
         },
@@ -320,7 +324,7 @@ fn ipi_handler(_vector: usize) {
 }
 
 // Function should only be called after scheduler is up
-pub fn notify_core(req_type: IPIRequestType, target_core: usize) -> Result<(), KError> {
+pub fn notify_core(req_type: IPIRequestType, target_core: usize) {
     assert!(target_core < cpu::get_total_cores());
     
     let apic_id = super::get_apic_id(target_core);
@@ -329,9 +333,8 @@ pub fn notify_core(req_type: IPIRequestType, target_core: usize) -> Result<(), K
         req_type, core: target_core
     };
 
-    IPI_REQUESTS.lock().add_node(req)?;
+    IPI_REQUESTS.lock().add_node(req).expect("Failed to queue ipi request");
     debug!("IPI Requests list size={}", IPI_REQUESTS.lock().get_nodes());
 
     lapic::send_ipi(apic_id as u32, IPI_VECTOR as u8);
-    Ok(())
 }

@@ -7,10 +7,11 @@ use crate::hal::get_core;
 use crate::infra::disable_early_panic_phase;
 use crate::{ds::*, hal};
 use crate::sync::Spinlock;
-use crate::mem::{PageDescriptor, Regions::*, allocate_memory, deallocate_memory, map_memory, unmap_memory};
+use crate::mem::{PageDescriptor, allocate_memory, deallocate_memory, map_memory};
 
-pub const INIT_STACK_SIZE: usize  = PAGE_SIZE * 10;
+pub const INIT_STACK_SIZE: usize  = PAGE_SIZE * 7;
 pub const INIT_GUARD_PAGE_SIZE: usize = PAGE_SIZE;
+pub const WORKER_STACK_SIZE: usize = 5 * PAGE_SIZE;
 pub const TOTAL_STACK_SIZE: usize = INIT_STACK_SIZE + INIT_GUARD_PAGE_SIZE;
 
 static TOTAL_CPUS: AtomicUsize = AtomicUsize::new(1);
@@ -91,7 +92,7 @@ impl Stack {
             return;
         }
 
-        debug!("Destroying stack with alloc_base={:#X} and base={:#X}", self.get_alloc_base(), self.get_stack_base());
+        info!("Destroying stack with alloc_base={:#X} and base={:#X}", self.get_alloc_base(), self.get_stack_base());
         deallocate_memory(self.get_stack_top() as *mut u8, Layout::from_size_align(self.stack_size, PAGE_SIZE).unwrap(), PageDescriptor::VIRTUAL)
         .expect("Stack base address wrong during unmap??");
         
@@ -212,7 +213,7 @@ pub fn register_cpu() -> usize {
         }
     } else {
         // Allocate worker stack for the CPU
-        let stack = Stack::new().expect("Failed to allocate memory for CPU worker stack");
+        let stack = Stack::new_with(WORKER_STACK_SIZE, INIT_GUARD_PAGE_SIZE).expect("Failed to allocate memory for CPU worker stack");
         let backup_stack = Stack::new_with(PAGE_SIZE, 0).expect("Failed to create backup stack for cpu");
         let stack_base = stack.get_stack_base();
 

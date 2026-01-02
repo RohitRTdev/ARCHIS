@@ -16,11 +16,10 @@ pub struct ListIter<'a, T> {
 }
 
 pub struct ListIterMut<'a, T> {
-    current: Option<*mut ListNode<T>>,
-    head: Option<*mut ListNode<T>>,
+    current: Option<NonNull<ListNode<T>>>,
+    head: Option<NonNull<ListNode<T>>>,
     _marker: PhantomData<&'a mut ListNode<T>>
 }
-
 pub struct ListNode<T> {
     data: T,
     prev: NonNull<ListNode<T>>,
@@ -40,13 +39,29 @@ impl<T> ListNode<T> {
 }
 
 pub struct List<T, A: Allocator<ListNode<T>>> {
-    head: Option<*mut ListNode<T>>,
-    tail: Option<*mut ListNode<T>>,
+    head: Option<NonNull<ListNode<T>>>,
+    tail: Option<NonNull<ListNode<T>>>,
     num_nodes: usize,
     _marker: PhantomData<A>
 }
 
 unsafe impl<T: Send, A: Allocator<ListNode<T>>> Send for List<T, A>{}
+
+impl<T> Deref for ListNode<T> {
+    type Target = T;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl<T> DerefMut for ListNode<T> {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.data
+    }
+}
 
 impl<T, A: Allocator<ListNode<T>>> Default for List<T, A> {
     fn default() -> Self {
@@ -57,39 +72,22 @@ impl<T, A: Allocator<ListNode<T>>> Default for List<T, A> {
 impl<T, A: Allocator<ListNode<T>>> Deref for ListNodeGuard<T, A> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
-        unsafe {
-            self.guard.as_ref()
-        }
+        unsafe { &self.guard.as_ref().data }
     }
 }
 
 impl<T, A: Allocator<ListNode<T>>> DerefMut for ListNodeGuard<T, A> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe {
-            self.guard.as_mut()
-        }
-    }
-}
-
-impl<T> Deref for ListNode<T> {
-    type Target = T;
-    fn deref(&self) -> &Self::Target {
-        &self.data
-    }
-}
-
-impl<T> DerefMut for ListNode<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.data
+        unsafe { &mut self.guard.as_mut().data }
     }
 }
 
 impl<T, A: Allocator<ListNode<T>>> Drop for ListNodeGuard<T, A> {
     fn drop(&mut self) {
         unsafe {
-            let node = core::ptr::read(self.guard.as_ptr());
-            drop(node);
-            A::dealloc(self.guard, Layout::for_value(self.guard.as_ref()));
+            let layout = Layout::new::<ListNode<T>>();
+            core::ptr::drop_in_place(self.guard.as_ptr());
+            A::dealloc(self.guard, layout);
         }
     }
 }
@@ -97,6 +95,18 @@ impl<T, A: Allocator<ListNode<T>>> Drop for ListNodeGuard<T, A> {
 impl<T, A: Allocator<ListNode<T>>> Drop for List<T, A> {
     fn drop(&mut self) {
         self.clear();
+    }
+}
+
+impl<T: Clone, A: Allocator<ListNode<T>>> Clone for List<T, A> {
+    fn clone(&self) -> Self {
+        let mut new_list = Self::new();
+
+        for node in self.iter() {
+            new_list.add_node(node.data.clone()).expect("List clone operation failed!");
+        }
+
+        new_list
     }
 }
 
@@ -109,133 +119,111 @@ impl<T, A: Allocator<ListNode<T>>> List<T, A> {
             _marker: PhantomData
         }
     }
-
+    
     pub fn first(&self) -> Option<&ListNode<T>> {
-        if self.head.is_none() {
-            None
+        if let Some(head) = self.head {
+            unsafe { Some(&*head.as_ptr()) }
         }
         else {
-            unsafe {
-                Some(&*self.head.unwrap())
-            }
+            None
         }
     }
 
     pub fn first_mut(&mut self) -> Option<&mut ListNode<T>> {
-        if self.head.is_none() {
-            None
+        if let Some(head) = self.head {
+            unsafe { Some(&mut *head.as_ptr()) }
         }
         else {
-            unsafe {
-                Some(&mut *self.head.unwrap())
-            }
+            None
         }
     }
 
     pub fn last(&self) -> Option<&ListNode<T>> {
-        if self.tail.is_none() {
-            None
+        if let Some(tail) = self.tail {
+            unsafe { Some(&*tail.as_ptr()) }
         }
         else {
-            unsafe {
-                Some(&*self.tail.unwrap())
-            }
+            None
         }
     }
 
-    pub fn clone(&self) -> Result<Self, KError>
-    where T: Clone {
-        let mut new_list = Self::new();
-
-        for node in self.iter() {
-            new_list.add_node((*node).clone())?;
-        }
-
-        Ok(new_list)
-    }
 
     pub fn add_node(&mut self, data: T) -> Result<(), KError> {
-        let layout = Layout::from_size_align(size_of::<ListNode<T>>(), align_of::<ListNode<T>>()).unwrap();
-        let addr = A::alloc(layout)?.as_ptr();
-        let addr_non = NonNull::new(addr).unwrap();
-        
+        let layout = Layout::new::<ListNode<T>>();
+        let ptr = A::alloc(layout)?.as_ptr();
+        let node = NonNull::new(ptr).unwrap();
+
         unsafe {
-            addr.write(ListNode {
-                next: addr_non,
-                prev: addr_non,
-                data
+            ptr.write(ListNode {
+                data,
+                prev: node,
+                next: node
             });
         }
 
-        self.insert_node_at_tail(addr_non);
+        self.insert_node_at_tail(node);
         Ok(())
     }
-
 
     pub fn get_nodes(&self) -> usize {
         self.num_nodes
     }
 
     fn insert_node(&mut self, this: NonNull<ListNode<T>>, insert_at_tail: bool) {
-        let this_node = unsafe {
-            &mut *this.as_ptr()
-        };
+        unsafe {
+            let this_node = &mut *this.as_ptr();
 
-        let this_opt = Some(this.as_ptr());
+            if self.num_nodes == 0 {
+                this_node.next = this;
+                this_node.prev = this;
 
-        if self.num_nodes == 0 {
-            self.head = this_opt;
-            self.tail = this_opt;
-            this_node.next = this;
-            this_node.prev = this;
-        }
-        else {
-            let tail_node = unsafe {
-                &mut *self.tail.unwrap()
-            };
-            let head_node = unsafe {
-                &mut *self.head.unwrap()
-            };
-            
-            tail_node.next = this;
-            this_node.prev = NonNull::new(self.tail.unwrap()).unwrap();
-            this_node.next = NonNull::new(self.head.unwrap()).unwrap();
-            head_node.prev = this;
-            if insert_at_tail {
-                self.tail = this_opt;
+                self.head = Some(this);
+                self.tail = Some(this);
             }
             else {
-                self.head = this_opt;
-            }
-        }
+                let head = self.head.unwrap();
+                let tail = self.tail.unwrap();
 
-        self.num_nodes += 1;
-    }
+                let head_node = &mut *head.as_ptr();
+                let tail_node = &mut *tail.as_ptr();
 
-    pub fn pop_node(&mut self) {
-        let node = self.last();
-        if node.is_none() {
-            return;
-        }
-        else {
-            unsafe {
-                self.remove_node(NonNull::from(node.unwrap()));
+                this_node.prev = tail;
+                this_node.next = head;
+
+                tail_node.next = this;
+                head_node.prev = this;
+
+                if insert_at_tail {
+                    self.tail = Some(this);
+                }
+                else {
+                    self.head = Some(this);
+                }
             }
+
+            self.num_nodes += 1;
         }
     }
 
     pub fn insert_node_at_tail(&mut self, this: NonNull<ListNode<T>>) {
-        self.insert_node( this, true);
+        self.insert_node(this, true);
     }
-    
+
     pub fn insert_node_at_head(&mut self, this: NonNull<ListNode<T>>) {
         self.insert_node(this, false);
     }
 
-    pub fn clear(&mut self) {
-        while self.get_nodes() != 0 {
-            let node = NonNull::from(self.first().unwrap());
+    pub fn pop_node(&mut self) {
+        if let Some(node) = self.tail {
+            unsafe {
+                self.remove_node(node);
+            }
+        }
+    }
 
+    pub fn clear(&mut self) {
+        while self.num_nodes != 0 {
+            let node = self.head.unwrap();
             unsafe {
                 self.remove_node(node);
             }
@@ -245,43 +233,38 @@ impl<T, A: Allocator<ListNode<T>>> List<T, A> {
     // This is unsafe, since it is caller's responsibility to ensure that the given ListNode is a valid node that is 
     // part of this list
     pub unsafe fn remove_node(&mut self, this: NonNull<ListNode<T>>) -> ListNodeGuard<T, A> {
-        let this_node = unsafe {
-            &mut *this.as_ptr()
-        };
+        let node = &mut *this.as_ptr();
 
         if self.num_nodes == 1 {
             self.head = None;
             self.tail = None;
         }
         else {
-            let prev_node = unsafe {
-                &mut *this_node.prev.as_ptr()
-            };
-            let next_node = unsafe {
-                &mut *this_node.next.as_ptr()
-            };
+            let prev = &mut *node.prev.as_ptr();
+            let next = &mut *node.next.as_ptr();
 
-            prev_node.next = this_node.next;
-            next_node.prev = this_node.prev;
+            prev.next = node.next;
+            next.prev = node.prev;
 
-            if self.head.unwrap() == this.as_ptr() {
-                self.head = Some(this_node.next.as_ptr());
+            if self.head.unwrap() == this {
+                self.head = Some(node.next);
             }
-            else if self.tail.unwrap() == this.as_ptr() {
-                self.tail = Some(this_node.prev.as_ptr());
+            if self.tail.unwrap() == this {
+                self.tail = Some(node.prev);
             }
         }
 
-        self.num_nodes -= 1; 
-
-        ListNodeGuard {guard: this, _marker: PhantomData}
+        self.num_nodes -= 1;
+        ListNodeGuard { guard: this, _marker: PhantomData }
     }
-    
+
     pub fn iter(&self) -> ListIter<'_, T> {
         if let Some(head) = self.head {
-            ListIter {
-                current: unsafe {Some(&*head)},
-                head: unsafe {Some(&*head)}
+            unsafe {
+                ListIter {
+                    current: Some(&*head.as_ptr()),
+                    head: Some(&*head.as_ptr())
+                }
             }
         }
         else {
@@ -293,71 +276,47 @@ impl<T, A: Allocator<ListNode<T>>> List<T, A> {
     }
 
     pub fn iter_mut(&mut self) -> ListIterMut<'_, T> {
-        if let Some(head) = self.head {
-            ListIterMut {
-                current: Some(head),
-                head: Some(head),
-                _marker: PhantomData
-            }
-        }
-        else {
-            ListIterMut {
-                current: None,
-                head: None,
-                _marker: PhantomData
-            }
+        ListIterMut {
+            current: self.head,
+            head: self.head,
+            _marker: PhantomData
         }
     }
-
 }
-
 
 impl<'a, T> Iterator for ListIter<'a, T> {
     type Item = &'a ListNode<T>;
-    fn next(&mut self) -> Option<Self::Item> {        
-        if self.current.is_some() {
-            let node = self.current;
-            let next = (*self.current.unwrap()).next;
+    fn next(&mut self) -> Option<Self::Item> {
+        let cur = self.current?;
+        let next = unsafe { &*cur.next.as_ptr() };
 
-            // Since it's circular list, we have reached end if we are at head node. So stop iterating.
-            if next.as_ptr() == self.head.unwrap() as *const ListNode<T> as *mut ListNode<T> {
-                self.current = None;
-            }
-            else {
-                self.current = Some(unsafe {&*next.as_ptr()});
-            }
-
-            node 
+        // Pointer comparison — NOT PartialEq on T
+        if core::ptr::eq(next, self.head.unwrap()) {
+            self.current = None;
         }
         else {
-            None
+            self.current = Some(next);
         }
+
+        Some(cur)
     }
 }
 
 impl<'a, T> Iterator for ListIterMut<'a, T> {
     type Item = &'a mut ListNode<T>;
-    fn next(&mut self) -> Option<Self::Item> {        
-        if self.current.is_some() {
-            let node = self.current;
-            let next = unsafe {
-                (*self.current.unwrap()).next
-            };
+    fn next(&mut self) -> Option<Self::Item> {
+        let cur = self.current?;
+        let next = unsafe { (*cur.as_ptr()).next };
 
-            // Since it's circular list, we have reached end if we are at head node. So stop iterating.
-            if next.as_ptr() == self.head.unwrap() as *mut ListNode<T> {
-                self.current = None;
-            }
-            else {
-                self.current = Some(next.as_ptr());
-            }
-
-            unsafe {
-                Some(&mut *node.unwrap())
-            }
+        if Some(next) == self.head {
+            self.current = None;
         }
         else {
-            None
+            self.current = Some(next);
+        }
+
+        unsafe {
+            Some(&mut *cur.as_ptr())
         }
     }
 }
@@ -368,9 +327,6 @@ impl<T: Debug, A: Allocator<ListNode<T>>> Debug for List<T, A> {
         for desc in self.iter() {
             dbg.field("value", &desc.data);
         }
-
-        dbg.finish().unwrap();
-
-        Ok(())
+        dbg.finish()
     }
 }

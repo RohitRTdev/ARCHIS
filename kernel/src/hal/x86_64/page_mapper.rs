@@ -6,7 +6,7 @@ use crate::cpu;
 use crate::{hal::x86_64::features::CPU_FEATURES, mem};
 use crate::hal::{VirtAddr, notify_core};
 use kernel_intf::info;
-use common::{ceil_div, en_flag, PAGE_SIZE};
+use common::{PAGE_SIZE, ceil_div, en_flag, usize_to_ref_mut};
 use super::asm;
 use super::IPIRequestType;
 
@@ -36,7 +36,8 @@ static mut DISABLE_INVALIDATION: bool = true;
 pub struct PageMapper {
     pml4_phys: u64, 
     is_current: bool,
-    proc_id: usize 
+    proc_id: usize,
+    is_allocated: bool
 }
 
 const RECURSIVE_SLOT: u64 = 511;
@@ -66,7 +67,8 @@ impl PageMapper {
         Self {
             pml4_phys: pml4_phys as u64,
             is_current: false,
-            proc_id
+            proc_id,
+            is_allocated: false
         }
     }
 
@@ -75,8 +77,13 @@ impl PageMapper {
         Self {
             pml4_phys: 0,
             is_current: false,
-            proc_id: 0
+            proc_id: 0,
+            is_allocated: false
         }
+    }
+
+    pub fn set_allocated(&mut self) {
+        self.is_allocated = true;
     }
 
     fn set_current(&mut self) {
@@ -90,6 +97,7 @@ impl PageMapper {
     pub fn set_address_space(&mut self) {
         self.is_current = true;
         core::sync::atomic::compiler_fence(Ordering::SeqCst);
+        info!("Setting address space for proc {}", self.proc_id);
         unsafe {
             // Set page table as write through
             asm::write_cr3((self.pml4_phys & PTE::PHY_ADDR_MASK) | PTE::PWT);
@@ -131,7 +139,7 @@ impl PageMapper {
 
         for core in 0..total_cores {
             if core != cur_core {
-                let _ = notify_core(IPIRequestType::TlbInvalidate, core);
+                notify_core(IPIRequestType::TlbInvalidate, core);
             }
         }
     }
@@ -157,7 +165,7 @@ impl PageMapper {
                 let pt = *(pd_addr as *mut u64).add(pd_idx) & PTE::PHY_ADDR_MASK;
                 let pt_addr = mem::map_page_table(pt as usize, self.proc_id).expect("Page table could not be mapped to process address space");
                 
-                &mut *(pt_addr as *mut [u64; 512])
+                usize_to_ref_mut::<[u64; TOTAL_ENTRIES]>(pt_addr)
             }
         }
         else {
@@ -165,6 +173,7 @@ impl PageMapper {
         };
 
         // Unmap this entry
+        assert!(pt[pt_idx] & PTE::P != 0);
         pt[pt_idx] = 0;
 
         self.invalidate_tlb(virt_addr as usize);
@@ -283,6 +292,19 @@ impl PageMapper {
         unsafe { &mut *(vaddr as *mut [u64; 512]) }
     }
 
+    pub fn get_table_mapping(&mut self, virt_addr: u64) -> usize {
+        self.set_current();
+
+        assert!(self.is_current);
+
+        let (pml4_idx, pdpt_idx, pd_idx, pt_idx) = Self::split_indices(virt_addr);
+        let pt = self.get_table_mut(PageLevel::PT, pml4_idx, pdpt_idx, pd_idx, 0);
+
+        let phy_addr = pt[pt_idx] as usize;
+
+        phy_addr
+    }
+
 
     // Allocates 1 page table and returns it's virtual and physical memory
     fn allocate_page_table(&self) -> (usize, usize) {
@@ -316,6 +338,81 @@ impl PageMapper {
         let pd = (virt_addr >> 21) & 0x1ff;
         let pt = (virt_addr >> 12) & 0x1ff;
         (pml4 as usize, pdpt as usize, pd as usize, pt as usize)
+    }
+
+    // We must have been switched out from this address space
+    pub fn destroy_page_tables(&mut self) {
+        self.set_current();
+
+        assert!(self.proc_id != 0, "Attempted to destroy kernel address space!");
+        assert!(!self.is_current, "Address space being destroyed while currently selected!");
+        assert!(self.is_allocated, "destroy_page_table called on destroyed address space!");
+
+        let pml4 = usize_to_ref_mut::<[u64; TOTAL_ENTRIES]>(mem::map_page_table(self.pml4_phys as usize, self.proc_id)
+        .expect("Unable to map pml4 to process address space"));
+        
+        let mut page_tables = 0;
+        info!("Destroying page tables for process {}", self.proc_id);
+        
+        // Go over PML4 entries 
+        let layout = Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap();
+        // Skip the last entry. That is the recursive mapping
+        // It contains the PML4 address itself, which we deallocate at the end
+        for pml4_entry in 0..TOTAL_ENTRIES-1 {
+            if (pml4[pml4_entry] & PTE::P) == 0 {
+                continue;
+            }
+
+            let pdpt_phy = pml4[pml4_entry] & PTE::PHY_ADDR_MASK;
+            let pdpt = usize_to_ref_mut::<[u64; TOTAL_ENTRIES]>(mem::map_page_table(pdpt_phy as usize, self.proc_id)
+            .expect("Unable to map pdpt to process address space"));
+
+            for pdpt_entry in 0..TOTAL_ENTRIES {
+                if (pdpt[pdpt_entry] & PTE::P) == 0 {
+                    continue;
+                }
+
+                let pd_phy = pdpt[pdpt_entry] & PTE::PHY_ADDR_MASK;
+                let pd = usize_to_ref_mut::<[u64; TOTAL_ENTRIES]>(mem::map_page_table(pd_phy as usize, self.proc_id)
+                .expect("Unable to map pd to process address space"));
+
+                for pd_entry in 0..TOTAL_ENTRIES {
+                    if (pd[pd_entry] & PTE::P) == 0 {
+                        continue;
+                    }
+
+                    let pt_phy = pd[pd_entry] & PTE::PHY_ADDR_MASK;
+                    // Deallocate PT
+                    mem::deallocate_memory(pt_phy as *mut u8, layout, 0).expect("Failed to deallocate PT"); 
+                    page_tables += 1;
+                }
+
+                // All entries within this PD have been deallocated. Now, deallocate this PD
+                mem::unmap_page_table(pd.as_ptr().addr(), self.proc_id).expect("Failed to unmap PD from process address space");
+                
+                // Deallocate PD
+                mem::deallocate_memory(pd_phy as *mut u8, layout, 0).expect("Failed to deallocate PD"); 
+                page_tables += 1;
+            }
+            
+            // All entries within this PDPT have been deallocated. Now, deallocate this PDPT
+            mem::unmap_page_table(pdpt.as_ptr().addr(), self.proc_id).expect("Failed to unmap PDPT from process address space");
+            
+            // Deallocate PDPT
+            mem::deallocate_memory(pdpt_phy as *mut u8, layout, 0).expect("Failed to deallocate PDPT"); 
+            page_tables += 1;
+        }
+        
+        // All entries within PML4 have been deallocated.
+        mem::unmap_page_table(pml4.as_ptr().addr(), self.proc_id).expect("Failed to unmap PML4 from process address space");
+        
+        // Deallocate PML4
+        mem::deallocate_memory(self.pml4_phys as *mut u8, layout, 0).expect("Failed to deallocate PML4"); 
+        page_tables += 1;
+
+        self.is_allocated = false;
+    
+        info!("Destroyed {} page tables", page_tables);
     }
 }
 

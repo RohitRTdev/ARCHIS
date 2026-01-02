@@ -187,6 +187,27 @@ fn kern_main() -> ! {
     //    }
     //}).unwrap().wait().unwrap();
 
+    //{
+    //    let old_stack = cpu::Stack::new().expect("Failed to allocate stack");
+    //    let stack_top = old_stack.get_stack_top();
+
+    //    unsafe {*(stack_top as *mut u64) = 24};
+    //    let dat = unsafe {*(stack_top as *mut u64)};
+
+    //    info!("dat read back as {} from stack {:#X}", dat, stack_top);
+    //}
+
+    //let new_stack = cpu::Stack::new().expect("Failed to get stack");
+    //let stack_top = new_stack.get_stack_top();
+
+    //info!("New stack at {:#X}", stack_top);
+    //unsafe {*(stack_top as *mut u64) = 24};
+    //let dat = unsafe {*(stack_top as *mut u64)};
+
+    //info!("new dat read back as {} from stack {:#X}", dat, stack_top);
+
+
+
     {
         sched::create_process(process_spawn).expect("Failed to create second process");
         let spawn_task = sched::create_thread(task_spawn).unwrap();
@@ -245,6 +266,8 @@ static KEYBOARD_EVENT: Once<KSem> = Once::new();
 
 fn key_notifier(_: usize) {
     debug!("Got key notifier..");
+    let avl_memory = mem::get_available_memory();
+    info!("Available memory: {}", avl_memory);
     let task = sched::get_current_task();
     if task.is_none() {
         info!("Called keyboard handler from idle task on core {}", hal::get_core());

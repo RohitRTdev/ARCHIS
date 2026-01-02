@@ -166,6 +166,11 @@ impl VirtMemConBlk {
         }
     }
 
+    // Unlike allocate, reserve virtual space can reserve virtual memory anywhere
+    // In normal allocate, if caller requests kernel memory, then it is allocated from range
+    // KERNEL_HALF_OFFSET..MAX_VIRTUAL_ADDRESS (minus the page table recursive addr range)
+    // Reserve virtual space breaks this structure. This is primarily used to allow caller to reserve identity mapped
+    // regions as kernel memory. As these regions are mostly below the KERNEL_HALF_OFFSET region, this API is required
     fn reserve_virtual_space(&mut self, virt_addr: usize, layout: Layout) -> Result<(), KError> {
         let size = layout.size() + (layout.size() as *const u8).align_offset(PAGE_SIZE);
         
@@ -274,6 +279,7 @@ impl VirtMemConBlk {
         }
         else {
             // In case caller tries to free memory which has not been allocated, then we return here
+            debug!("{:?}", self.alloc_block_list);
             return Err(KError::InvalidArgument);
         } 
 
@@ -427,7 +433,6 @@ impl VirtMemConBlk {
         }
         else {
             // In case caller tries to free memory which has not been allocated, then we return here
-            debug!("{:?}", self.alloc_block_list);
             return Err(KError::InvalidArgument);
         } 
         
@@ -441,30 +446,40 @@ impl VirtMemConBlk {
         // We need to hold the lock here before mapping begins. 
         // No other memory allocations must happen during this time
         let mut addr_space_list = ADDRESS_SPACES.get().unwrap().lock();
+        info!("Cloning kernel virtual address space for process id {}", proc_id);
         
-        let (alloc_list, total_mem, avl_mem) = {
+        let (free_list, alloc_list, total_mem, avl_mem) = {
             let parent_vcb = unsafe {
                 (*parent_vcb.as_ptr()).lock()
             };
 
             assert_eq!(parent_vcb.proc_id, 0, "Only kernel virtual address space can be cloned!");
 
-            let alloc_list = parent_vcb.alloc_block_list.clone()?;
+            let mut free_list = List::new();
+            let mut avl_mem = 0;
+
+            // Any VCB except the kernel virtual address space must carry only user space allocatable blocks
+            parent_vcb.free_block_list.iter().filter(|blk| {
+                blk.start_virt_address <= KERNEL_HALF_OFFSET
+            }).for_each(|blk| {
+                avl_mem += blk.num_pages * PAGE_SIZE;
+                free_list.add_node((&**blk).clone()).expect("Unable to clone free list node to new address space");
+            });
+
+            let alloc_list = parent_vcb.alloc_block_list.clone();
             let total_mem = parent_vcb.total_memory;
-            let avl_mem = parent_vcb.avl_memory;
 
 
-            (alloc_list, total_mem, avl_mem)
+            (free_list, alloc_list, total_mem, avl_mem)
         };
 
-        debug!("Cloning kernel virtual address space for process id {}", proc_id);
         let mut page_mapper = PageMapper::new(false, proc_id);
 
 
         for blk in alloc_list.iter() {
             if blk.is_mapped {
                 // If page mapper fails, kernel panics, right now we don't have a fallback
-                debug!("Mapping memory blk => Virtual={:#X}, physical={:#X}, pages={:#X}, is_mmio={}",
+                info!("Mapping memory blk => Virtual={:#X}, physical={:#X}, pages={:#X}, is_mmio={}",
             blk.start_virt_address, blk.start_phy_address, blk.num_pages, blk.flags & PageDescriptor::MMIO != 0);
 
                 page_mapper.map_memory(blk.start_virt_address, blk.start_phy_address,
@@ -472,11 +487,13 @@ impl VirtMemConBlk {
             }
         }
 
+        page_mapper.set_allocated();
+
         let new_virtual_allocator = Self {
             total_memory: total_mem,
             avl_memory: avl_mem,
-            free_block_list: List::new(),
-            alloc_block_list: alloc_list,
+            free_block_list: free_list,
+            alloc_block_list: List::new(),
             page_mapper,
             proc_id
         };
@@ -487,6 +504,52 @@ impl VirtMemConBlk {
         let new_vcb = NonNull::from(&**addr_space_list.last().unwrap());
         
         Ok(new_vcb)
+    }
+
+    // This address space must not be a part of any core
+    pub unsafe fn destroy_address_space(vcb: VCB) {
+        #[cfg(debug_assertions)]
+        {
+            let total_cores = cpu::get_total_cores();
+            for core in 0..total_cores {
+                let active_vcb = get_active_vcb_for_core(core);
+                debug_assert!(active_vcb != vcb);
+            }
+        }
+
+        {
+            let vcb = {
+                // Remove this vcb from the list of address spaces
+                let mut addr_spaces = ADDRESS_SPACES.get().unwrap().lock();
+
+
+                let mut this_addr_space = None;
+                for addr_space in addr_spaces.iter() {
+                    let this_vcb = NonNull::from(&**addr_space);
+                    if this_vcb == vcb {
+                        this_addr_space = Some(NonNull::from(addr_space));
+                        break;
+                    }
+                }
+                
+                assert!(this_addr_space.is_some());
+
+                unsafe {
+                    addr_spaces.remove_node(this_addr_space.unwrap())
+                }
+            };
+
+            // Release the address space lock before continuing    
+            vcb.lock().page_mapper.destroy_page_tables();
+        }
+    }
+
+    pub fn get_virtual_address_raw(virt_addr: usize) -> usize {
+        let active_vcb = get_active_vcb();
+
+        unsafe {
+            (*active_vcb.as_ptr()).lock().page_mapper.get_table_mapping(virt_addr as u64)
+        }
     }
 }
 
@@ -503,6 +566,17 @@ pub fn get_kernel_addr_space() -> VCB {
 
 fn get_active_vcb() -> NonNull<Spinlock<VirtMemConBlk>> {
     let vcb = PER_CPU_ACTIVE_VCB.local().load(Ordering::Acquire);
+
+    NonNull::new(vcb).unwrap()
+}
+
+fn get_active_vcb_for_core(core: usize) -> NonNull<Spinlock<VirtMemConBlk>> {
+    let total_cores = cpu::get_total_cores();
+    assert!(core < total_cores);
+    
+    let vcb = unsafe {
+        PER_CPU_ACTIVE_VCB.get(core)
+    }.load(Ordering::Acquire);
 
     NonNull::new(vcb).unwrap()
 }
@@ -863,6 +937,8 @@ pub fn virtual_allocator_init() {
     cpu::set_worker_stack_for_boot_cpu(stack_raw);
 
     // Finalize address space creation
+    kernel_addr_space.page_mapper.set_allocated();
+
     ADDRESS_SPACES.call_once(|| {
         let mut l = List::new();
         l.add_node(Spinlock::new(kernel_addr_space)).unwrap();

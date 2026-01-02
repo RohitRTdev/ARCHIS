@@ -21,14 +21,14 @@ pub enum Regions {
 }
 
 const TOTAL_REGIONS: usize = 6;
-const BOOT_REGIONS: [usize; TOTAL_REGIONS] = [10 * PAGE_SIZE, 4 * PAGE_SIZE, PAGE_SIZE, PAGE_SIZE, PAGE_SIZE, PAGE_SIZE];
+pub const BOOT_REGIONS: [usize; TOTAL_REGIONS] = [10 * PAGE_SIZE, 4 * PAGE_SIZE, PAGE_SIZE, PAGE_SIZE, PAGE_SIZE, PAGE_SIZE];
 const TOTAL_BOOT_MEMORY: usize = BOOT_REGIONS[0] + BOOT_REGIONS[1] + BOOT_REGIONS[2] + BOOT_REGIONS[3]
  + BOOT_REGIONS[4] + BOOT_REGIONS[5];
 
 // Here we simply divide given memory into slots each of size 8 bytes
 // 8 is chosen to represent an average DS size
-const MIN_SLOT_SIZE: usize = 8;
-const BITMAP_SIZE: usize = (TOTAL_BOOT_MEMORY / MIN_SLOT_SIZE) >> 3;
+pub const MIN_SLOT_SIZE: usize = 8;
+pub const BITMAP_SIZE: usize = (TOTAL_BOOT_MEMORY / MIN_SLOT_SIZE) >> 3;
 
 // Wrapper required to force alignment constraint
 #[repr(C)]

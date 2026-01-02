@@ -25,7 +25,7 @@ pub fn common_panic_handler(mod_name: &str, info: &PanicInfo) -> ! {
         // Shutdown all the other cores
         for cpu in 0..cpu::get_total_cores() {
             if cpu != core {
-                let _ = notify_core(IPIRequestType::Shutdown, cpu);
+                notify_core(IPIRequestType::Shutdown, cpu);
             }
         }
     }

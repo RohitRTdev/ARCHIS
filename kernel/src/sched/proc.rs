@@ -1,7 +1,6 @@
 use alloc::sync::Arc;
 use alloc::collections::BTreeMap;
 use kernel_intf::KError;
-use crate::hal::disable_interrupts;
 use crate::{ds::*, sched};
 use crate::mem::{self, PoolAllocatorGlobal, VCB, VirtMemConBlk};
 use crate::sched::*;
@@ -109,6 +108,9 @@ impl Process {
 impl Drop for Process {
     fn drop(&mut self) {
         info!("Dropping process {}", self.id);
+        unsafe {
+            VirtMemConBlk::destroy_address_space(self.addr_space);
+        }
     }
 }
 

@@ -99,7 +99,7 @@ impl PhyMemConBlk {
 
         let num_pages = common::ceil_div(layout.size(), PAGE_SIZE);
         let addr = self.find_best_fit(num_pages)?;    
-
+        self.avl_memory -= num_pages * PAGE_SIZE;
         Ok(addr)
     }
 
@@ -172,10 +172,15 @@ impl PhyMemConBlk {
             self.free_block_list.add_node(PageDescriptor { num_pages, start_phy_address: addr, start_virt_address: 0, flags: 0, is_mapped: false })
             .expect("System in bad state. Critical memory failure!");
         }
+
+        self.avl_memory += num_size;
         Ok(())
     }
 }
 
+pub fn get_available_memory() -> usize {
+    PHY_MEM_CB.get().unwrap().lock().avl_memory
+}
 
 pub fn frame_allocator_init() {
     let boot_info = BOOT_INFO.get().unwrap();

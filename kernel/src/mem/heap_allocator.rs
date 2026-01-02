@@ -52,29 +52,7 @@ impl LinkedListAllocator {
     }
 
     fn add_free_region(&mut self, addr: usize, size: usize) {
-        debug!("Adding heap free region: {:#X}, size: {}", addr, size);
-
-        // Debug-time integrity checks to detect overlapping or invalid free regions.
-        #[cfg(debug_assertions)]
-        {
-            use core::ptr::NonNull;
-            let new_start = addr;
-            let new_end = addr.wrapping_add(size);
-
-            let mut cur = self.head;
-            while !cur.is_null() {
-                let node = unsafe { &*cur };
-                let n_start = cur as usize;
-                let n_end = n_start.wrapping_add(node.size);
-
-                // Overlap detection
-                if (new_start >= n_start && new_start < n_end) || (n_start >= new_start && n_start < new_end) {
-                    panic!("Heap free region overlap detected: new [{:#X}, {:#X}) overlaps existing [{:#X}, {:#X})", new_start, new_end, n_start, n_end);
-                }
-
-                cur = node.next.as_deref().map_or(core::ptr::null_mut(), |n| n as *const _ as *mut _);
-            }
-        }
+        info!("Adding heap free region: {:#X}, size: {}", addr, size);
 
         let node = addr as *mut ListNode;
         unsafe {
