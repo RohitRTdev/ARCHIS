@@ -17,6 +17,8 @@ mod sched;
 #[cfg(feature = "acpi")]
 mod acpica;
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use kernel_intf::{info, debug};
 use common::*;
 
@@ -69,7 +71,7 @@ static WAIT_EVENT: Once<KSem> = Once::new();
 fn task_spawn() -> ! {
     let mut tasks: VecDeque<KThread> = VecDeque::new();
     TASK_COUNTER.call_once(|| {
-        KSem::new(-4, 1)
+        KSem::new(0, 5)
     });
 
     WAIT_EVENT.call_once(|| {
@@ -98,7 +100,11 @@ fn task_spawn() -> ! {
     }
 
     info!("Task spawner going to wait!");
-    TASK_COUNTER.get().unwrap().wait().unwrap();
+    
+    for _ in 0..5 {
+        TASK_COUNTER.get().unwrap().wait().unwrap();
+    }
+
     info!("Task spawner starting kill spree");
 
     loop {
@@ -112,8 +118,6 @@ fn task_spawn() -> ! {
             sched::kill_thread(id);
         }
         else {
-            info!("Killing thread 1");
-            sched::kill_thread(1);
             info!("Killing self");
             sched::exit_thread();
             info!("This shouldn't be printed");
@@ -146,7 +150,8 @@ fn process_spawn() -> ! {
                 info!("Process {} waiting for event..", proc_id);
                 KEYBOARD_EVENT.get().unwrap().wait().unwrap();
                 
-                // Test self kill (exit)
+                // Kill process 1 and then kill self
+                sched::kill_process(1);
                 sched::exit_process();
             }
         }).expect("Failed to create process");
@@ -156,7 +161,9 @@ fn process_spawn() -> ! {
     let sem = KSem::new(0, 1);
 
     info!("Init Thread going to wait state");
-    sem.wait().expect("Failed to wait on semaphore");
+    let _ = sem.wait();
+
+    sched::exit_thread();
 
     info!("Should never reach here");
     hal::halt();
@@ -174,69 +181,18 @@ fn kern_main() -> ! {
     install_interrupt_handler(1, key_notifier, true, true);
 
     sched::init();
-    //sched::create_thread(|| {
-    //    loop {
-    //        sched::delay_ms(1000); 
-    //        info!("One second elapsed");
-    //    }
-    //}).unwrap();
-    //sched::create_thread(|| {
-    //    loop {
-    //        sched::delay_ms(5000);
-    //        info!("5 seconds elapsed");
-    //    }
-    //}).unwrap().wait().unwrap();
-
-    //{
-    //    let old_stack = cpu::Stack::new().expect("Failed to allocate stack");
-    //    let stack_top = old_stack.get_stack_top();
-
-    //    unsafe {*(stack_top as *mut u64) = 24};
-    //    let dat = unsafe {*(stack_top as *mut u64)};
-
-    //    info!("dat read back as {} from stack {:#X}", dat, stack_top);
-    //}
-
-    //let new_stack = cpu::Stack::new().expect("Failed to get stack");
-    //let stack_top = new_stack.get_stack_top();
-
-    //info!("New stack at {:#X}", stack_top);
-    //unsafe {*(stack_top as *mut u64) = 24};
-    //let dat = unsafe {*(stack_top as *mut u64)};
-
-    //info!("new dat read back as {} from stack {:#X}", dat, stack_top);
-
-
 
     {
-        sched::create_process(process_spawn).expect("Failed to create second process");
+        sched::create_thread(watchdog).unwrap();
+        let spawn_proc = sched::create_process(process_spawn).expect("Failed to create second process");
+        info!("Main task waiting for process id 1 to complete");
+        spawn_proc.wait().expect("Unable to wait on process id 1");
+        
         let spawn_task = sched::create_thread(task_spawn).unwrap();
 
         info!("Main task waiting for task id 1 to complete");
         spawn_task.wait().expect("Unable to wait on task id 1");
     }
-
-    //sched::create_thread(|| {
-    //    loop {
-    //        info!("Running on core {}", hal::get_core());
-    //        delay_ns(1_000_000_000);
-    //    }
-    //}).unwrap();
-
-    //sched::create_thread(|| {
-    //    let mut counter = 10;
-    //    loop {
-    //        info!("Running on core {}", hal::get_core());
-    //        delay_ns(1_000_000_000);
-
-    //        counter += 1;
-    //        if counter >= 10 {
-    //            let task = sched::get_current_task().unwrap().lock().get_id();
-    //            sched::exit_thread();
-    //        }
-    //    }
-    //}).unwrap();
-
 
     info!("Main task going to sleep");
     hal::sleep();
@@ -281,4 +237,26 @@ fn key_notifier(_: usize) {
     
     KEYBOARD_EVENT.get().unwrap().signal();
     clear_keyboard_output_buffer();
+
+    // Let the watchdog task know that we're active
+    WATCHDOG_MARK.store(true, Ordering::Release);
+}
+
+static WATCHDOG_MARK: AtomicBool = AtomicBool::new(false);
+
+fn watchdog() -> ! {
+    loop {
+        sched::delay_ms(10_000);
+        let is_active = WATCHDOG_MARK.load(Ordering::Acquire);
+        
+        if !is_active {
+            info!("Watchdog task clearing keyboard buffer");
+            clear_keyboard_output_buffer();
+            WATCHDOG_MARK.store(true, Ordering::Release);
+        }
+        else {
+            WATCHDOG_MARK.store(false, Ordering::Release);
+        }
+    }
+
 }

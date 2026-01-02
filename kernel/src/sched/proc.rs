@@ -4,7 +4,7 @@ use kernel_intf::KError;
 use crate::{ds::*, sched};
 use crate::mem::{self, PoolAllocatorGlobal, VCB, VirtMemConBlk};
 use crate::sched::*;
-use crate::sync::Spinlock;
+use crate::sync::{KSem, Spinlock};
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::ptr::NonNull;
 use core::mem::take;
@@ -28,7 +28,8 @@ pub struct Process {
     // When tasks are dropped, the process struct will be automatically dropped
     threads: DynList<usize>,
     addr_space: VCB,
-    status: ProcessStatus
+    status: ProcessStatus,
+    term_notify: KSem
 }
 
 unsafe impl Send for Process {}
@@ -48,7 +49,8 @@ impl Process {
             id,
             threads: List::new(),
             addr_space: new_addr_space,
-            status: ProcessStatus::Ready 
+            status: ProcessStatus::Ready,
+            term_notify: KSem::new(0, 1)
         }), PoolAllocatorGlobal);
         
         info!("Creating new process with id {}", id);
@@ -72,11 +74,7 @@ impl Process {
         self.threads.add_node(thread_id)
     }
 
-    pub fn remove_thread(&mut self, thread_id: usize) {
-        if self.status == ProcessStatus::Terminated {
-            return;
-        }
-
+    pub fn remove_thread(&mut self, thread_id: usize) -> bool {
         let mut killed_thread = None;
         for node in self.threads.iter() {
             if **node == thread_id {
@@ -92,10 +90,21 @@ impl Process {
                 self.threads.remove_node(killed_thread);
             }
         }
+        
+        if self.status == ProcessStatus::Terminated {
+            return self.threads.get_nodes() == 0;
+        }
 
         if self.threads.get_nodes() == 0 {
             self.destroy_process();
+            return true;
         }
+
+        false
+    }
+
+    pub fn get_notify_sem(&self) -> KSem {
+        self.term_notify.clone()
     }
 
     fn destroy_process(&mut self) {
@@ -173,7 +182,7 @@ pub fn kill_process(proc_id: usize) {
 
     disable_preemption();
 
-    // We manually move the list here since we don't want to hold the lock
+    // We clone the list here in order to release the process lock 
     let threads = {
         let mut guard = proc.lock();
         if guard.status != ProcessStatus::Ready {
@@ -181,8 +190,7 @@ pub fn kill_process(proc_id: usize) {
         }
 
         guard.status = ProcessStatus::Terminated;
-
-        take(&mut guard.threads)
+        guard.threads.clone()
     };
 
     kernel_intf::debug!("Killing process {}", proc_id);
@@ -192,6 +200,7 @@ pub fn kill_process(proc_id: usize) {
     let mut is_exit = false; 
 
     // Kill all the tasks within the process
+    // We won't remove the task nodes here, the task will call remove_thread when it's about to be removed from scheduler queue
     for thread_id in threads.iter() {
         // We don't want the current task to kill itself right away
         // This happens if the current process is killing itself (exit)
@@ -223,4 +232,15 @@ pub fn exit_process() -> ! {
     kill_process(proc_id);
 
     panic!("exit_process unreachable reached!!");
+}
+
+impl Spinlock<Process> {
+    pub fn wait(&self) -> Result<(), KError> {
+        let sem = {
+            let task = self.lock();
+            task.term_notify.clone() 
+        };
+
+        sem.wait()
+    }
 }

@@ -128,6 +128,16 @@ impl PageMapper {
         core::sync::atomic::fence(Ordering::SeqCst);
     }
 
+    // This is not a perfect solution. There is a brief period (The time from which these IPIs are sent
+    // and the time they are received by the other cores), where the other cores won't observe the new mapping.
+    // However this only becomes a problem if 2 or more cores are 
+    // a) sharing the same address space
+    // b) actively working with a region of virtual memory whose mapping has been currently changed on one of the cores
+    // Unless we're changing the physical mapping of one of the core regions that are mapped during page map init,
+    // we won't run into situation b
+    // In other cases, two tasks won't be working with same physical memory
+    // The one legitimate case where this is true is for shared memory (shmem). However, we don't have this concept yet in the kernel.
+    // The different cores will require some external synchronization mechanism to make it work. For now, this will do.
     pub fn invalidate_other_cores() {
         core::sync::atomic::fence(Ordering::SeqCst);
         let cur_core = super::get_core();

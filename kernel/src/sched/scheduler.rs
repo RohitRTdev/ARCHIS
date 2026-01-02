@@ -350,7 +350,6 @@ pub fn signal_waiting_task(task_id: usize, wait_semaphore: KSemInnerType) {
                 }
 
                 remove_wait_semaphore(&mut *task, wait_semaphore);
-                info!("Signalling waiting task {}", task.id);
             },
 
             TaskStatus::TERMINATED => {
@@ -418,7 +417,6 @@ pub fn kill_thread(task_id: usize) {
                     }
                 }
 
-                debug!("Killing active task..");
                 assert!(task_l.is_some());
                 let task_node = unsafe {
                     ListNode::into_inner(sched_cb.active_tasks.remove_node(task_l.unwrap()))
@@ -436,8 +434,6 @@ pub fn kill_thread(task_id: usize) {
                     }
                 }
                 
-                debug!("Killing waiting task..");
-
                 if task_l.is_some() {
                     let task_node = unsafe {
                         ListNode::into_inner(sched_cb.waiting_tasks.remove_node(task_l.unwrap()))
@@ -465,21 +461,18 @@ pub fn kill_thread(task_id: usize) {
                 // Stack is guaranteed to be present. Only init task has None value here
                 let stack = take(this_task.lock().stack.as_mut().unwrap());
                 
-                info!("Killing running task");
                 sched_cb.leftover_stack.add_node(stack).expect("Unable to add stack node to leftover_stack list!");
                 sched_cb.flip_flop = true;
                 
                 // Only yield if the current task is killing itself (i.e It's not just that a task from another cpu is killing the 
                 // current running task of this cpu)
                 yield_flag = hal::get_core() == core;
-                if yield_flag {
-                    debug!("Self yielding");
-                }
             },
 
             TaskStatus::TERMINATED => {
-                debug!("Task {} already terminated..", task_id);
+                info!("Task {} already terminated..", task_id);
                 skip_notify = true;
+                yield_flag = hal::get_core() == core;
             }
         }
     }
@@ -543,8 +536,16 @@ fn reap_tasks(sched_cb: &mut TaskQueue) {
 
         // Extract the pointer, release the lock and then call remove_thread
         // Otherwise, we run the risk of deadlock
-        let process_ref = task_inner.lock().process.as_ref().unwrap().clone();
-        process_ref.lock().remove_thread(id);
+        {
+            let process_ref = task_inner.lock().process.as_ref().unwrap().clone();
+            let mut process_guard = process_ref.lock();
+            let is_last_thread_in_proc = process_guard.remove_thread(id);
+            
+            if is_last_thread_in_proc {
+                info!("Adding process {} notifier to notifier list as task {} is terminating", process_guard.get_id(), id);
+                sched_cb.notifier_list.add_node(process_guard.get_notify_sem()).expect("Failed to add process notify semaphore to notifier list!");
+            }
+        }
 
         info!("Removing task {} on core {}", id, hal::get_core());
         unsafe {

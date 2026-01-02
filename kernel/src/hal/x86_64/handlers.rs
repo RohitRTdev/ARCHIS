@@ -1,11 +1,10 @@
-use kernel_intf::{KError, debug, info};
+use kernel_intf::{debug, info};
 use core::sync::atomic::{AtomicUsize, AtomicPtr, Ordering};
 use core::ptr::NonNull;
 use crate::cpu::{self, MAX_CPUS, PerCpu, general_interrupt_handler};
-use crate::hal::{VirtAddr, delay_ns, enable_scheduler_timer, get_core};
+use crate::hal::{enable_scheduler_timer, get_core};
 use crate::infra;
-use crate::sched::{disable_preemption, enable_preemption};
-use crate::sync::{KSem, Spinlock};
+use crate::sync::Spinlock;
 use super::{lapic, timer};
 use crate::mem::on_page_fault;
 use super::lapic::{eoi, get_error};
@@ -159,7 +158,7 @@ pub fn init() {
                     infra::disable_callstack();
                 }
 
-                debug!("{:?}", unsafe {*(fetch_context() as *const CPUContext)});
+                debug!("{:?}", *(fetch_context() as *const CPUContext));
                 if idx == DOUBLE_FAULT_VECTOR {
                     panic!("{} exception!\nPossible stack overflow??", EXCP_STRINGS[idx]);
                 }
@@ -274,51 +273,43 @@ pub fn create_kernel_context(handler: fn() -> !, stack_base: *mut u8) -> *const 
 
 fn ipi_handler(_vector: usize) {
     let core = get_core();
-    info!("Got IPI for core {}", core);
-    let req = {
-        let mut ipi_queue = IPI_REQUESTS.lock();
-        let mut ipi_req = None;
-        
-        // Search the requests list to find the first request aimed at this cpu
-        for req in ipi_queue.iter() {
-            if req.core == core {
-                ipi_req = Some(NonNull::from(req));
+    loop {
+        let req = {
+            let mut ipi_queue = IPI_REQUESTS.lock();
+            let mut found_ptr = None;
+
+            for node in ipi_queue.iter() {
+                if node.core == core {
+                    found_ptr = Some(NonNull::from(node));
+                    break;
+                }
+            }
+
+            found_ptr.map(|ptr| unsafe { ipi_queue.remove_node(ptr) })
+        };
+
+        match req {
+            Some(req_info) => {
+                match req_info.req_type {
+                    IPIRequestType::SchedChange => {
+                        enable_scheduler_timer();
+                        crate::sched::schedule();
+                    },
+                    IPIRequestType::TlbInvalidate => {
+                        // Reload cr3
+                        unsafe {
+                            let cr3 = asm::read_cr3();
+                            asm::write_cr3(cr3);
+                        }
+                    },
+                    IPIRequestType::Shutdown => {
+                        halt();
+                    }
+                }
+            },
+            None => {
                 break;
             }
-        }
-
-        if let Some(req) = ipi_req {
-            unsafe {
-                Some(ipi_queue.remove_node(req))
-            }
-        }
-        else {
-            None
-        }
-    };
-
-    // Release the IPI_REQUESTS lock now so that other cpu's can continue notifying and receiving requests
-
-    if req.is_none() {
-        return;
-    }
-
-    let req_info = req.unwrap();
-    match req_info.req_type {
-        IPIRequestType::SchedChange => {
-            info!("Got sched change request for cpu {}", req_info.core);
-            enable_scheduler_timer();
-            crate::sched::schedule();
-        },
-        IPIRequestType::TlbInvalidate => {
-            // Reload cr3
-            unsafe {
-                let cr3 = asm::read_cr3();
-                asm::write_cr3(cr3);
-            }
-        },
-        IPIRequestType::Shutdown => {
-            halt();
         }
     }
 }
@@ -334,7 +325,6 @@ pub fn notify_core(req_type: IPIRequestType, target_core: usize) {
     };
 
     IPI_REQUESTS.lock().add_node(req).expect("Failed to queue ipi request");
-    debug!("IPI Requests list size={}", IPI_REQUESTS.lock().get_nodes());
 
     lapic::send_ipi(apic_id as u32, IPI_VECTOR as u8);
 }

@@ -35,13 +35,12 @@ impl KSem {
         let mut yield_flag = false;
         {
             let mut inner = self.inner.lock();
-            let count = inner.counter;
             inner.counter -= 1;
             
             let cur_task = sched::get_current_task()
             .expect("wait() called from idle task!!");
             
-            if count <= 0 {
+            if inner.counter < 0 {
                 let inner_wrap = Arc::clone(&self.inner);
 
                 // Block task
@@ -74,13 +73,12 @@ impl KSem {
         let mut yield_flag = false;
         {
             let mut inner = self.inner.lock();
-            let count = inner.counter;
             inner.counter -= 1;
             
             let cur_task = sched::get_current_task()
             .expect("wait() called from idle task!!");
             
-            if count <= 0 {
+            if inner.counter < 0 {
                 let inner_wrap = Arc::clone(&self.inner);
                 
                 // Add kernel timer and add task to wait queue atomically
@@ -114,7 +112,7 @@ impl KSem {
             let mut inner = self.inner.lock();
             inner.counter = inner.max_count.min(inner.counter + 1);
 
-            if inner.counter >= 0 {
+            if inner.counter <= 0 {
                 let wait_count = inner.blocked_list.get_nodes();
                 
                 // Remove head task from blocked list
@@ -153,8 +151,10 @@ impl KSem {
             }
         }
     }
+}
 
-    pub fn clone(&self) -> Self {
+impl Clone for KSem {
+    fn clone(&self) -> Self {
         KSem {
             inner: Arc::clone(&self.inner)
         }

@@ -19,7 +19,6 @@ pub use cpu::*;
 pub use utils::*;
 pub use page_mapper::*;
 pub use handlers::*;
-pub use timer::delay_ns;
 
 const MAX_INTERRUPT_VECTORS: usize = 256;
 
