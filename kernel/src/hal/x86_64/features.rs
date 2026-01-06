@@ -140,12 +140,9 @@ fn check_bit(bit: u32, data: u32) -> bool {
 }
 
 fn cpuid(fn_number: u32, opt_fn_number: u32) -> [u32; 4] {
-    let mut res =  [0; 4];
     unsafe {
-        asm::cpuid(fn_number,  opt_fn_number, res.as_mut_ptr() as *mut u8);
+        asm::cpuid(fn_number,  opt_fn_number)
     }
-
-    res
 }
 
 

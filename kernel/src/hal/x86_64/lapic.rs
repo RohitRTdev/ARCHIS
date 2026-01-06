@@ -4,7 +4,6 @@ use crate::mem::{MapFetchType, PageDescriptor, allocate_memory, get_virtual_addr
 use super::asm::{rdmsr, wrmsr};
 use super::cpu::register_cpu;
 use super::handlers::{SPURIOUS_VECTOR, ERROR_VECTOR, TIMER_VECTOR};
-use kernel_intf::info;
 use common::PAGE_SIZE;
 use core::alloc::Layout;
 

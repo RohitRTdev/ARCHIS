@@ -108,6 +108,7 @@ extern "C" fn create_spinlock(lock: &mut Lock) {
 #[no_mangle]
 extern "C" fn acquire_spinlock(lock: &mut Lock) {
     unsafe {
+        #[cfg(not(test))]
         let stat = hal::disable_interrupts();
         (*ptr_to_ref_mut::<_, hal::Spinlock>(&lock.lock)).lock();
         //let mut count = 0;
@@ -123,7 +124,10 @@ extern "C" fn acquire_spinlock(lock: &mut Lock) {
         //   panic!("Lock acquisition failed on logger lock..."); 
         //}
         
-        lock.int_status = stat;
+        #[cfg(not(test))] 
+        {
+            lock.int_status = stat;
+        }
     }
 }
 
@@ -131,6 +135,7 @@ extern "C" fn acquire_spinlock(lock: &mut Lock) {
 extern "C" fn release_spinlock(lock: &mut Lock) {
     unsafe {
         (*ptr_to_ref_mut::<_, hal::Spinlock>(&lock.lock)).unlock(); 
+        #[cfg(not(test))]
         hal::enable_interrupts(lock.int_status);
     }
 }

@@ -7,7 +7,6 @@ use crate::sched::*;
 use crate::sync::{KSem, Spinlock};
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::ptr::NonNull;
-use core::mem::take;
 use kernel_intf::info;
 
 static PROCESS_ID: AtomicUsize = AtomicUsize::new(0);

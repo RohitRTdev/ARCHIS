@@ -23,24 +23,30 @@ pub use handlers::*;
 const MAX_INTERRUPT_VECTORS: usize = 256;
 
 pub fn disable_interrupts() -> bool {
-    core::sync::atomic::compiler_fence(Ordering::SeqCst);
+    let flags: u64;
+    unsafe {
+        core::arch::asm!(
+            "pushfq",
+            "pop {}",
+            "cli",
+            out(reg) flags
+        );
+    }
 
     // RFLAGS register bit 9 is IF -> 1 is enabled
-    let flag = (unsafe { asm::cli() } & (1 << 9)) != 0;
+    let is_int_enabled = (flags & (1 << 9)) != 0;
     
-    core::sync::atomic::compiler_fence(Ordering::SeqCst);
-
-    flag
+    is_int_enabled
 }
 
 pub fn enable_interrupts(int_status: bool) {
-    core::sync::atomic::compiler_fence(Ordering::SeqCst);
-
     if int_status {
-        unsafe { asm::sti(); }
+        unsafe { 
+            core::arch::asm!(
+                "sti"
+            )
+        }
     }
-
-    core::sync::atomic::compiler_fence(Ordering::SeqCst);
 }
 
 pub use asm::read_port_u8;
@@ -78,16 +84,28 @@ impl Spinlock {
 #[cfg(not(test))]
 #[inline(always)]
 pub fn halt() -> ! {
-    unsafe {
-        asm::halt()
+    loop {
+        unsafe {
+            core::arch::asm!(
+                "cli",
+                "hlt",
+                options(nostack)
+            );
+        }
     }
 }
 
 #[cfg(not(test))]
 #[inline(always)]
 pub fn sleep() -> ! {
-    unsafe {
-        asm::sleep()
+    loop {
+        unsafe {
+            core::arch::asm!(
+                "sti",
+                "hlt",
+                options(nostack)
+            );
+        }
     }
 }
 
@@ -95,31 +113,41 @@ pub fn sleep() -> ! {
 #[inline(always)]
 pub fn yield_cpu() {
     unsafe {
-        asm::fire_yield_interrupt();
+        core::arch::asm!("int 33");
     }
 }
 
 #[cfg(debug_assertions)]
 #[inline(always)]
 pub fn get_current_stack_base() -> usize {
+    let rbp;
     unsafe {
-        asm::fetch_rbp() as usize
+        core::arch::asm!("mov {}, rbp",
+            out(reg) rbp,
+            options(nomem, preserves_flags, nostack));
     }
+
+    rbp
 }
 
 #[cfg(not(debug_assertions))]
 #[inline(always)]
 pub fn get_current_stack_base() -> usize {
     // Cannot rely on rbp for optimized build, since compiler may not even use it for tracking frames
+    let rsp;
     unsafe {
-        asm::fetch_rsp() as usize
+        core::arch::asm!("mov {}, rsp",
+            out(reg) rsp,
+            options(nomem, preserves_flags, nostack));
     }
+
+    rsp
 }
 
 #[inline(always)]
 pub fn fire_debug_interrupt() {
     unsafe {
-        asm::fire_debug_interrupt();
+        core::arch::asm!("int 34");
     }
 }
 

@@ -41,9 +41,7 @@ impl Reg for CR0 {
     }
 
     fn read() -> u64 {
-        unsafe {
-            asm::read_cr0()
-        }
+        asm::read_cr0()
     }
 }
 
@@ -53,9 +51,7 @@ impl Reg for CR4 {
     }
     
     fn read() -> u64 {
-        unsafe {
-            asm::read_cr4()
-        }
+        asm::read_cr4()
     }
 }
 
@@ -65,9 +61,7 @@ impl Reg for RFLAGS {
     }
     
     fn read() -> u64 {
-        unsafe {
-            asm::read_rflags()
-        }
+        asm::read_rflags()
     }
 }
 

@@ -2,11 +2,13 @@ use crate::cpu::{MAX_CPUS, PerCpu};
 use crate::devices::HPET;
 use crate::sched::QUANTUM;
 use super::asm;
+use super::get_core;
 use kernel_intf::info;
 use super::lapic;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 pub static BASE_COUNT: PerCpu<AtomicUsize> = PerCpu::new_with([const {AtomicUsize::new(0)}; MAX_CPUS]);
+static EXPECTED_VISITOR: AtomicUsize = AtomicUsize::new(0);
 
 // Smallest granularity timer
 pub fn delay_ns(value: usize) {
@@ -30,25 +32,27 @@ pub fn delay_ns(value: usize) {
 
 
 pub fn init() {
-    // Now measure APIC timer
-    lapic::init_timer();
+    let core = get_core();
+
+    while EXPECTED_VISITOR.load(Ordering::Relaxed) != core {
+        core::hint::spin_loop();
+    }
 
     // Measure the CPU clock frequency
-    let old = unsafe {
-        asm::rdtsc()
-    };
+    let old = asm::rdtsc();
 
     //Let's wait for 100ms
     delay_ns(100_000_000);
     
-    let new = unsafe {
-        asm::rdtsc()
-    };
+    let new = asm::rdtsc();
 
     let num_ticks_passed = new.wrapping_sub(old);
     let base_freq = num_ticks_passed * 10;
     
     info!("CPU Base Clock frequency measured as {}Hz", base_freq);
+    
+    // Now measure APIC timer
+    lapic::init_timer();
 
     let old = lapic::get_timer_value();
 
@@ -70,4 +74,5 @@ pub fn init() {
     BASE_COUNT.local().store(init_count, Ordering::Relaxed);
     
     lapic::setup_timer();
+    EXPECTED_VISITOR.fetch_add(1, Ordering::Relaxed);
 }

@@ -1,11 +1,10 @@
 use super::asm;
 use kernel_intf::debug;
+use crate::hal;
 
 #[no_mangle]
 pub extern "C" fn read_timestamp() -> usize {
-    unsafe {
-        asm::rdtsc() as usize
-    }
+    asm::rdtsc() as usize
 }
 
 
@@ -58,6 +57,6 @@ pub fn switch_to_new_address_space(pml4_phys: usize, stack_address: usize, kerne
         asm::init_address_space(pml4_phys as u64, stack_address as u64,  kernel_address as u64);
         
         // Shouldn't reach here
-        asm::halt();
+        hal::halt()
     }
 }

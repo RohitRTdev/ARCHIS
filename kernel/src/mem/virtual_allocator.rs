@@ -479,7 +479,7 @@ impl VirtMemConBlk {
         for blk in alloc_list.iter() {
             if blk.is_mapped {
                 // If page mapper fails, kernel panics, right now we don't have a fallback
-                info!("Mapping memory blk => Virtual={:#X}, physical={:#X}, pages={:#X}, is_mmio={}",
+                debug!("Mapping memory blk => Virtual={:#X}, physical={:#X}, pages={:#X}, is_mmio={}",
             blk.start_virt_address, blk.start_phy_address, blk.num_pages, blk.flags & PageDescriptor::MMIO != 0);
 
                 page_mapper.map_memory(blk.start_virt_address, blk.start_phy_address,
@@ -1017,7 +1017,7 @@ pub fn virtual_allocator_test() {
     allocator.free_block_list.iter().zip(nodes).for_each(|(blk, address)| {
         assert_eq!(blk.start_virt_address, address);
     });
-
+    
     allocator.deallocate(ptr, layout).unwrap();
     assert_eq!(allocator.free_block_list.get_nodes(), 3);
     let nodes = [KERNEL_HALF_OFFSET + 24 * PAGE_SIZE, common::PAGE_SIZE, KERNEL_HALF_OFFSET + 4 * PAGE_SIZE];

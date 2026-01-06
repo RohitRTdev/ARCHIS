@@ -4,7 +4,7 @@ use core::mem::{size_of, align_of};
 use common::{align_up, PAGE_SIZE};
 use crate::mem::{allocate_memory, PageDescriptor};
 use crate::sync::Spinlock;
-use kernel_intf::{info, debug};
+use kernel_intf::info;
 
 pub struct ListNode {
     size: usize,

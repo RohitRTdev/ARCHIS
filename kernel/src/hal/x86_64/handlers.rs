@@ -3,7 +3,7 @@ use core::sync::atomic::{AtomicUsize, AtomicPtr, Ordering};
 use core::ptr::NonNull;
 use crate::cpu::{self, MAX_CPUS, PerCpu, general_interrupt_handler};
 use crate::hal::{enable_scheduler_timer, get_core};
-use crate::infra;
+use crate::{infra, key_notifier};
 use crate::sync::Spinlock;
 use super::{lapic, timer};
 use crate::mem::on_page_fault;
@@ -227,9 +227,7 @@ fn error_handler(_vector: usize) {
 }
 
 fn page_fault_handler(_vector: usize) {
-    let fault_address = unsafe {
-        asm::read_cr2()
-    };
+    let fault_address = asm::read_cr2();
     
     info!("{:?}", unsafe {*(fetch_context() as *const CPUContext)});
 
