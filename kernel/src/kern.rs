@@ -198,6 +198,7 @@ fn kern_main() -> ! {
     hal::sleep();
 }
 
+// This will be called from the entry point for the corresponding arch
 #[no_mangle]
 unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
     disable_interrupts();
@@ -212,7 +213,7 @@ unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
     devices::init();
     cpu::init();
     module::early_init();
-
+    
     debug!("{:?}", *BOOT_INFO.get().unwrap());
 
     hal::init();

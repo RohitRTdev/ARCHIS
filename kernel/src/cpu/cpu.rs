@@ -30,17 +30,18 @@ static KERN_BACKUP_STACK: KStackGood = KStackGood {
     stack: [0; PAGE_SIZE]
 };
 
-#[cfg(debug_assertions)]
-static KERN_STACK: KStack = KStack {
-    stack: [0; TOTAL_STACK_SIZE]
-};
-
 pub struct Stack {
     guard_size: usize,
     stack_size: usize,
     base: NonNull<u8>,
     allocated: bool
 }
+
+extern "C" {
+    static kernel_stack: u8;
+    static kernel_stack_top: u8;
+}
+
 
 impl Stack {
     const fn create() -> Self {
@@ -191,17 +192,24 @@ pub fn register_cpu() -> usize {
 
     let cb = if cpu_id == 0 {
         
-        // This is prematurely created just to take care of early panic management
+        // We will be using this stack set up from the assembly stub till we switch address spaces
+        let boot_stack = unsafe {
+            &kernel_stack as *const u8 as *mut u8
+        };
+
+        let boot_stack_top = unsafe {
+            &kernel_stack_top as *const u8 as usize
+        };
+
         let stack = Stack {
-            stack_size: INIT_STACK_SIZE,
-            guard_size: INIT_GUARD_PAGE_SIZE,
-            base: NonNull::new(align_up(hal::get_current_stack_base(), PAGE_SIZE) as *mut u8).unwrap(),
+            stack_size: PAGE_SIZE * 5,
+            guard_size: 0,
+            base: NonNull::new(boot_stack).unwrap(),
             allocated: false
         };
  
         CPUControlBlock {
             id: cpu_id,
-            // We will not make use of this at this stage. This value is given just to initialize it
             worker_stack: stack, 
             good_stack: Stack {
                 stack_size: PAGE_SIZE,
@@ -209,7 +217,7 @@ pub fn register_cpu() -> usize {
                 base: NonNull::new(KERN_BACKUP_STACK.stack.as_ptr() as *mut u8).unwrap(),
                 allocated: true
             },
-            panic_base: hal::get_current_stack_base()
+            panic_base: boot_stack_top
         }
     } else {
         // Allocate worker stack for the CPU

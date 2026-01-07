@@ -1,5 +1,5 @@
 OUTPUT_FORMAT("elf64-x86-64")
-ENTRY(kern_start)
+ENTRY(kern_start_asm)
 
 SECTIONS {
     .text ALIGN(0x1000): {

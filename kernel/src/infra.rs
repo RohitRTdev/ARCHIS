@@ -28,6 +28,7 @@ pub fn common_panic_handler(mod_name: &str, info: &PanicInfo) -> ! {
                 notify_core(IPIRequestType::Shutdown, cpu);
             }
         }
+        
     }
     
     logger::set_panic_mode();
