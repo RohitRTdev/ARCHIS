@@ -2,6 +2,7 @@ use alloc::sync::Arc;
 use alloc::collections::BTreeMap;
 use kernel_intf::KError;
 use crate::{ds::*, sched};
+use crate::hal;
 use crate::mem::{self, PoolAllocatorGlobal, VCB, VirtMemConBlk};
 use crate::sched::*;
 use crate::sync::{KSem, Spinlock};
@@ -225,12 +226,19 @@ pub fn kill_process(proc_id: usize) {
     }
 }
 
+/* Important to ensure that no locks are held or that preemption is not disabled during this call */
 pub fn exit_process() -> ! {
+    assert!(super::is_preemption_enabled());
     let proc_id = get_current_process_id().expect("Attempted to kill idle process!!");
 
     kill_process(proc_id);
 
-    panic!("exit_process unreachable reached!!");
+    // We could land here. Suppose two thread of a process call exit_process.
+    // Only one of them succeeds in acquiring lock and setting status to terminate.
+    // At this point, the other thread, would simply return from kill_process.
+    // So we wait here. This is the right thing to do, as this thread would just get killed
+
+    hal::sleep();
 }
 
 impl Spinlock<Process> {

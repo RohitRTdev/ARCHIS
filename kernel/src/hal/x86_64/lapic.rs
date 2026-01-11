@@ -132,7 +132,7 @@ pub fn init() {
 
         // Map the APIC register space
         // Here, we're making the assumption that every AP will have the same APIC_BASE_ADDRESS as BSP
-        if is_bsp {
+        if is_bsp && unsafe {!X2APIC_ENABLED} {
             let base = allocate_memory(Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap(), 
             PageDescriptor::VIRTUAL | PageDescriptor::NO_ALLOC)
             .expect("Virtual memory allocation failed for APIC register space");
@@ -153,14 +153,14 @@ pub fn init() {
     // Mask THERMAL, PERF, LINT0/1 LVT entries
     for &addr in &[THERMAL_LVT, PERF_CNTR_LVT, LINT0_LVT, LINT1_LVT] {
         let lvt = lapic_read(addr);
-        lapic_write(addr, lvt | (1 << 16));
+        lapic_write(addr, (lvt | (1 << 16)) & 0xffffffff);
     }
 
     // Setup the error table vector entry
     lapic_write(ERROR_LVT, (ERROR_VECTOR & 0xff) as u64);
 
     // Setup spurious vector entry
-    lapic_write(SPURIOUS_ENTRY_OFFSET, (0x3 << 8) | (SPURIOUS_VECTOR & 0xff) as u64);
+    lapic_write(SPURIOUS_ENTRY_OFFSET, (1 << 8) | (SPURIOUS_VECTOR & 0xff) as u64);
 
     if is_bsp {
         register_cpu(get_lapic_id(), 0);

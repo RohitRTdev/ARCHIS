@@ -236,6 +236,8 @@ impl VirtMemConBlk {
             return Err(KError::InvalidArgument);
         }
 
+        assert!(!(self.proc_id == 0 && is_user), "Kernel virtual address space must not allocate user blocks!");
+
         let num_pages = ceil_div(layout.size(), PAGE_SIZE);
         let virt_addr = self.find_best_fit(num_pages, is_user)?;    
         self.avl_memory -= num_pages * PAGE_SIZE;
@@ -338,14 +340,16 @@ impl VirtMemConBlk {
     // and then map the new physical address 
     fn map_memory(&mut self, phys_addr: usize, virt_addr: usize, size: usize, flags: u8) -> Result<(), KError> {
         let size = size + (size as *const u8).align_offset(PAGE_SIZE);
-    
+        let is_user = (flags & PageDescriptor::USER) != 0;
         if phys_addr & (PAGE_SIZE - 1) != 0 || virt_addr & (PAGE_SIZE - 1) != 0 {
             return Err(KError::InvalidArgument);
         }
+        
+        assert!(!(self.proc_id == 0 && is_user), "Kernel virtual address space must not map user blocks!");
 
         // Only kernel virtual address space handles any allocations made to kernel memory
         // Other address spaces simply need to allocate it within their page tables
-        if self.proc_id != 0 && (flags & PageDescriptor::USER == 0) {
+        if self.proc_id != 0 && !is_user {
             self.page_mapper.map_memory(virt_addr, phys_addr, size, flags);
             return Ok(())
         }
@@ -460,7 +464,7 @@ impl VirtMemConBlk {
 
             // Any VCB except the kernel virtual address space must carry only user space allocatable blocks
             parent_vcb.free_block_list.iter().filter(|blk| {
-                blk.start_virt_address <= KERNEL_HALF_OFFSET
+                blk.start_virt_address < KERNEL_HALF_OFFSET
             }).for_each(|blk| {
                 avl_mem += blk.num_pages * PAGE_SIZE;
                 free_list.add_node((&**blk).clone()).expect("Unable to clone free list node to new address space");
@@ -520,23 +524,12 @@ impl VirtMemConBlk {
         {
             let vcb = {
                 // Remove this vcb from the list of address spaces
+                
                 let mut addr_spaces = ADDRESS_SPACES.get().unwrap().lock();
 
-
-                let mut this_addr_space = None;
-                for addr_space in addr_spaces.iter() {
-                    let this_vcb = NonNull::from(&**addr_space);
-                    if this_vcb == vcb {
-                        this_addr_space = Some(NonNull::from(addr_space));
-                        break;
-                    }
-                }
-                
-                assert!(this_addr_space.is_some());
-
-                unsafe {
-                    addr_spaces.remove_node(this_addr_space.unwrap())
-                }
+                addr_spaces.find_and_remove(|this_vcb| {
+                    NonNull::from(this_vcb) == vcb
+                }).expect("Critical error: Address space could not be found in ADDRESS_SPACES list!")
             };
 
             // Release the address space lock before continuing    

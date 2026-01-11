@@ -182,6 +182,10 @@ pub fn yield_cpu() {
     hal::yield_cpu();
 }
 
+pub fn is_preemption_enabled() -> bool {
+    SCHEDULER_CON_BLK.local().lock().preemption_count == 0
+}
+
 pub fn init() {
     let init_task = Task::new(false, 0)
     .expect("Init task creation failed!!");
@@ -382,6 +386,7 @@ pub fn kill_thread(task_id: usize) {
     let mut yield_flag = false;
     let mut drop_task  = false;
     let mut skip_notify  = false;
+    
     let this_task = get_task_info(task_id);
 
     if this_task.is_none() {
@@ -510,12 +515,17 @@ pub fn kill_thread(task_id: usize) {
     // The current running task is killed, yield remaining context
     if yield_flag {
         info!("Yielding task {}", task_id);
+        // This is case where task/thread is killing itself. It is important for caller
+        // to ensure that preemption is not disabled (only in this case). Otherwise this thread would just keep running
+        // If it is called from exit_thread, then this will result in panic
         yield_cpu();
     }
 }
 
 pub fn exit_thread() -> ! {
     let thread_id = get_current_task_id().expect("Attempted to kill idle task!!");
+
+    assert!(is_preemption_enabled(), "exit_thread() called with preemption disabled!");
 
     kill_thread(thread_id);
 

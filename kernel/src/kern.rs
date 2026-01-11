@@ -157,15 +157,18 @@ fn process_spawn() -> ! {
         }).expect("Failed to create process");
     }
 
-    // This pattern should be never followed in a real scenario, but this is just here for testing
+    // This pattern should be never followed in a real scenario, but this is here just for testing
     let sem = KSem::new(0, 1);
 
     info!("Init Thread going to wait state");
     let _ = sem.wait();
 
+    // This is here incase this process is killed before it gets a chance to wait forever
     sched::exit_thread();
 
     info!("Should never reach here");
+    
+    // Just to appease the type system
     hal::halt();
 }
 
@@ -182,6 +185,7 @@ fn kern_main() -> ! {
 
     sched::init();
 
+    // Some tests just to test out process and thread subsystem
     {
         sched::create_thread(watchdog).unwrap();
         let spawn_proc = sched::create_process(process_spawn).expect("Failed to create second process");
@@ -199,6 +203,7 @@ fn kern_main() -> ! {
 }
 
 // This will be called from the entry point for the corresponding arch
+// For now, we support only x86_64, so the entry point is at kernel/src/hal/x86_64/asm/kernel_entry_stub.S
 #[no_mangle]
 unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
     disable_interrupts();

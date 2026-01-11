@@ -258,6 +258,26 @@ impl<T, A: Allocator<ListNode<T>>> List<T, A> {
         ListNodeGuard { guard: this, _marker: PhantomData }
     }
 
+    pub fn find_and_remove<F: Fn(&T) -> bool>(&mut self, predicate: F) -> Option<ListNodeGuard<T, A>> {
+        let mut item = None;
+
+        for node in self.iter() {
+            if predicate(node) {
+                item = Some(NonNull::from(node));
+                break;
+            }
+        }
+
+        if item.is_some() {
+            unsafe {
+                Some(self.remove_node(item.unwrap()))
+            }
+        }
+        else {
+            None
+        }
+    }
+
     pub fn iter(&self) -> ListIter<'_, T> {
         if let Some(head) = self.head {
             unsafe {
