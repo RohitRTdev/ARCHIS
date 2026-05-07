@@ -87,9 +87,7 @@ impl PageMapper {
     }
 
     fn set_current(&mut self) {
-        let pml4 = unsafe {
-            asm::read_cr3() & PTE::PHY_ADDR_MASK
-        };
+        let pml4 = asm::read_cr3() & PTE::PHY_ADDR_MASK;
 
         self.is_current = pml4 == self.pml4_phys;
     }
@@ -97,7 +95,6 @@ impl PageMapper {
     pub fn set_address_space(&mut self) {
         self.is_current = true;
         core::sync::atomic::compiler_fence(Ordering::SeqCst);
-        info!("Setting address space for proc {}", self.proc_id);
         unsafe {
             // Set page table as write through
             asm::write_cr3((self.pml4_phys & PTE::PHY_ADDR_MASK) | PTE::PWT);

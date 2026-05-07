@@ -154,7 +154,7 @@ fn process_spawn() -> ! {
                 sched::kill_process(1);
                 sched::exit_process();
             }
-        }).expect("Failed to create process");
+        }, false).expect("Failed to create process");
     }
 
     // This pattern should be never followed in a real scenario, but this is here just for testing
@@ -187,18 +187,36 @@ fn kern_main() -> ! {
 
     // Some tests just to test out process and thread subsystem
     {
-        sched::create_thread(watchdog).unwrap();
-        let spawn_proc = sched::create_process(process_spawn).expect("Failed to create second process");
-        info!("Main task waiting for process id 1 to complete");
-        spawn_proc.wait().expect("Unable to wait on process id 1");
-        
-        let spawn_task = sched::create_thread(task_spawn).unwrap();
+    //    let spawn_proc = sched::create_process(process_spawn, false).expect("Failed to create second process");
+    //    info!("Main task waiting for process id 1 to complete");
+    //    spawn_proc.wait().expect("Unable to wait on process id 1");
+    //    
+    //    let spawn_task = sched::create_thread(task_spawn).unwrap();
 
-        info!("Main task waiting for task id 1 to complete");
-        spawn_task.wait().expect("Unable to wait on task id 1");
+    //    info!("Main task waiting for task id 1 to complete");
+    //    spawn_task.wait().expect("Unable to wait on task id 1");
     }
 
-    info!("Main task going to sleep");
+    {
+        let user_proc0 = sched::create_process(|| -> ! {loop{}}, true)
+        .expect("Failed to create user process 0");
+        
+        //let user_proc1 = sched::create_process(|| -> ! {loop{}}, true)
+        //.expect("Failed to create user process 1");
+
+        sched::create_thread(watchdog).unwrap();
+
+        info!("Main task waiting for user process to complete");
+        user_proc0.wait().expect("Unable to wait on user process");
+    }
+
+    info!("Main task looping");
+
+    loop {
+        sched::delay_ms(1000);
+        info!("Main task running...");
+    }
+
     hal::sleep();
 }
 
@@ -206,7 +224,6 @@ fn kern_main() -> ! {
 // For now, we support only x86_64, so the entry point is at kernel/src/hal/x86_64/asm/kernel_entry_stub.S
 #[no_mangle]
 unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
-    disable_interrupts();
     BOOT_INFO.call_once(|| {
         *boot_info
     });   
@@ -227,7 +244,8 @@ unsafe extern "C" fn kern_start(boot_info: *const BootInfo) -> ! {
 static KEYBOARD_EVENT: Once<KSem> = Once::new();
 
 fn key_notifier(_: usize) {
-    debug!("Got key notifier..");
+    let stack_base = hal::get_current_stack_base();
+    info!("Interrupt stack base = {:#X}", stack_base);
     let avl_memory = mem::get_available_memory();
     info!("Available memory: {}", avl_memory);
     let task = sched::get_current_task();
@@ -238,7 +256,7 @@ fn key_notifier(_: usize) {
         let task = task.unwrap();
         let id = task.lock().get_id();
         let status = task.lock().get_status();
-        info!("Called keyboard handler in task:{} with status: {:?} on core {}", id, status, hal::get_core());
+        info!("Called keyboard handler in task:{} with status: {:?}", id, status);
     }
     
     KEYBOARD_EVENT.get().unwrap().signal();

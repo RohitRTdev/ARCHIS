@@ -1,8 +1,8 @@
 use alloc::sync::Arc;
 use common::PAGE_SIZE;
-use crate::cpu::{MAX_CPUS, PerCpu, Stack, get_panic_base, set_panic_base, get_total_cores, get_worker_stack};
-use crate::hal::{self, IPIRequestType, create_kernel_context, disable_scheduler_timer, enable_scheduler_timer, fetch_context, switch_context};
-use crate::mem::{PoolAllocatorGlobal, VCB, VirtMemConBlk, get_kernel_addr_space, set_address_space};
+use crate::cpu::{self, MAX_CPUS, PerCpu, Stack, get_panic_base, get_total_cores, get_worker_stack, set_panic_base};
+use crate::hal::{self, IPIRequestType, create_kernel_context, disable_scheduler_timer, enable_scheduler_timer, fetch_context, get_per_cpu_base, get_per_cpu_data, get_per_cpu_kernel_base, set_per_cpu_base, set_per_cpu_data, switch_context};
+use crate::mem::{PoolAllocatorGlobal, VCB, get_kernel_addr_space, set_address_space};
 use crate::{ds::*, sched};
 use crate::sync::{KSem, KSemInnerType, Spinlock};
 use super::{KProcess, ProcessStatus, get_current_process, get_process_info, KTimerInnerType};
@@ -11,6 +11,9 @@ use core::ptr::NonNull;
 use core::mem::take;
 use alloc::collections::BTreeMap;
 use kernel_intf::{KError, debug, info};
+
+#[cfg(target_arch = "x86_64")]
+use crate::hal::{get_per_cpu_kernel_base_for_core, set_tss_stack};
 
 // This is in milliseconds
 pub const QUANTUM: usize = 10;
@@ -36,20 +39,24 @@ pub enum TaskStatus {
 
 pub struct Task {
     id: usize,
+    is_kernel_mode: bool,
     core: usize,
     stack: Option<Stack>,
     status: TaskStatus,
     context: *const u8,
     quanta: usize,
     panic_base: usize,
+    user_fn: Option<fn() -> !>,
     wait_semaphores: DynList<KSemInnerType>,
     term_notify: KSem,
     process: Option<KProcess>,
-    vcb: Option<VCB>
+    vcb: Option<VCB>,
+#[cfg(target_arch="x86_64")]
+    per_cpu_base: u64
 }
 
 impl Task {
-    fn new(alloc_stack: bool, core: usize) -> Result<KThread, KError> {
+    fn new(alloc_stack: bool, core: usize, user_fn: Option<fn() -> !>) -> Result<KThread, KError> {
         let stack  = if alloc_stack {
             Some(Stack::new()?)
         } else {
@@ -66,16 +73,20 @@ impl Task {
 
         let task = Arc::new_in(Spinlock::new(Task {
             id,
+            is_kernel_mode: true,
             core, 
             stack,
             status: TaskStatus::ACTIVE,
             context: core::ptr::null(),
             quanta: INIT_QUANTA,
             panic_base: 0,
+            user_fn,
             wait_semaphores: List::new(),
             term_notify: KSem::new(0, 1),
             process: None,
-            vcb: None
+            vcb: None,
+            #[cfg(target_arch = "x86_64")]
+            per_cpu_base: get_per_cpu_kernel_base_for_core(core)
         }), PoolAllocatorGlobal);
 
         Ok(task)
@@ -84,13 +95,21 @@ impl Task {
     pub fn get_id(&self) -> usize {
         self.id
     }
-    
+
+    pub fn is_user_thread(&self) -> bool {
+        self.user_fn.is_some()
+    }
+
     pub fn get_status(&self) -> TaskStatus {
         self.status
     }
     
     pub fn get_core(&self) -> usize {
         self.core
+    }
+
+    pub fn get_stack(&self) -> Option<usize> {
+        Some(self.stack.as_ref()?.get_stack_base())
     }
 
     pub fn get_process(&self) -> Option<KProcess> {
@@ -160,13 +179,15 @@ pub fn get_task_info(task_id: usize) -> Option<KThread> {
 // Be careful while calling these functions as they increment the strong count
 // Once done with retreiving the info you want, it's important that you drop them
 pub fn get_current_task() -> Option<KThread> {
-    let cb = SCHEDULER_CON_BLK.local().lock().running_task;
-    if cb.is_none() {
+    let cur_task_ptr = unsafe {
+        get_per_cpu_data::<24>()
+    };
+
+    if cur_task_ptr == 0 {
         return None;
     }
-    
-    
-    Some(Arc::clone(unsafe { &**cb.unwrap().as_ptr() }))
+
+    Some(Arc::clone(unsafe { &*(cur_task_ptr as *const KThread) }))
 }
 
 // Use this, if you just want the id
@@ -187,7 +208,7 @@ pub fn is_preemption_enabled() -> bool {
 }
 
 pub fn init() {
-    let init_task = Task::new(false, 0)
+    let init_task = Task::new(false, 0, None)
     .expect("Init task creation failed!!");
     
     let init_proc = get_process_info(0).expect("Unable to locate init process!");
@@ -209,6 +230,8 @@ pub fn init() {
             let guard = sched_cb.active_tasks.remove_node(task);
             sched_cb.running_task = Some(ListNode::into_inner(guard));
         }
+    
+        setup_current_task_ptr(&mut sched_cb);
     }
 
     // Now init idle task stack for all cpus
@@ -220,14 +243,17 @@ pub fn init() {
 
         // We need to create separate stack for idle task on cpu 0, since the current stack is used by init task
         if core == 0 {
-            let stack = Stack::into_inner(&mut Stack::new_with(5 * PAGE_SIZE, PAGE_SIZE).expect("Could not create worker stack for cpu 0"));
-            sched_cb.idle_task_stack = stack; 
+            let stack = Stack::into_inner(&mut Stack::new_with(cpu::WORKER_STACK_SIZE, PAGE_SIZE, false).expect("Could not create worker stack for cpu 0"));
+            sched_cb.idle_task_stack = stack;
+
+            debug!("Created idle stack for cpu-0 with address:{:#X}", stack.as_ptr().addr()); 
         }
         else {
             sched_cb.idle_task_stack = NonNull::new(stack_base as *mut u8).unwrap();
         }
     }
-    
+
+
     info!("Created init task 0");
     enable_scheduler_timer();
 }
@@ -554,6 +580,7 @@ fn reap_tasks(sched_cb: &mut TaskQueue) {
             if is_last_thread_in_proc {
                 info!("Adding process {} notifier to notifier list as task {} is terminating", process_guard.get_id(), id);
                 sched_cb.notifier_list.add_node(process_guard.get_notify_sem()).expect("Failed to add process notify semaphore to notifier list!");
+                sched_cb.notifier_list.add_node(process_guard.get_init_sem()).expect("Failed to add process init semaphore to notifier list!");
             }
         }
 
@@ -639,6 +666,48 @@ fn switch_address_space_from_idle(new_vcb: VCB) {
     switch_address_space(old_vcb, new_vcb);
 }
 
+pub fn toggle_cur_task_kernel_mode() {
+    let task = get_current_task()
+    .expect("toggle_cur_task_to_kernel_mode() called from idle task!");
+    
+    let mut guard = task.lock();
+    guard.is_kernel_mode = !guard.is_kernel_mode;
+}
+
+fn setup_current_task_ptr(sched_cb: &mut TaskQueue) {
+    let cur_task_ptr = if sched_cb.running_task.is_some() {
+        unsafe {
+            let kthread = &(**sched_cb.running_task.as_ref().unwrap().as_ptr()) as *const KThread;
+            
+            {
+                let guard = (*kthread).lock();  
+                let stack_addr = if let Some(cur_stack_address) = &guard.stack {
+                    cur_stack_address.get_stack_base()
+                }
+                else {
+                    0
+                };
+
+                set_per_cpu_data::<16>(stack_addr as u64);
+                
+                // We're switching to a user thread. Setup the kernel stack
+                if guard.is_user_thread() {
+                    #[cfg(target_arch = "x86_64")]
+                    set_tss_stack(stack_addr as u64);
+                }
+            }
+            
+            kthread as u64
+        }
+    } 
+    else {
+        0
+    };
+
+    unsafe {
+        set_per_cpu_data::<24>(cur_task_ptr); 
+    }
+}
 
 // Main scheduler loop
 pub fn schedule() {
@@ -682,6 +751,12 @@ pub fn schedule() {
 
                     let prev_context = fetch_context();
                     task_info.context = prev_context;
+
+                    #[cfg(target_arch = "x86_64")] 
+                    {
+                        task_info.per_cpu_base = get_per_cpu_base();
+                    }
+
                     if task_info.status == TaskStatus::RUNNING {
                         task_info.status = TaskStatus::ACTIVE; 
                     }
@@ -706,11 +781,19 @@ pub fn schedule() {
                     switch_address_space(old_vcb, new_vcb);
                     set_panic_base(head_task_info.panic_base);
                     switch_context(new_context);
+
+                    #[cfg(target_arch = "x86_64")]
+                    set_per_cpu_base(head_task_info.per_cpu_base);
                 }
                 else {
                     if task_info.status != TaskStatus::RUNNING {
                         let prev_context = fetch_context();
                         task_info.context = prev_context;
+                        
+                        #[cfg(target_arch = "x86_64")] 
+                        {
+                            task_info.per_cpu_base = get_per_cpu_base();
+                        }
 
                         if task_info.status == TaskStatus::WAITING {
                             sched_cb.waiting_tasks.insert_node_at_tail(current_task);
@@ -756,6 +839,9 @@ pub fn schedule() {
                 switch_address_space_from_idle(new_vcb);
                 set_panic_base(head_task_info.panic_base);
                 switch_context(new_context);
+                
+                #[cfg(target_arch = "x86_64")]
+                set_per_cpu_base(head_task_info.per_cpu_base);
             }
             else {
                 // If stack deletions / timers are pending, don't go into idle task yet
@@ -765,6 +851,8 @@ pub fn schedule() {
                 }
             }
         }
+
+        setup_current_task_ptr(&mut sched_cb);
 
         // We do the flip flop technique since we are still using the same terminated task stack at this point
         // But we won't be using it from the next schedule on
@@ -789,6 +877,9 @@ fn prep_idle_task(sched_cb: &mut TaskQueue, old_vcb: VCB) {
     switch_address_space_for_idle(old_vcb);
     set_panic_base(sched_cb.idle_task_stack.as_ptr() as usize);
     switch_context(context);
+
+    #[cfg(target_arch = "x86_64")]
+    set_per_cpu_base(get_per_cpu_kernel_base());
     
     if can_sleep(sched_cb) {
         disable_scheduler_timer(); 
@@ -809,10 +900,10 @@ fn notify_other_cpu(target_core: usize) {
     hal::notify_core(IPIRequestType::SchedChange, target_core);
 }
 
-fn create_thread_common(handler: fn() -> !) -> Result<(KThread, usize), KError> {
+fn create_thread_common(handler: fn() -> !, user_function: Option<fn() -> !>) -> Result<(KThread, usize), KError> {
     // We will use simple round robin to determine the cpu which gets this task
     let core = TASK_CPU.fetch_add(1, Ordering::Relaxed) as usize % get_total_cores();   
-    let task = Task::new(true, core)?;
+    let task = Task::new(true, core, user_function)?;
     
     {
         let mut task = task.lock();
@@ -829,9 +920,17 @@ fn create_thread_common(handler: fn() -> !) -> Result<(KThread, usize), KError> 
 
 // Internal API: Do not call this
 pub fn create_init_thread(handler: fn() -> !, process: KProcess) -> Result<KThread, KError> {
-    let (thread, core) = create_thread_common(handler)?;
-    let thread_id = thread.lock().get_id();
+    let is_user_thread = process.lock().get_user_flag();
     let proc_id = process.lock().get_id();
+
+    let (thread, core) = if is_user_thread {
+        create_thread_common(super::user::user_init_handler, Some(handler))?
+    }
+    else {
+        create_thread_common(handler, None)?
+    };
+
+    let thread_id = thread.lock().get_id();
     let proc_addr_space = process.lock().get_vcb();
     debug!("Created init thread {} on process {} on core {}", thread_id, proc_id, core);
     
@@ -862,10 +961,9 @@ pub fn start_task(thread: &KThread, core: usize, process: &KProcess, registry: &
     Ok(())
 }
 
-// Must be called from valid process context 
-pub fn create_thread(handler: fn() -> !) -> Result<KThread, KError> {
+pub fn create_thread_do_work(handler: fn() -> !, user_fn: Option<fn() -> !>) -> Result<KThread, KError> {
     disable_preemption();
-    let (thread, core) = create_thread_common(handler)?;
+    let (thread, core) = create_thread_common(handler, user_fn)?;
     let thread_id = thread.lock().get_id();
     let cur_process = get_current_process();
 
@@ -878,6 +976,9 @@ pub fn create_thread(handler: fn() -> !) -> Result<KThread, KError> {
         if let Some(process) = cur_process {
             let process_ref = Arc::clone(&process);
             let mut guard = process.lock();
+            
+            assert!(guard.get_user_flag() == user_fn.is_some(), "Thread type mismatch!");
+
             let proc_addr_space = guard.get_vcb();
             if guard.get_status() == ProcessStatus::Terminated {
                 return Err(KError::ProcessTerminated);
@@ -901,6 +1002,17 @@ pub fn create_thread(handler: fn() -> !) -> Result<KThread, KError> {
     enable_preemption();
 
     Ok(thread)
+
+}
+
+// Must be called from valid process context 
+pub fn create_thread(handler: fn() -> !) -> Result<KThread, KError> {
+    let res = create_thread_do_work(handler, None);
+    if res.is_err() {
+        info!("Failed to create kernel thread");
+    }
+
+    res
 }
 
 impl Spinlock<Task> {

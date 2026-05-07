@@ -2,7 +2,7 @@ use kernel_intf::{debug, info};
 use core::sync::atomic::{AtomicUsize, AtomicPtr, Ordering};
 use core::ptr::NonNull;
 use crate::cpu::{self, MAX_CPUS, PerCpu, general_interrupt_handler};
-use crate::hal::{enable_scheduler_timer, get_core};
+use crate::hal::{enable_scheduler_timer, get_core, get_per_cpu_base, get_per_cpu_kernel_base};
 use crate::infra;
 use crate::sync::Spinlock;
 use super::{lapic, timer};
@@ -16,6 +16,7 @@ use crate::devices::ioapic::add_redirection_entry;
 use crate::ds::*;
 use crate::mem::Regions::Region4;
 
+pub const GENERAL_PROTECTION_FAULT_VECTOR: usize = 13;
 pub const PAGE_FAULT_VECTOR: usize = 14;
 pub const DOUBLE_FAULT_VECTOR: usize = 8;
 pub const NMI_FAULT_VECTOR: usize = 2;
@@ -25,8 +26,10 @@ pub const DEBUG_VECTOR: usize = 34;
 pub const TIMER_VECTOR: usize = 35;
 pub const ERROR_VECTOR: usize = 36;
 pub const IPI_VECTOR: usize = 37;
-const USER_VECTOR_START: usize = 38;
+pub const SYS_VECTOR: usize = 38;
+const USER_VECTOR_START: usize = 39;
 
+#[derive(Clone, Copy)]
 pub enum IPIRequestType {
     SchedChange,
     TlbInvalidate,
@@ -37,7 +40,6 @@ pub struct IPIRequest {
     req_type: IPIRequestType,
     core: usize
 }
-
 
 static NEXT_AVAILABLE_VECTOR: AtomicUsize = AtomicUsize::new(USER_VECTOR_START);
 
@@ -158,7 +160,22 @@ pub fn init() {
                     infra::disable_callstack();
                 }
 
-                debug!("{:?}", *(fetch_context() as *const CPUContext));
+                let con = *(fetch_context() as *const CPUContext);
+                debug!("{:?}", con);
+                debug!("gs={:#X}, kernel_gs={:#X}", get_per_cpu_kernel_base(), get_per_cpu_base());
+
+                if idx == GENERAL_PROTECTION_FAULT_VECTOR {
+                    let base = con.rsp as *const u64;
+                    let rip = *base;
+                    let cs = *base.add(1);
+                    let rflags = *base.add(2);
+                    let rsp = *base.add(3);
+                    let ss = *base.add(4);
+
+                    debug!("rip={:#X}, cs={:#X}, rflags={:#X}, rsp={:#X}, ss={:#X}", rip, cs, rflags, rsp, ss); 
+                }
+
+
                 if idx == DOUBLE_FAULT_VECTOR {
                     panic!("{} exception!\nPossible stack overflow??", EXCP_STRINGS[idx]);
                 }
@@ -181,6 +198,7 @@ pub fn init() {
         VECTOR_TABLE[TIMER_VECTOR] = timer_handler;
         VECTOR_TABLE[ERROR_VECTOR] = error_handler;
         VECTOR_TABLE[IPI_VECTOR] = ipi_handler;
+        VECTOR_TABLE[SYS_VECTOR] = sys_handler;
     }
     info!("Initialized interrupt handlers");
 }
@@ -224,6 +242,12 @@ fn yield_handler(_vector: usize) {
 
 fn error_handler(_vector: usize) {
     info!("Error status register: {:#X}", get_error() & 0xff);
+}
+
+fn sys_handler(_vector: usize) {
+    unsafe {
+        info!("Sys handler context: {:?}", *(fetch_context() as *const CPUContext));
+    }
 }
 
 fn page_fault_handler(_vector: usize) {
@@ -290,12 +314,13 @@ fn ipi_handler(_vector: usize) {
             Some(req_info) => {
                 match req_info.req_type {
                     IPIRequestType::SchedChange => {
+                        debug!("Got schedule change request on core {}", core);
                         enable_scheduler_timer();
-                        crate::sched::schedule();
                     },
                     IPIRequestType::TlbInvalidate => {
                         // Reload cr3
                         unsafe {
+                            debug!("Got invalidate request on core {}", core);
                             let cr3 = asm::read_cr3();
                             asm::write_cr3(cr3);
                         }
@@ -319,10 +344,11 @@ pub fn notify_core(req_type: IPIRequestType, target_core: usize) {
     let apic_id = super::get_apic_id(target_core);
 
     let req = IPIRequest {
-        req_type, core: target_core
+        req_type, core: target_core 
     };
 
-    IPI_REQUESTS.lock().add_node(req).expect("Failed to queue ipi request");
+    let mut req_queue = IPI_REQUESTS.lock();
+    req_queue.add_node(req).expect("Failed to queue ipi request");
 
     lapic::send_ipi(apic_id as u32, IPI_VECTOR as u8);
 }

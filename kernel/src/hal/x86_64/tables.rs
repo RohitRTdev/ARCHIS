@@ -1,7 +1,13 @@
 use common::{en_flag, ptr_to_usize};
-use crate::{cpu::{self, MAX_CPUS, PerCpu}, hal::enable_interrupts, sync::{Once, Spinlock}};
+use crate::{cpu::{self, MAX_CPUS, PerCpu}};
+use crate::hal::enable_interrupts;
+use crate::sync::Spinlock;
 use kernel_intf::{debug, info};
-use super::{asm, MAX_INTERRUPT_VECTORS, handlers, lapic, timer};
+use super::{asm, syscall, MAX_INTERRUPT_VECTORS, handlers, lapic, timer, init_per_cpu_data};
+
+extern "C" {
+    pub static kernel_stack_top: u8;
+}
 
 #[cfg(not(test))]
 use super::smp;
@@ -81,6 +87,20 @@ impl TaskStateSegment {
         task.ist[0] = good_stack;
         task
     }
+
+    pub const fn create() -> Self {
+        Self {
+            _reserved1: 0,
+            rsp0: 0,
+            rsp1: 0,
+            rsp2: 0,
+            _reserved2: 0,
+            ist: [0; 7],
+            _reserved3: 0,
+            _reserved4: 0,
+            iomap_base: core::mem::size_of::<Self>() as u16,
+        }
+    }
 }
 
 impl IDTDescriptor {
@@ -130,8 +150,8 @@ static CPU_TABLE_DATA: PerCpu<Spinlock<TableData>> = PerCpu::new_with(
 static IDT_DATA: Spinlock<IdtData> = Spinlock::new (IdtData {idt: [0; MAX_INTERRUPT_VECTORS * 2],
 idt_layout: TableLayout { limit: 0, base_address: 0}});
 
-static CPU_TSS: PerCpu<Once<TaskStateSegment>> = PerCpu::new_with(
-    [const {Once::new()}; MAX_CPUS]);
+static CPU_TSS: PerCpu<Spinlock<TaskStateSegment>> = PerCpu::new_with(
+    [const {Spinlock::new(TaskStateSegment::create())}; MAX_CPUS]);
 
 #[no_mangle]
 pub extern "C" fn kern_addr_space_start() -> ! {
@@ -142,6 +162,8 @@ pub extern "C" fn kern_addr_space_start() -> ! {
     info!("CPU-0 stack address:{:#X}", cpu::get_current_stack_base());
     init_tables();
     lapic::init();
+    init_per_cpu_data(0);
+    syscall::init();
     timer::init();
     handlers::init();
     
@@ -152,13 +174,28 @@ pub extern "C" fn kern_addr_space_start() -> ! {
     crate::kern_main();
 }
 
-pub fn build_gdt() {
-    CPU_TSS.local().call_once(|| {
-        TaskStateSegment::new(cpu::get_current_stack_base() as u64,
-    cpu::get_current_good_stack_base() as u64) 
-    });
+pub fn set_tss_stack(stack_base: u64) {
+    let mut cpu_tss = CPU_TSS.local().lock();
+    cpu_tss.rsp0 = stack_base;
+}
 
-    let tss_base = CPU_TSS.local().get().unwrap() as *const _ as u64;
+pub fn build_gdt() {
+    // During BSP init, we will use the boot stack allocated by our assembly entry stub as the worker stack for cpu-0
+    // According to current design, we have 4 primary stacks for cpu-0(bsp)
+    // 1) The TSS stack which will be used for interrupt handlers running on cpu-0 during ring-3 to ring-0 transition
+    // 2) Idle stack which is later created by scheduler which will be exclusively used by idle task
+    // 3) The current stack which will continue to be used by the init task
+    // 4) The backup/good stack, which will be used to run handlers for double fault and nmi exceptions, 
+    // in case the primary stack gets corrupted (For ex: stack overflow)
+    
+    // Here, we will simply initialize the TSS to per cpu worker stack
+    // However, it will be changed to the kernel stack for a given user thread by the scheduler 
+    let tss_base = {
+        let mut cpu_tss = CPU_TSS.local().lock();
+        *cpu_tss = TaskStateSegment::new(cpu::get_current_stack_base() as u64, cpu::get_current_good_stack_base() as u64); 
+        &*cpu_tss as *const _ as u64
+    };
+
     let tss_desc =  TSSDescriptor::new(size_of::<TaskStateSegment>() as u64 - 1, tss_base);  
     
     let mut cpu_table = CPU_TABLE_DATA.local().lock();

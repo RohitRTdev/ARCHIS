@@ -111,6 +111,29 @@ impl<T> PoolAllocator<T> {
         }
     }
 
+    fn get_free_blocks() -> usize {
+        let block_size = core::mem::size_of::<T>();
+        let mut cb = POOL_CB.lock();
+        
+        let pool = cb.find_pool_mut(block_size);
+        if pool.is_none() {
+            return 0;
+        }
+
+        let pool = pool.unwrap();
+        let mut num_slots = 0;
+        let mut slot_ptr = &pool.free_list;
+
+        while slot_ptr.is_some() {
+            num_slots += 1;
+            slot_ptr = unsafe {
+                &(*slot_ptr.as_ref().unwrap().as_ptr()).next
+            };
+        }
+
+        num_slots
+    }
+
     fn allocate_block(layout: Layout) -> Result<NonNull<[u8]>, KError> {
         let block_size = layout.size();
         let mut cb = POOL_CB.lock();
@@ -203,8 +226,11 @@ impl<T> super::Allocator<T> for PoolAllocator<T> {
 
         Self::deallocate_block(ptr.cast(), layout);
     }
-}
 
+    fn query_free_nodes() -> usize {
+        Self::get_free_blocks()
+    }
+}
 
 unsafe impl core::alloc::Allocator for PoolAllocatorGlobal {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {

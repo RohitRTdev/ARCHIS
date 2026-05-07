@@ -33,7 +33,6 @@ FUNC setup_table
     // They have a base address field that will be used when it's referenced
     // To configure that, we need to write an MSR
     movw %ax, %fs
-    movw %ax, %gs
 
     // For CS, we can't just load it like other registers,
     // We setup the stack layout just like during an interrupt, and attempt to do an interrupt return

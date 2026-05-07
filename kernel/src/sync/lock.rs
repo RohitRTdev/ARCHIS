@@ -54,9 +54,7 @@ pub struct Spinlock<T> {
 
 unsafe impl<T: Send> Sync for Spinlock<T>{}
 
-
 impl<T> Spinlock<T> {
-
     pub const fn new(data: T) -> Self {
         Spinlock {
 #[cfg(not(test))]
@@ -66,12 +64,12 @@ impl<T> Spinlock<T> {
             data: UnsafeCell::new(data)
         }
     }
-
+    
 #[cfg(not(test))]
     pub fn lock(&self) -> SpinlockGuard<'_, T> {
         let int_status = hal::disable_interrupts();
         //let mut count = 0;        
-        //while self.lock.try_lock() {
+        //while !self.lock.try_lock() {
         //    count += 1;
 
         //    if count > 10000000 {

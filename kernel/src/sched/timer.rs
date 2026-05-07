@@ -65,10 +65,10 @@ impl KTimer {
     }
 }
 
-
 // Do not call this function from interrupt context
 pub fn delay_ms(value: usize) {
     let timer = KTimer::new(value);
 
-    timer.wait().expect("Internal kernel timer node allocation failed!!");
+    // Let's not panic if wait fails (Since this could happen if process/thread is getting killed)
+    let _ = timer.wait();
 }

@@ -204,7 +204,12 @@ impl VirtMemConBlk {
                 flags: 0,
                 is_mapped: false
             };
-            
+
+            // We need one free node per list
+            //if self.free_block_list.query_free_nodes() < 1 || self.alloc_block_list.query_free_nodes() < 1 {
+            //    return Err(KError::OutOfMemory);
+            //} 
+
             unsafe {
                 self.free_block_list.remove_node(NonNull::from(desc));
             }
@@ -238,14 +243,17 @@ impl VirtMemConBlk {
 
         assert!(!(self.proc_id == 0 && is_user), "Kernel virtual address space must not allocate user blocks!");
 
+        //if self.alloc_block_list.query_free_nodes() < 1 {
+        //    return Err(KError::OutOfMemory);
+        //}
+
         let num_pages = ceil_div(layout.size(), PAGE_SIZE);
         let virt_addr = self.find_best_fit(num_pages, is_user)?;    
         self.avl_memory -= num_pages * PAGE_SIZE;
 
         // Now we have got virtual address
         self.alloc_block_list.add_node(PageDescriptor { num_pages, start_phy_address: 0, 
-            start_virt_address: virt_addr as usize, flags: 0, is_mapped: false})
-            .expect(ERROR_MESSAGE);
+            start_virt_address: virt_addr as usize, flags: 0, is_mapped: false}).expect(ERROR_MESSAGE);
 
         Ok(virt_addr)
     }
@@ -387,6 +395,10 @@ impl VirtMemConBlk {
                 is_mapped: false
             };
             
+            //if self.alloc_block_list.query_free_nodes() < 2 {
+            //    return Err(KError::OutOfMemory);
+            //} 
+            
             unsafe {
                 self.alloc_block_list.remove_node(NonNull::from(desc));
             }
@@ -478,7 +490,6 @@ impl VirtMemConBlk {
         };
 
         let mut page_mapper = PageMapper::new(false, proc_id);
-
 
         for blk in alloc_list.iter() {
             if blk.is_mapped {

@@ -1,8 +1,7 @@
-use crate::hal::{disable_interrupts, enable_interrupts};
+use crate::hal::{disable_interrupts, enable_interrupts, init_per_cpu_data};
 use crate::mem::{MapFetchType, PageDescriptor, allocate_memory, get_virtual_address, map_memory};
 
 use super::asm::{rdmsr, wrmsr};
-use super::cpu::register_cpu;
 use super::handlers::{SPURIOUS_VECTOR, ERROR_VECTOR, TIMER_VECTOR};
 use common::PAGE_SIZE;
 use core::alloc::Layout;
@@ -161,10 +160,6 @@ pub fn init() {
 
     // Setup spurious vector entry
     lapic_write(SPURIOUS_ENTRY_OFFSET, (1 << 8) | (SPURIOUS_VECTOR & 0xff) as u64);
-
-    if is_bsp {
-        register_cpu(get_lapic_id(), 0);
-    }
 }
 
 pub fn get_lapic_id() -> usize {

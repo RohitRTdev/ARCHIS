@@ -11,6 +11,7 @@ mod handlers;
 mod cpu;
 mod timer;
 mod lapic;
+mod syscall;
 
 #[cfg(not(test))]
 mod smp;
@@ -19,6 +20,8 @@ pub use cpu::*;
 pub use utils::*;
 pub use page_mapper::*;
 pub use handlers::*;
+pub use tables::*;
+pub use syscall::*;
 
 const MAX_INTERRUPT_VECTORS: usize = 256;
 

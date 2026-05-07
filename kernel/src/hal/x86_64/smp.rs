@@ -18,6 +18,8 @@ use super::tables;
 use super::cpu_regs;
 use super::sleep;
 use super::disable_interrupts;
+use super::syscall;
+use super::handlers;
 
 #[cfg(feature = "acpi")]
 use {crate::acpica::{self, AcpiTableMadt}, common::madt::*};
@@ -42,6 +44,7 @@ static NMI_LIST: Spinlock<DynList<Nmi>> = Spinlock::new(List::new());
 
 static AP_INIT_COMPLETE: AtomicBool = AtomicBool::new(false);
 static AP_CORES_INIT: AtomicUsize = AtomicUsize::new(1);
+static AP_CORES_ID: AtomicUsize = AtomicUsize::new(1);
 static AP_TRAMPOLINE: &[u8] = include_bytes!(env!("TRAMPOLINE_BIN"));
 
 include!("asm/trampoline_offsets.rs");
@@ -159,9 +162,17 @@ unsafe fn patch_trampoline(load_addr: *mut u8, pml4: u32, ap_init: u64) {
     (ap_entry as *mut u64).write(ap_init);
 
     // Apply manual relocation to instructions
-    (load_addr.add(_PATCH1 + 4) as *mut u32).write_unaligned(gdt_desc as u32);
+
+    // _patch1 -> 0f 01 modr/m addrbyte1 addrbyte2
+    (load_addr.add(_PATCH1 + 3) as *mut u16).write_unaligned(gdt_desc as u16);
+    
+    // _patch2 -> 66 ea addrbyte1 addrbyte2 addrbyte3 addrbyte4
     (load_addr.add(_PATCH2 + 2) as *mut u32).write_unaligned((load_addr.addr() + PMODE_ENTRY) as u32);
+    
+    // _patch3 -> a1 addrbyte1-addrbyte4
     (load_addr.add(_PATCH3 + 1) as *mut u32).write_unaligned((load_addr.addr() + PML4_PHYS) as u32);
+    
+    // _patch4 -> ea addrbyte1-addrbyte4
     (load_addr.add(_PATCH4 + 1) as *mut u32).write_unaligned((load_addr.addr() + LMODE_ENTRY) as u32);
 }
 
@@ -178,6 +189,11 @@ pub fn init() {
     cpu::set_total_cores(total_cores);
     
     info!("Found {} enabled logical cores in system", total_cores);
+
+    if total_cores == 1 {
+        info!("Found only 1 core in system. Skipping rest of smp init...");
+        return;
+    }
 
     let tramp_start = AP_TRAMPOLINE.as_ptr().addr();
     let tramp_size = AP_TRAMPOLINE.len(); 
@@ -229,9 +245,6 @@ pub fn init() {
         // This registers CPU at kernel level
         cpu::register_cpu();
 
-        // This registers CPU at HAL level
-        super::register_cpu(core.id, idx);
-        
         let stack_base = cpu::get_worker_stack(idx);
 
         debug!("Setting stack base {:#X} for core {}", stack_base, idx);
@@ -306,21 +319,26 @@ extern "C" fn ap_init() -> ! {
     disable_interrupts();
     
     // Signal BSP that this core is up
+    let core = AP_CORES_ID.fetch_add(1, Ordering::SeqCst);
     AP_INIT_COMPLETE.store(true, Ordering::SeqCst);
     lapic::init();
+    super::init_per_cpu_data(core);
+    
+    info!("Starting AP init for core {}", get_core());
+    debug!("gs_base={:#X}, kernel_gs_base={:#X} on core {}", super::get_per_cpu_kernel_base(), super::get_per_cpu_base(),
+ get_core());
     crate::mem::ap_init();
     activate_local_core_nmi_trap();
-
-    info!("Starting AP init for core {}", get_core());
-    
     cpu_regs::init();
     tables::build_gdt();
     tables::register_tables();
+    syscall::init();
     timer::init();
 
-    AP_CORES_INIT.fetch_add(1, Ordering::Release);
     info!("AP core {} going to sleep", get_core());
+    AP_CORES_INIT.fetch_add(1, Ordering::Release);
     
+
     // This will internally enable interrupts
     sleep();
 }

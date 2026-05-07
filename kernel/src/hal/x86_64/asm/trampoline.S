@@ -14,7 +14,8 @@ ap_trampoline_start:
     movw %ax, %es
     movw %ax, %ss
     movw $0, %sp
-    // Here, assembler assumes 32 bits is required and 0x67 prefix is emitted
+    
+    // Here, assembler emits 16 bit mode addressing
 _patch1:
     lgdt gdt_desc
 

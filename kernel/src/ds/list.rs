@@ -169,6 +169,10 @@ impl<T, A: Allocator<ListNode<T>>> List<T, A> {
         self.num_nodes
     }
 
+    pub fn query_free_nodes(&self) -> usize {
+        A::query_free_nodes()                
+    }
+
     fn insert_node(&mut self, this: NonNull<ListNode<T>>, insert_at_tail: bool) {
         unsafe {
             let this_node = &mut *this.as_ptr();

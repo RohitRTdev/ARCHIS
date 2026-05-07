@@ -61,7 +61,7 @@ pub fn init() {
 
     let new = lapic::get_timer_value();
     // This is a countdown timer
-    let num_ticks_passed = old.wrapping_sub(new);
+    let num_ticks_passed = old.wrapping_sub(new) as u64;
     let apic_freq = num_ticks_passed * 10;
     
     info!("CPU APIC Clock frequency measured as {}Hz", apic_freq);

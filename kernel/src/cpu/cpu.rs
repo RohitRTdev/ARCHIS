@@ -1,15 +1,14 @@
 use core::alloc::Layout;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::ptr::NonNull;
-use common::{PAGE_SIZE, align_up};
-use kernel_intf::{KError, info, debug};
+use common::PAGE_SIZE;
+use kernel_intf::{KError, info};
 use crate::hal::get_core;
 use crate::infra::disable_early_panic_phase;
-use crate::{ds::*, hal};
 use crate::sync::Spinlock;
 use crate::mem::{PageDescriptor, allocate_memory, deallocate_memory, map_memory};
 
-pub const INIT_STACK_SIZE: usize  = PAGE_SIZE * 7;
+pub const INIT_STACK_SIZE: usize  = PAGE_SIZE * 10;
 pub const INIT_GUARD_PAGE_SIZE: usize = PAGE_SIZE;
 pub const WORKER_STACK_SIZE: usize = 5 * PAGE_SIZE;
 pub const TOTAL_STACK_SIZE: usize = INIT_STACK_SIZE + INIT_GUARD_PAGE_SIZE;
@@ -56,29 +55,54 @@ impl Stack {
     // Create STACK + GUARD page. The guard page will remain unmapped
     // This is to allow us to catch any stack overflow scenarios
     pub fn new() -> Result<Self, KError> {
-        Self::new_with(INIT_STACK_SIZE, INIT_GUARD_PAGE_SIZE)
+        Self::new_with(INIT_STACK_SIZE, INIT_GUARD_PAGE_SIZE, false)
     }
     
-    pub fn new_with(stack_size: usize, guard_size: usize) -> Result<Self, KError> {
+    pub fn new_user_stack() -> Result<Self, KError> {
+        Self::new_with(INIT_STACK_SIZE, INIT_GUARD_PAGE_SIZE, true)
+    }
+    
+    pub fn new_with(stack_size: usize, guard_size: usize, is_user: bool) -> Result<Self, KError> {
         // TODO: Roll back and deallocate any memory allocations made in case operations further down fail
-        let stack_raw = allocate_memory(Layout::from_size_align(stack_size + guard_size, PAGE_SIZE).unwrap()
-        , PageDescriptor::VIRTUAL | PageDescriptor::NO_ALLOC)?;
+        
+        let stack_raw  = if is_user {
+            // For now, user stacks won't have guard pages
+            allocate_memory(Layout::from_size_align(stack_size, PAGE_SIZE).unwrap()
+            , PageDescriptor::VIRTUAL | PageDescriptor::USER)?
+        }
+        else {
+            let stack_raw = allocate_memory(Layout::from_size_align(stack_size + guard_size, PAGE_SIZE).unwrap()
+            , PageDescriptor::VIRTUAL | PageDescriptor::NO_ALLOC)?;
+            
+            let stack_raw_phys = allocate_memory(Layout::from_size_align(stack_size, PAGE_SIZE).unwrap(),
+        0)?;
 
-        let stack_raw_phys = allocate_memory(Layout::from_size_align(stack_size, PAGE_SIZE).unwrap(),
-    0)?;
+            #[cfg(feature = "stack_down")]
+            let stack_base = unsafe {
+                stack_raw.add(guard_size)
+            };
 
-        #[cfg(feature = "stack_down")]
-        let stack_base = unsafe {
-            stack_raw.add(guard_size)
+            #[cfg(not(feature = "stack_down"))]
+            let stack_base = stack_raw;
+
+            map_memory(stack_raw_phys.addr(), stack_base.addr(), stack_size, 0)?;
+        
+            stack_raw
+        }; 
+
+        let guard_size = if !is_user {
+            guard_size
+        }
+        else {
+            0
         };
 
-        #[cfg(not(feature = "stack_down"))]
-        let stack_base = stack_raw;
-
-        map_memory(stack_raw_phys.addr(), stack_base.addr(), stack_size, 0)?;
-
-        Ok(Self {guard_size: guard_size, stack_size: stack_size, base: NonNull::new(stack_raw).unwrap(), 
+        Ok(Self {guard_size, stack_size, base: NonNull::new(stack_raw).unwrap(), 
         allocated: true })
+    }
+
+    pub fn get_stack_size(&self) -> usize {
+        self.guard_size + self.stack_size
     }
 
     pub fn into_inner(stack: &mut Stack) -> NonNull<u8> {
@@ -159,7 +183,6 @@ impl Default for Stack {
 }
 
 struct CPUControlBlock {
-    id: usize,
     worker_stack: Stack,
     good_stack: Stack,
     panic_base: usize
@@ -171,7 +194,7 @@ pub const MAX_CPUS: usize = 64;
 
 static CPU_ID: AtomicUsize = AtomicUsize::new(0);
 static CPU_LIST: PerCpu<Spinlock<CPUControlBlock>> = PerCpu::new_with(
-    [const {Spinlock::new(CPUControlBlock{id: 0, worker_stack: Stack::create(), 
+    [const {Spinlock::new(CPUControlBlock{worker_stack: Stack::create(), 
     good_stack: Stack::create(), panic_base: 0})}; MAX_CPUS]);
 
 pub fn init() {
@@ -186,6 +209,7 @@ pub fn set_total_cores(total_count: usize) {
     TOTAL_CPUS.store(total_count, Ordering::Release);
 }
 
+// This function is to be called only by the BSP in order to register the AP's and itself into the system
 pub fn register_cpu() -> usize {
     let cpu_id = CPU_ID.fetch_add(1, Ordering::Relaxed);
     assert!(cpu_id < TOTAL_CPUS.load(Ordering::Acquire));
@@ -209,7 +233,6 @@ pub fn register_cpu() -> usize {
         };
  
         CPUControlBlock {
-            id: cpu_id,
             worker_stack: stack, 
             good_stack: Stack {
                 stack_size: PAGE_SIZE,
@@ -221,19 +244,19 @@ pub fn register_cpu() -> usize {
         }
     } else {
         // Allocate worker stack for the CPU
-        let stack = Stack::new_with(WORKER_STACK_SIZE, INIT_GUARD_PAGE_SIZE).expect("Failed to allocate memory for CPU worker stack");
-        let backup_stack = Stack::new_with(PAGE_SIZE, 0).expect("Failed to create backup stack for cpu");
+        let stack = Stack::new_with(WORKER_STACK_SIZE, INIT_GUARD_PAGE_SIZE, false).expect("Failed to allocate memory for CPU worker stack");
+        let backup_stack = Stack::new_with(PAGE_SIZE, 0, false).expect("Failed to create backup stack for cpu");
         let stack_base = stack.get_stack_base();
 
         CPUControlBlock {
-            id: cpu_id,
             worker_stack: stack,
             good_stack: backup_stack,
             panic_base: stack_base
         }
     };
 
-    info!("Registered CPU with core_id:{} and stack:{:#X}", cpu_id, cb.worker_stack.get_stack_top());
+    info!("Registered CPU with core_id:{}, with stack:{:#X}, good_stack:{:#X}", cpu_id,
+     cb.worker_stack.get_stack_base(), cb.good_stack.get_stack_base());
 
     unsafe {
         *CPU_LIST.get(cpu_id).lock() = cb;
@@ -318,5 +341,11 @@ impl<T: Sync> PerCpu<T> {
     #[inline(always)]
     pub unsafe fn get(&self, cpu: usize) -> &T {
         &self.data[cpu]
+    }
+    
+    // Caller must ensure correctness.
+    #[inline(always)]
+    pub unsafe fn get_mut(&mut self, cpu: usize) -> &mut T {
+        &mut self.data[cpu]
     }
 }

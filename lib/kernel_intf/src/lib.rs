@@ -2,7 +2,7 @@
 
 mod log;
 pub use log::*;
-use core::fmt;
+use core::{fmt, panic::PanicInfo};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,9 +14,25 @@ pub enum KError {
     WaitFailed
 }
 
+pub const E_SUCCESS: i64 = 0;
+pub const E_INVALID: i64 = -1;
+pub const E_OOM: i64 = -2;
+pub const E_INTERNAL_FAILURE: i64 = -3;
+
 impl<T> From<Result<T, KError>> for KError {
     fn from(e: Result<T, KError>) -> Self {
         e.err().unwrap_or(KError::Success)
+    }
+}
+
+impl From<KError> for i64 {
+    fn from(e: KError) -> Self {
+        match e {
+            KError::Success => E_SUCCESS,
+            KError::InvalidArgument => E_INVALID,
+            KError::OutOfMemory => E_OOM,
+            KError::ProcessTerminated | KError::WaitFailed => E_INTERNAL_FAILURE
+        }
     }
 }
 

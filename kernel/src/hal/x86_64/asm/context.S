@@ -24,6 +24,7 @@ FUNC interrupt_context_save
     movq 120(%rsp), %rdi     
     subq $8, %rsp  // Align stack to 16 bytes
     leaq 0(%rsp), %rsi
+    swapgs // Use the kernel_gs_base
 
     call global_interrupt_handler
 
@@ -38,6 +39,7 @@ FUNC switch_context
     addq $8, %rsp
     
     // Restore registers in reverse order
+    swapgs
     popq %r15
     popq %r14
     popq %r13

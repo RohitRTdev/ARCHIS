@@ -1,14 +1,15 @@
 use alloc::sync::Arc;
 use alloc::collections::BTreeMap;
-use kernel_intf::KError;
+use common::{MemoryRegion, PAGE_SIZE};
+use kernel_intf::{KError, info, debug};
 use crate::{ds::*, sched};
 use crate::hal;
-use crate::mem::{self, PoolAllocatorGlobal, VCB, VirtMemConBlk};
+use crate::mem::{self, PageDescriptor, PoolAllocatorGlobal, VCB, VirtMemConBlk, deallocate_memory, get_physical_address};
 use crate::sched::*;
 use crate::sync::{KSem, Spinlock};
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::ptr::NonNull;
-use kernel_intf::info;
+use core::alloc::Layout;
 
 static PROCESS_ID: AtomicUsize = AtomicUsize::new(0);
 static PROCESSES: Spinlock<BTreeMap<usize, KProcess>> = Spinlock::new(BTreeMap::new());
@@ -29,13 +30,19 @@ pub struct Process {
     threads: DynList<usize>,
     addr_space: VCB,
     status: ProcessStatus,
-    term_notify: KSem
+    is_user: bool,
+    term_notify: KSem,
+    init_notify: KSem,
+
+    // List of physical addresses that are deallocated once the process is killed
+    // The virtual address space would be destroyed prior to this deallocation
+    memory_list: DynList<MemoryRegion>
 }
 
 unsafe impl Send for Process {}
 
 impl Process {
-    fn new(clone_addr_space: bool) -> Result<KProcess, KError> {
+    fn new(clone_addr_space: bool, is_user: bool) -> Result<KProcess, KError> {
         let id = PROCESS_ID.fetch_add(1, Ordering::Relaxed);  
         let kernel_addr_space = mem::get_kernel_addr_space();
         let new_addr_space = if clone_addr_space {
@@ -50,7 +57,10 @@ impl Process {
             threads: List::new(),
             addr_space: new_addr_space,
             status: ProcessStatus::Ready,
-            term_notify: KSem::new(0, 1)
+            is_user,
+            term_notify: KSem::new(0, 1),
+            init_notify: KSem::new(0, 1),
+            memory_list: List::new()
         }), PoolAllocatorGlobal);
         
         info!("Creating new process with id {}", id);
@@ -60,6 +70,10 @@ impl Process {
 
     pub fn get_vcb(&self) -> VCB {
         self.addr_space
+    }
+
+    pub fn get_user_flag(&self) -> bool {
+        self.is_user
     }
 
     pub fn get_status(&self) -> ProcessStatus {
@@ -106,6 +120,14 @@ impl Process {
     pub fn get_notify_sem(&self) -> KSem {
         self.term_notify.clone()
     }
+    
+    pub fn get_init_sem(&self) -> KSem {
+        self.init_notify.clone()
+    }
+
+    pub fn complete_init(&self) {
+        self.init_notify.signal();
+    }
 
     fn destroy_process(&mut self) {
         self.status = ProcessStatus::Terminated;
@@ -120,12 +142,19 @@ impl Drop for Process {
         unsafe {
             VirtMemConBlk::destroy_address_space(self.addr_space);
         }
+
+        debug!("Deallocating regions from process {} memory list", self.id);
+        for range in self.memory_list.iter() {
+            debug!("Deallocating memory region base={:#X} of size={}", range.base_address, range.size);
+            deallocate_memory(range.base_address as *mut u8, Layout::from_size_align(range.size, PAGE_SIZE).unwrap(), 0)
+            .expect("Failed to deallocate physical memory from process");
+        }
     }
 }
 
 pub fn init() {
     // Create init process and attach init task (task id = 0) to it
-    let init_proc = Process::new(false)
+    let init_proc = Process::new(false, false)
     .expect("Failed to create init process");
 
     PROCESSES.lock().insert(0, Arc::clone(&init_proc));
@@ -155,17 +184,22 @@ pub fn get_process_info(proc_id: usize) -> Option<KProcess> {
     })
 }
 
-pub fn create_process(start_function: fn() -> !) -> Result<KProcess, KError> {
+pub fn create_process(start_function: fn() -> !, is_user: bool) -> Result<KProcess, KError> {
     disable_preemption();
     
-    let process = Process::new(true)?;
-    
+    let process = Process::new(true, is_user)?;
+    let init_notify_sem = process.lock().init_notify.clone(); 
     let thread = sched::create_init_thread(start_function, Arc::clone(&process))?;
     let core = thread.lock().get_core();
 
     start_task(&thread, core, &process, &PROCESSES)?;
 
     enable_preemption();    
+
+    if is_user {
+        init_notify_sem.wait().expect("Wait failed on init_notify semaphore!");
+    }
+    
     Ok(process)
 }
 
@@ -239,6 +273,23 @@ pub fn exit_process() -> ! {
     // So we wait here. This is the right thing to do, as this thread would just get killed
 
     hal::sleep();
+}
+
+pub fn add_memory_range_to_cur_process(virtual_base: usize, size: usize, is_user: bool) {
+    let flags = if is_user {PageDescriptor::USER} else {0};
+    let base_address = get_physical_address(virtual_base, flags)
+    .expect("Unable to find physical address for given virtual address from add_memory_range_to_cur_process!");
+    
+    let range = MemoryRegion {base_address, size};
+
+    let process = get_current_process()
+    .expect("Called add_memory_range_to_cur_process() from idle task!");
+
+    debug!("Adding memory range with virtual_base:{:#X}, phy_base:{:#X} and size {}", virtual_base,
+    base_address, size);
+
+    process.lock().memory_list.add_node(range)
+    .expect("Failed to add node to process memory list!");
 }
 
 impl Spinlock<Process> {
