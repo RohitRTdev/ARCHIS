@@ -68,20 +68,25 @@ impl<T> Spinlock<T> {
 #[cfg(not(test))]
     pub fn lock(&self) -> SpinlockGuard<'_, T> {
         let int_status = hal::disable_interrupts();
-        //let mut count = 0;        
-        //while !self.lock.try_lock() {
-        //    count += 1;
 
-        //    if count > 10000000 {
-        //        break;
-        //    }
-        //}
-        
-        //if count > 10000000 {
-        //    self.lock.unlock();
-        //    panic!("Lock acquisition expired!!");
-        //}
-        
+        #[cfg(all(debug_assertions, feature = "deadlock_detection"))]
+        {
+            let mut count = 0;        
+            while !self.lock.try_lock() {
+                count += 1;
+
+                if count > 10000000 {
+                    break;
+                }
+            }
+            
+            if count > 10000000 {
+                self.lock.unlock();
+                panic!("Lock acquisition expired!!");
+            }
+        }
+
+        #[cfg(not(all(debug_assertions, feature = "deadlock_detection")))]
         self.lock.lock();
 
         SpinlockGuard { lock: &self.lock, int_status, data: self.data.get()}

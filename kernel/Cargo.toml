@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 [features]
 default = []
 stack_down = []
+deadlock_detection = []
 acpi = ["common/acpi"]
 test-kernel = ["common/test-kernel"]
 

@@ -897,7 +897,7 @@ fn notify_other_cpu(target_core: usize) {
     }
 
     info!("Notifying core {}", target_core);
-    hal::notify_core(IPIRequestType::SchedChange, target_core);
+    hal::notify_core(IPIRequestType::SchedChange, target_core, false);
 }
 
 fn create_thread_common(handler: fn() -> !, user_function: Option<fn() -> !>) -> Result<(KThread, usize), KError> {

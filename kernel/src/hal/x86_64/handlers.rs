@@ -36,9 +36,10 @@ pub enum IPIRequestType {
     Shutdown
 }
 
-pub struct IPIRequest {
+struct IPIRequest {
     req_type: IPIRequestType,
-    core: usize
+    core: usize,
+    tag: bool
 }
 
 static NEXT_AVAILABLE_VECTOR: AtomicUsize = AtomicUsize::new(USER_VECTOR_START);
@@ -296,7 +297,7 @@ pub fn create_kernel_context(handler: fn() -> !, stack_base: *mut u8) -> *const 
 fn ipi_handler(_vector: usize) {
     let core = get_core();
     loop {
-        let req = {
+        let mut req = {
             let mut ipi_queue = IPI_REQUESTS.lock();
             let mut found_ptr = None;
 
@@ -310,7 +311,7 @@ fn ipi_handler(_vector: usize) {
             found_ptr.map(|ptr| unsafe { ipi_queue.remove_node(ptr) })
         };
 
-        match req {
+        match &mut req {
             Some(req_info) => {
                 match req_info.req_type {
                     IPIRequestType::SchedChange => {
@@ -326,9 +327,12 @@ fn ipi_handler(_vector: usize) {
                         }
                     },
                     IPIRequestType::Shutdown => {
+                        req_info.tag = true;
                         halt();
                     }
                 }
+
+                req_info.tag = true;
             },
             None => {
                 break;
@@ -338,17 +342,31 @@ fn ipi_handler(_vector: usize) {
 }
 
 // Function should only be called after scheduler is up
-pub fn notify_core(req_type: IPIRequestType, target_core: usize) {
+// if wait_for_completion is set, caller needs to ensure that no locks are held during a call to notify_core
+// Otherwise, this may lead to deadlock
+pub fn notify_core(req_type: IPIRequestType, target_core: usize, wait_for_completion: bool) {
     assert!(target_core < cpu::get_total_cores());
     
     let apic_id = super::get_apic_id(target_core);
 
     let req = IPIRequest {
-        req_type, core: target_core 
+        req_type, 
+        core: target_core,
+        tag: false 
     };
 
-    let mut req_queue = IPI_REQUESTS.lock();
-    req_queue.add_node(req).expect("Failed to queue ipi request");
+    let tag_ptr = {
+        let mut req_queue = IPI_REQUESTS.lock();
+        req_queue.add_node(req).expect("Failed to queue ipi request");
+
+        &req_queue.last().unwrap().tag as *const bool
+    };
 
     lapic::send_ipi(apic_id as u32, IPI_VECTOR as u8);
+    
+    if wait_for_completion {
+        while unsafe {!core::ptr::read_volatile(tag_ptr)} {
+            core::hint::spin_loop();
+        }
+    }
 }
