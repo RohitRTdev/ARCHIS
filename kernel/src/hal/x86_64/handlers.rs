@@ -165,17 +165,6 @@ pub fn init() {
                 debug!("{:?}", con);
                 debug!("gs={:#X}, kernel_gs={:#X}", get_per_cpu_kernel_base(), get_per_cpu_base());
 
-                if idx == GENERAL_PROTECTION_FAULT_VECTOR {
-                    let base = con.rsp as *const u64;
-                    let rip = *base;
-                    let cs = *base.add(1);
-                    let rflags = *base.add(2);
-                    let rsp = *base.add(3);
-                    let ss = *base.add(4);
-
-                    debug!("rip={:#X}, cs={:#X}, rflags={:#X}, rsp={:#X}, ss={:#X}", rip, cs, rflags, rsp, ss); 
-                }
-
 
                 if idx == DOUBLE_FAULT_VECTOR {
                     panic!("{} exception!\nPossible stack overflow??", EXCP_STRINGS[idx]);
