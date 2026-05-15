@@ -81,7 +81,6 @@ impl<T> Spinlock<T> {
             }
             
             if count > 10000000 {
-                self.lock.unlock();
                 panic!("Lock acquisition expired!!");
             }
         }
@@ -113,19 +112,25 @@ extern "C" fn acquire_spinlock(lock: &mut Lock) {
     unsafe {
         #[cfg(not(test))]
         let stat = hal::disable_interrupts();
+        
+        #[cfg(not(all(debug_assertions, feature = "deadlock_detection")))]
         (*ptr_to_ref_mut::<_, hal::Spinlock>(&lock.lock)).lock();
-        //let mut count = 0;
-        //while (*ptr_to_ref_mut::<_, hal::Spinlock>(&lock.lock)).try_lock() {
-        //    count += 1;
-        //    if count > 1000000 {
-        //        break;
-        //    }
-        //} 
+        
+        #[cfg(all(debug_assertions, feature = "deadlock_detection"))]
+        {
+            let mut count = 0;
+            while !(*ptr_to_ref_mut::<_, hal::Spinlock>(&lock.lock)).try_lock() {
+                count += 1;
+                if count > 1000000 {
+                    break;
+                }
+            } 
 
-        //if count > 1000000 {
-        //   (*ptr_to_ref_mut::<_, hal::Spinlock>(&lock.lock)).unlock();
-        //   panic!("Lock acquisition failed on logger lock..."); 
-        //}
+            if count > 1000000 {
+                panic!("Lock acquisition failed on logger lock..."); 
+            }
+
+        }
         
         #[cfg(not(test))] 
         {

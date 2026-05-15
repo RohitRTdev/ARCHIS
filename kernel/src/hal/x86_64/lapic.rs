@@ -110,6 +110,15 @@ pub fn enable_x2apic() {
     }
 }
 
+#[cfg(debug_assertions)]
+pub fn get_apic_base() -> usize {
+    let apic_base = unsafe {
+        rdmsr(APIC_BASE_OFFSET)
+    };
+
+    (apic_base & 0xfffff000) as usize
+}
+
 pub fn init() {
     let apic_base = unsafe {
         rdmsr(APIC_BASE_OFFSET)
@@ -140,8 +149,7 @@ pub fn init() {
             .expect("map_memory failed for apic register space");
             
             unsafe {
-                APIC_BASE = get_virtual_address(apic_base_addr as usize, 0, MapFetchType::Any)
-            .expect("Unable to get APIC base register space virtual address");
+                APIC_BASE = base as usize; 
             }
         }
     }

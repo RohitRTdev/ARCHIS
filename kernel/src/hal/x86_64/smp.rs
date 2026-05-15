@@ -6,7 +6,7 @@ use crate::BOOT_INFO;
 use crate::mem::PHY_MEM_CB;
 use crate::ds::*;
 use crate::sync::Spinlock;
-use crate::cpu;
+use crate::cpu::{self, MAX_CPUS};
 use kernel_intf::{debug, info};
 use alloc::alloc::Layout;
 use common::PAGE_SIZE;
@@ -186,13 +186,18 @@ pub fn init() {
     activate_local_core_nmi_trap();
 
     let total_cores = LAPIC_LIST.lock().get_nodes();
-    cpu::set_total_cores(total_cores);
+    let total_cores_capped = total_cores.min(MAX_CPUS);
+    cpu::set_total_cores(total_cores_capped);
     
     info!("Found {} enabled logical cores in system", total_cores);
 
     if total_cores == 1 {
         info!("Found only 1 core in system. Skipping rest of smp init...");
         return;
+    }
+
+    if total_cores > MAX_CPUS {
+        info!("Found more than {} cores in system ({}). Aris will only use {} of them...", MAX_CPUS, total_cores, MAX_CPUS);
     }
 
     let tramp_start = AP_TRAMPOLINE.as_ptr().addr();
@@ -234,10 +239,8 @@ pub fn init() {
         patch_trampoline(ap_start_code, page_mapper::get_kernel_pml4() as u32, ap_init as *const () as u64);
     }
     
-    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-
     let bsp_id = get_bsp_lapic_id();
-    for (idx, core) in LAPIC_LIST.lock().iter().enumerate() {
+    for (idx, core) in LAPIC_LIST.lock().iter().take(total_cores_capped).enumerate() {
         if core.id == bsp_id {
             continue;
         } 
@@ -256,8 +259,6 @@ pub fn init() {
                 .write_volatile(stack_base as u64);
         }
         
-        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-
         AP_INIT_COMPLETE.store(false, Ordering::SeqCst);
         let sipi_vector = (ap_start_code.addr() >> 12) as u8;
         debug!("Sending INIT-SIPI-SIPI sequence to core:{} with apic_id:{} at vector: {}", idx, core.id, sipi_vector);
@@ -285,7 +286,7 @@ pub fn init() {
     PHY_MEM_CB.get().unwrap().lock().disable_limits();
 
     // Wait for all cores to initialize before proceeding
-    while AP_CORES_INIT.load(Ordering::Acquire) < total_cores {
+    while AP_CORES_INIT.load(Ordering::Acquire) < total_cores_capped {
         core::hint::spin_loop();
     }
     
@@ -335,10 +336,13 @@ extern "C" fn ap_init() -> ! {
     syscall::init();
     timer::init();
 
+    debug!("APIC base: {:#X}", lapic::get_apic_base());
     info!("AP core {} going to sleep", get_core());
     AP_CORES_INIT.fetch_add(1, Ordering::Release);
     
 
+    super::enable_scheduler_timer();
+    
     // This will internally enable interrupts
     sleep();
 }

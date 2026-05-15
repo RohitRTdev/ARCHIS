@@ -6,13 +6,13 @@ macro_rules! print {
     ($($arg:tt)*) => {
         #[cfg(not(test))]
         {
+            let args = ::core::format_args!($($arg)*);
             unsafe {
                 use core::fmt::Write;
 
                 $crate::acquire_spinlock(&mut $crate::LOGGER.lock);
                 
-                $crate::LOGGER.write_fmt(::core::format_args!($($arg)*))
-                .unwrap();
+                $crate::LOGGER.write_fmt(args).unwrap();
                 
                 $crate::release_spinlock(&mut $crate::LOGGER.lock);
             }
@@ -21,7 +21,7 @@ macro_rules! print {
 }
 
 #[macro_export]
-macro_rules! println {
+macro_rules! panic_println {
     () => {
         #[cfg(test)]
         {
@@ -31,9 +31,7 @@ macro_rules! println {
         {
             use core::fmt::Write;
             unsafe {
-                $crate::acquire_spinlock(&mut $crate::LOGGER.lock);
-                LOGGER.lock().write_fmt(::core::format_args!("\n")).unwrap();
-                $crate::release_spinlock(&mut $crate::LOGGER.lock);
+                $crate::LOGGER.write_fmt(::core::format_args!("\n")).unwrap();
             }
         }
     };
@@ -47,9 +45,46 @@ macro_rules! println {
             unsafe {
                 use core::fmt::Write;
 
+                $crate::LOGGER.write_fmt(::core::format_args!($($arg)*))
+                .and_then(|_| $crate::LOGGER.write_str("\n"))
+                .unwrap();
+            }
+        }
+    };
+}
+
+
+#[macro_export]
+macro_rules! println {
+    () => {
+        #[cfg(test)]
+        {
+            ::std::println!();
+        }
+        #[cfg(not(test))]
+        {
+            use core::fmt::Write;
+            unsafe {
+                $crate::acquire_spinlock(&mut $crate::LOGGER.lock);
+                $crate::LOGGER.write_fmt(::core::format_args!("\n")).unwrap();
+                $crate::release_spinlock(&mut $crate::LOGGER.lock);
+            }
+        }
+    };
+    ($($arg:tt)*) => {
+        #[cfg(test)]
+        {
+            ::std::println!($($arg)*);
+        }
+        #[cfg(not(test))]
+        {
+            let args = ::core::format_args!($($arg)*);
+            unsafe {
+                use core::fmt::Write;
+
                 $crate::acquire_spinlock(&mut $crate::LOGGER.lock);
 
-                $crate::LOGGER.write_fmt(::core::format_args!($($arg)*))
+                $crate::LOGGER.write_fmt(args)
                 .and_then(|_| $crate::LOGGER.write_str("\n"))
                 .unwrap();
                 
@@ -129,5 +164,14 @@ pub fn enable_timestamp() {
         crate::acquire_spinlock(&mut crate::LOGGER.lock);    
         crate::LOGGER.log_timestamp = true;
         crate::release_spinlock(&mut crate::LOGGER.lock);
+    }
+}
+
+
+// Holding lock indefinitely effectively disables the logger
+// It also waits for any existing cores to complete logging
+pub fn disable_logger() {
+    unsafe {
+        crate::acquire_spinlock(&mut crate::LOGGER.lock);    
     }
 }

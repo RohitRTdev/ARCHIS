@@ -41,21 +41,22 @@ pub unsafe fn rdmsr(address: u32) -> u64 {
         "rdmsr",
         in("ecx") address,
         out("eax") eax, out("edx") edx,
-        options(nomem, nostack)
+        options(nostack, preserves_flags)
     );
-
+    
     (eax as u64) | ((edx as u64) << 32)
 }
 
 pub unsafe fn wrmsr(address: u32, value: u64) {
     let eax = value as u32;
     let edx = (value >> 32) as u32;
+    
     core::arch::asm!(
         "wrmsr",
         in("ecx") address,
         in("eax") eax,
         in("edx") edx,
-        options(nostack)
+        options(nostack, preserves_flags)
     );
 }
 

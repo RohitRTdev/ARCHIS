@@ -10,7 +10,7 @@ use core::alloc::Layout;
 use core::ptr::{null_mut, NonNull};
 use core::hint::likely;
 use core::sync::atomic::{AtomicU8, AtomicBool, AtomicPtr, Ordering};
-use common::{PAGE_SIZE, ceil_div, ptr_to_ref_mut};
+use common::{MemoryRegion, PAGE_SIZE, ceil_div, ptr_to_ref_mut};
 use super::PHY_MEM_CB;
 
 const ERROR_MESSAGE: &'static str = "System in bad state. Critical memory failure";
@@ -34,13 +34,6 @@ static IS_ADDR_SPACE_INIT: AtomicBool = AtomicBool::new(false);
 static ADDRESS_SPACES: Once<Spinlock<FixedList<Spinlock<VirtMemConBlk>, {Region1 as usize}>>> = Once::new();
 static KERN_ADDR_SPACE: Once<AtomicPtr<Spinlock<VirtMemConBlk>>> = Once::new();
 
-#[cfg(target_arch="x86_64")]
-static RESERVED_SPACE: [usize; 4] = [KERNEL_HALF_OFFSET, KERNEL_HALF_OFFSET + PAGE_SIZE, KERNEL_HALF_OFFSET + 2 * PAGE_SIZE, KERNEL_HALF_OFFSET + 3 * PAGE_SIZE];
-
-#[cfg(target_arch="x86_64")]
-static NEXT_AVL_SPACE: AtomicU8 = AtomicU8::new(0);
-
-
 // We cannot use Arc or something similar since this is activated prior to heap initialization
 static PER_CPU_ACTIVE_VCB: PerCpu<AtomicPtr<Spinlock<VirtMemConBlk>>> = PerCpu::new_with(
     [const {AtomicPtr::new(core::ptr::null_mut())}; MAX_CPUS]
@@ -59,8 +52,7 @@ impl VirtMemConBlk {
         let total_memory = (0x1ff << 39) - PAGE_SIZE;
         let num_pages_user = ceil_div(KERNEL_HALF_OFFSET_RAW - PAGE_SIZE, PAGE_SIZE);
 
-        // -4 since we reserve those pages for kernel address space page table
-        let num_pages_kernel = ceil_div((0x1ff << 39) - KERNEL_HALF_OFFSET_RAW, PAGE_SIZE) - 4;
+        let num_pages_kernel = ceil_div((0x1ff << 39) - KERNEL_HALF_OFFSET_RAW, PAGE_SIZE);
         let mut free_block_list= List::new();
         
         // Create separate blocks for user and kernel memory
@@ -69,7 +61,7 @@ impl VirtMemConBlk {
         }).unwrap();
         
         free_block_list.add_node(PageDescriptor {
-            num_pages: num_pages_kernel, start_phy_address: 0, start_virt_address: KERNEL_HALF_OFFSET + 4 * PAGE_SIZE, flags: 0, is_mapped: false
+            num_pages: num_pages_kernel, start_phy_address: 0, start_virt_address: KERNEL_HALF_OFFSET, flags: 0, is_mapped: false
         }).unwrap();
 
         Self {
@@ -346,7 +338,7 @@ impl VirtMemConBlk {
     // Allowed to map memory only if the address is reserved in the virtual address space
     // In case user wants to map new physical address to existing virtual address, then first unmap the memory
     // and then map the new physical address 
-    fn map_memory(&mut self, phys_addr: usize, virt_addr: usize, size: usize, flags: u8) -> Result<(), KError> {
+    fn map_memory(&mut self, phys_addr: usize, virt_addr: usize, size: usize, flags: u8, skip_map: bool) -> Result<(), KError> {
         let size = size + (size as *const u8).align_offset(PAGE_SIZE);
         let is_user = (flags & PageDescriptor::USER) != 0;
         if phys_addr & (PAGE_SIZE - 1) != 0 || virt_addr & (PAGE_SIZE - 1) != 0 {
@@ -395,10 +387,6 @@ impl VirtMemConBlk {
                 is_mapped: false
             };
             
-            //if self.alloc_block_list.query_free_nodes() < 2 {
-            //    return Err(KError::OutOfMemory);
-            //} 
-            
             unsafe {
                 self.alloc_block_list.remove_node(NonNull::from(desc));
             }
@@ -416,13 +404,16 @@ impl VirtMemConBlk {
             info!("map_memory could not reserve memory of size:{} at address:{:#X}", size, virt_addr);
             return Err(KError::OutOfMemory);
         }
+
+        if !skip_map {
+            self.page_mapper.map_memory(virt_addr, phys_addr, size, flags);
+        }
         
-        self.page_mapper.map_memory(virt_addr, phys_addr, size, flags);
         Ok(())
     }
 
     // This unmaps the memory, but the virtual address space would still be reserved
-    fn unmap_memory(&mut self, virt_addr: usize, size: usize, is_user: bool) -> Result<*mut u8, KError> {
+    fn unmap_memory(&mut self, virt_addr: usize, size: usize, is_user: bool, skip_map: bool) -> Result<*mut u8, KError> {
         let size = size + (size as *const u8).align_offset(PAGE_SIZE);  
         
         let num_pages = ceil_div(size, PAGE_SIZE);
@@ -442,6 +433,11 @@ impl VirtMemConBlk {
 
         let phy_addr; 
         if let Some(desc) = blk {
+            // Zero the memory before reclaiming it
+            unsafe {
+                (virt_addr as *mut u8).write_bytes(0, size);
+            }
+            
             desc.is_mapped = false;
 
             phy_addr = desc.start_phy_address;
@@ -451,19 +447,17 @@ impl VirtMemConBlk {
             // In case caller tries to free memory which has not been allocated, then we return here
             return Err(KError::InvalidArgument);
         } 
-        
-        self.page_mapper.unmap_memory(virt_addr, size);
+
+        if !skip_map {
+            self.page_mapper.unmap_memory(virt_addr, size);
+        }
     
         Ok(phy_addr as *mut u8)
     }
 
 
     pub fn clone(parent_vcb: VCB, proc_id: usize) -> Result<VCB, KError> {
-        // We need to hold the lock here before mapping begins. 
-        // No other memory allocations must happen during this time
-        let mut addr_space_list = ADDRESS_SPACES.get().unwrap().lock();
         info!("Cloning kernel virtual address space for process id {}", proc_id);
-        
         let (free_list, alloc_list, total_mem, avl_mem) = {
             let parent_vcb = unsafe {
                 (*parent_vcb.as_ptr()).lock()
@@ -489,10 +483,12 @@ impl VirtMemConBlk {
             (free_list, alloc_list, total_mem, avl_mem)
         };
 
-        let mut page_mapper = PageMapper::new(false, proc_id);
+        let mut page_mapper = PageMapper::clone(proc_id);
 
         for blk in alloc_list.iter() {
-            if blk.is_mapped {
+            // Only need to explicitly map those blocks that are part of kernel memory
+            // but not in the kernel half
+            if blk.is_mapped && blk.start_virt_address < KERNEL_HALF_OFFSET {
                 // If page mapper fails, kernel panics, right now we don't have a fallback
                 debug!("Mapping memory blk => Virtual={:#X}, physical={:#X}, pages={:#X}, is_mmio={}",
             blk.start_virt_address, blk.start_phy_address, blk.num_pages, blk.flags & PageDescriptor::MMIO != 0);
@@ -513,11 +509,11 @@ impl VirtMemConBlk {
             proc_id
         };
 
+        let mut addr_space_list = ADDRESS_SPACES.get().unwrap().lock();
         addr_space_list.add_node(Spinlock::new(new_virtual_allocator))?;
 
     
         let new_vcb = NonNull::from(&**addr_space_list.last().unwrap());
-        
         Ok(new_vcb)
     }
 
@@ -535,7 +531,6 @@ impl VirtMemConBlk {
         {
             let vcb = {
                 // Remove this vcb from the list of address spaces
-                
                 let mut addr_spaces = ADDRESS_SPACES.get().unwrap().lock();
 
                 addr_spaces.find_and_remove(|this_vcb| {
@@ -559,7 +554,7 @@ impl VirtMemConBlk {
 
 // This is only to be called from scheduler (when scheduler lock is held)
 pub unsafe fn set_address_space(vcb: VCB) {
-    PER_CPU_ACTIVE_VCB.local().store(vcb.as_ptr() as *mut _, Ordering::SeqCst);
+    PER_CPU_ACTIVE_VCB.local().store(vcb.as_ptr() as *mut _, Ordering::Release);
 
     vcb.as_ref().lock().page_mapper.set_address_space();
 }
@@ -596,9 +591,9 @@ pub fn ap_init() {
 
 
 // When the page mapper needs to map page to current address space, but the page mapper
-// is not the active mapper, so it uses this utility function
-// This temporarily maps the page table onto the current active address space so that page mapper can access it
-#[cfg(target_arch="x86_64")]
+// is not the active mapper (This happens when mapping kernel memory during process clone & destruction phase),
+// so it uses this utility function. This temporarily maps the page table onto the 
+// current active address space so that page mapper can access it
 pub fn map_page_table(phy_addr: usize, proc_id: usize) -> Result<usize, KError> {
     if likely(IS_ADDR_SPACE_INIT.load(Ordering::Relaxed)) {
         let kernel_addr_space = get_kernel_addr_space();
@@ -608,17 +603,15 @@ pub fn map_page_table(phy_addr: usize, proc_id: usize) -> Result<usize, KError> 
             // Kernel address space is not the active address space, but it's requesting page table
             // In this case, retrieve pre-allocated virtual address
             // This is safe to do here, since kernel address space lock is held and no other task can request from the reserved space 
-            let virt_addr = if proc_id == 0 {
-                RESERVED_SPACE[(NEXT_AVL_SPACE.fetch_add(1, Ordering::Relaxed) % 4) as usize] as *mut u8
-            }
-            else {
-                // Reserve some virtual space from kernel address space for the page table
-                // The physical memory for this is already allocated by the page mapper
-                (*kernel_addr_space.as_ptr()).lock().allocate(Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap(), false)?
-            };
+            assert!(proc_id != 0);
+            // Reserve some virtual space from kernel address space for the page table
+            // The physical memory for this is already allocated by the page mapper
+            let virt_addr = (*kernel_addr_space.as_ptr())
+            .lock()
+            .allocate(Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap(), false)?;
 
 
-            (*active_vcb.as_ptr()).lock().map_memory(phy_addr, virt_addr.addr(), PAGE_SIZE, 0)?;
+            (*active_vcb.as_ptr()).lock().map_memory(phy_addr, virt_addr.addr(), PAGE_SIZE, 0, false)?;
         
             Ok(virt_addr as usize)
         }
@@ -636,10 +629,9 @@ pub fn unmap_page_table(virt_addr: usize, proc_id: usize) -> Result<(), KError> 
         let active_vcb = get_active_vcb();
 
         unsafe {
-            (*active_vcb.as_ptr()).lock().unmap_memory(virt_addr,  PAGE_SIZE, false)?;
-            if proc_id != 0 {
-                (*kernel_addr_space.as_ptr()).lock().deallocate(virt_addr as *mut u8, Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap())?;
-            }
+            assert!(proc_id != 0);
+            (*active_vcb.as_ptr()).lock().unmap_memory(virt_addr,  PAGE_SIZE, false, false)?;
+            (*kernel_addr_space.as_ptr()).lock().deallocate(virt_addr as *mut u8, Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap())?;
         }
     }
     else {
@@ -676,9 +668,9 @@ pub fn allocate_memory(layout: Layout, flags: u8) -> Result<*mut u8, KError> {
             let phy_addr = PHY_MEM_CB.get().unwrap().lock().allocate(layout)?;
 
             unsafe {&*active_addr_space.as_ptr()}
-            .lock().map_memory(phy_addr.addr(), virt_addr.addr(), layout.size(), flags)?;
+            .lock().map_memory(phy_addr.addr(), virt_addr.addr(), layout.size(), flags, false)?;
             
-            PageMapper::invalidate_other_cores();
+            //PageMapper::invalidate_other_cores(MemoryRegion{base_address: virt_addr.addr(), size: layout.size()});
 
             Ok(virt_addr as *mut u8)
         }
@@ -697,12 +689,26 @@ pub fn allocate_memory(layout: Layout, flags: u8) -> Result<*mut u8, KError> {
 
             if flags & PageDescriptor::NO_ALLOC == 0 {
                 let phy_addr = PHY_MEM_CB.get().unwrap().lock().allocate(layout)?;                
-
-                // Now map that memory into all the address spaces that are present
-                for addr_space in ADDRESS_SPACES.get().unwrap().lock().iter() {
-                    addr_space.lock().map_memory(phy_addr as usize, virt_addr as usize, layout.size(), flags)?;
+                let active_addr_space = get_active_vcb();
+                // This call is for registering the mapping with the control structures
+                if kern_addr_space.as_ptr() != active_addr_space.as_ptr() {
+                    unsafe {
+                        (*kern_addr_space.as_ptr()).lock().map_memory(
+                        phy_addr.addr(),
+                        virt_addr.addr(),
+                        layout.size(),
+                        flags,
+                        true)?;
+                    }
                 }
-                PageMapper::invalidate_other_cores();
+
+                // Now map that memory into all address spaces
+                unsafe {
+                    (*active_addr_space.as_ptr())
+                    .lock()
+                    .map_memory(phy_addr.addr(), virt_addr.addr(), layout.size(), flags, false)?;
+                } 
+                //PageMapper::invalidate_other_cores(MemoryRegion{base_address: virt_addr.addr(), size: layout.size()});
             }
             
             Ok(virt_addr as *mut u8)
@@ -724,13 +730,19 @@ pub fn deallocate_memory(addr: *mut u8, layout: Layout, flags: u8) -> Result<(),
             let active_addr_space = get_active_vcb();
             assert!(!(flags & PageDescriptor::USER != 0 && flags & PageDescriptor::NO_ALLOC != 0), "USER and NO_ALLOC flag combination not supported right now");
             
-            let phy_addr = unsafe {&*active_addr_space.as_ptr()}
-            .lock().unmap_memory(addr as usize, layout.size(), true)?;
+            let phy_addr = unsafe {
+                (*active_addr_space.as_ptr())
+                .lock()
+                .unmap_memory(addr as usize, layout.size(), true, false)?
+            };
             
             unsafe {
-                (*active_addr_space.as_ptr()).lock().deallocate(addr, layout)?
+                (*active_addr_space.as_ptr())
+                .lock()
+                .deallocate(addr, layout)?
             };
-            PageMapper::invalidate_other_cores();
+
+            PageMapper::invalidate_other_cores(MemoryRegion{base_address: addr.addr(), size: layout.size()});
 
             phy_addr
         }
@@ -741,16 +753,33 @@ pub fn deallocate_memory(addr: *mut u8, layout: Layout, flags: u8) -> Result<(),
             // Unmap this memory from all address spaces
             let mut phy_addr = null_mut();
             if flags & PageDescriptor::NO_ALLOC == 0 {
-                for addr_space in ADDRESS_SPACES.get().unwrap().lock().iter() {
-                    if addr_space.lock().proc_id == 0 {
-                        phy_addr = addr_space.lock().unmap_memory(addr as usize, layout.size(), false)?;            
-                    }
-                    else {
-                        addr_space.lock().unmap_memory(addr as usize, layout.size(), false)?;            
+                let active_addr_space = get_active_vcb();
+                
+                // This call is for registering the mapping with the control structures
+                if kern_addr_space.as_ptr() != active_addr_space.as_ptr() {
+                    phy_addr = unsafe {
+                        (*kern_addr_space.as_ptr()).lock().unmap_memory(
+                        addr.addr(),
+                        layout.size(),
+                        false,
+                        true)?
+                    };
+                    
+                    unsafe {
+                        (*active_addr_space.as_ptr())
+                        .lock()
+                        .unmap_memory(addr.addr(), layout.size(), false, true)?;
                     }
                 }
+                else {
+                    phy_addr = unsafe {
+                        (*active_addr_space.as_ptr())
+                        .lock()
+                        .unmap_memory(addr.addr(), layout.size(), false, false)?
+                    };
+                }
                 
-                PageMapper::invalidate_other_cores();
+                PageMapper::invalidate_other_cores(MemoryRegion{base_address: addr.addr(), size: layout.size()});
             }
 
             // Unreserve the virtual address from the kernel address space
@@ -778,19 +807,25 @@ pub fn deallocate_memory(addr: *mut u8, layout: Layout, flags: u8) -> Result<(),
 // Here, the user is responsible for the physical memory
 pub fn map_memory(phys_addr: usize, virt_addr: usize, size: usize, flags: u8) -> Result<(), KError> {
     if likely(IS_ADDR_SPACE_INIT.load(Ordering::Relaxed)) {
-        if flags & PageDescriptor::USER != 0 {
-            let active_addr_space = get_active_vcb();
-            unsafe {
-                (*active_addr_space.as_ptr()).lock().map_memory(phys_addr, virt_addr, size, flags)?;
+        let active_addr_space = get_active_vcb();
+        let kernel_addr_space = get_kernel_addr_space();
+        unsafe {
+            
+            // In case the current active address space is not the kernel address space
+            // we first modify the control structures (alloc and free block list) which 
+            // is only present in kernel address space (for kernel half of memory)
+            // Then we do the actual mapping (modify page tables) by calling the mapper in current active address space
+            if flags & PageDescriptor::USER == 0 && kernel_addr_space.as_ptr() != active_addr_space.as_ptr() {
+                (*kernel_addr_space.as_ptr())
+                .lock()
+                .map_memory(phys_addr, virt_addr, size, flags, true)?;
             }
+
+            (*active_addr_space.as_ptr())
+            .lock()
+            .map_memory(phys_addr, virt_addr, size, flags, false)?;
         }
-        else {
-            // Map that memory into all the address spaces that are present
-            for addr_space in ADDRESS_SPACES.get().unwrap().lock().iter() {
-                addr_space.lock().map_memory(phys_addr, virt_addr, size, flags)?;
-            }
-        }
-        PageMapper::invalidate_other_cores();
+        //PageMapper::invalidate_other_cores(MemoryRegion{base_address: virt_addr, size});
     }
     else {
         // Identity mapped, don't do anything
@@ -802,19 +837,22 @@ pub fn map_memory(phys_addr: usize, virt_addr: usize, size: usize, flags: u8) ->
 // Only to be called when memory has been previously mapped using map_memory
 pub fn unmap_memory(virt_addr: usize, size: usize, flags: u8) -> Result<(), KError> {
     if likely(IS_ADDR_SPACE_INIT.load(Ordering::Relaxed)) {
-        if flags & PageDescriptor::USER != 0 {
-            let active_addr_space = get_active_vcb();
-            unsafe {
-                (*active_addr_space.as_ptr()).lock().unmap_memory(virt_addr, size, true)?;
+        let active_addr_space = get_active_vcb();
+        let kernel_addr_space = get_kernel_addr_space();
+        unsafe {
+
+            if flags & PageDescriptor::USER == 0 && kernel_addr_space.as_ptr() != active_addr_space.as_ptr() {
+                (*kernel_addr_space.as_ptr())
+                .lock()
+                .unmap_memory(virt_addr, size, false, true)?;
             }
+
+
+            (*active_addr_space.as_ptr())
+            .lock()
+            .unmap_memory(virt_addr, size, flags & PageDescriptor::USER != 0, false)?;
         }
-        else {
-            // Unmap this memory from all the address spaces that are present
-            for addr_space in ADDRESS_SPACES.get().unwrap().lock().iter() {
-                addr_space.lock().unmap_memory(virt_addr, size, false)?;
-            }
-        }
-        PageMapper::invalidate_other_cores();
+        PageMapper::invalidate_other_cores(MemoryRegion{base_address: virt_addr, size});
     }
     else {
         // Identity mapped, don't do anything
@@ -896,7 +934,7 @@ pub fn virtual_allocator_init() {
 
         kernel_addr_space.map_memory(
             item.value.base_address, item.value.base_address, 
-            item.value.size, item.flags).unwrap();
+            item.value.size, item.flags, false).unwrap();
     });
 
     // Now map remaining set of regions onto upper half of memory
@@ -910,7 +948,7 @@ pub fn virtual_allocator_init() {
         info!("Mapping region of size:{} with physical address:{:#X} to virtual address:{:#X}", 
         item.value.size, item.value.base_address, virt_addr as usize);
 
-        kernel_addr_space.map_memory(item.value.base_address, virt_addr as usize, item.value.size, item.flags).unwrap();
+        kernel_addr_space.map_memory(item.value.base_address, virt_addr as usize, item.value.size, item.flags, false).unwrap();
         
         // Update user of new location
         if let OffsetMapped(f) = &item.map_type {
@@ -933,7 +971,7 @@ pub fn virtual_allocator_init() {
     #[cfg(not(feature = "stack_down"))]
     let stack_base = stack_raw;
 
-    kernel_addr_space.map_memory(stack_raw_phys.addr(), stack_base.addr(), cpu::INIT_STACK_SIZE, 0)
+    kernel_addr_space.map_memory(stack_raw_phys.addr(), stack_base.addr(), cpu::INIT_STACK_SIZE, 0, false)
     .expect("Failed to map boot cpu stack to kernel virtual address space!");
 
     debug!("Created boot cpu stack with virtual address: {:#X} and physical address: {:#X}", stack_base.addr(), stack_raw_phys.addr());

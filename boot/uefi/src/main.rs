@@ -54,7 +54,7 @@ fn setup_memory_map() -> ArrayTable {
         }
 
         let mem_type = match desc.ty {
-                MemoryType::BOOT_SERVICES_CODE | MemoryType::BOOT_SERVICES_DATA |
+                MemoryType::BOOT_SERVICES_CODE | 
                 MemoryType::CONVENTIONAL | MemoryType::PERSISTENT_MEMORY => {
                     MemType::Free
                 },   

@@ -1,9 +1,11 @@
+use common::{MemoryRegion, PAGE_SIZE};
 use kernel_intf::{debug, info};
 use core::sync::atomic::{AtomicUsize, AtomicPtr, Ordering};
 use core::ptr::NonNull;
 use crate::cpu::{self, MAX_CPUS, PerCpu, general_interrupt_handler};
 use crate::hal::{enable_scheduler_timer, get_core, get_per_cpu_base, get_per_cpu_kernel_base};
 use crate::infra;
+use crate::sched::get_current_task_id;
 use crate::sync::Spinlock;
 use super::{lapic, timer};
 use crate::mem::on_page_fault;
@@ -29,10 +31,11 @@ pub const IPI_VECTOR: usize = 37;
 pub const SYS_VECTOR: usize = 38;
 const USER_VECTOR_START: usize = 39;
 
+
 #[derive(Clone, Copy)]
 pub enum IPIRequestType {
     SchedChange,
-    TlbInvalidate,
+    TlbInvalidate(MemoryRegion),
     Shutdown
 }
 
@@ -51,6 +54,10 @@ pub static mut DEBUG_HANDLER_FN: Option<fn()> = None;
 
 static PER_CPU_GLOBAL_CONTEXT: PerCpu<AtomicPtr<u8>> = PerCpu::new_with(
     [const {AtomicPtr::new(core::ptr::null_mut())}; MAX_CPUS]
+);
+
+static PER_CPU_LAST_CONTEXT: PerCpu<Spinlock<(CPUContext, CPUContext)>> = PerCpu::new_with(
+    [const {Spinlock::new((CPUContext::new(), CPUContext::new()))}; MAX_CPUS]
 );
 
 static IPI_REQUESTS: Spinlock<FixedList<IPIRequest, {Region4 as usize}>> = Spinlock::new(List::new());
@@ -125,7 +132,7 @@ const _: () = {
 };
 
 impl CPUContext {
-    fn new() -> Self {
+    const fn new() -> Self {
         CPUContext { pad: 0, r15: 0, r14: 0, r13: 0, r12: 0, r11: 0, r10: 0, r9: 0, r8: 0, rbp: 0, rdi: 0, rsi: 0, 
             rdx: 0, rcx: 0, rbx: 0, rax: 0, vector: 0, rip: 0, cs: 0, rflags: 0, rsp: 0, ss: 0 
         }
@@ -134,17 +141,20 @@ impl CPUContext {
 
 #[no_mangle]
 extern "C" fn global_interrupt_handler(vector: u64, cpu_context: *const CPUContext) -> *const CPUContext {
-    PER_CPU_GLOBAL_CONTEXT.local().store(cpu_context as *mut u8, Ordering::Relaxed);
-
+    PER_CPU_GLOBAL_CONTEXT.local().store(cpu_context as *mut u8, Ordering::Release);
+    let first_con = unsafe {*cpu_context};
     unsafe {
         VECTOR_TABLE[vector as usize](vector as usize);
     }
 
-    if vector as usize > DEBUG_VECTOR {
+    if vector as usize > DEBUG_VECTOR && vector as usize != SYS_VECTOR {
         eoi();
     }
     
-    PER_CPU_GLOBAL_CONTEXT.local().load(Ordering::Relaxed) as *const CPUContext
+    let con = PER_CPU_GLOBAL_CONTEXT.local().load(Ordering::Acquire) as *const CPUContext;
+    
+    *PER_CPU_LAST_CONTEXT.local().lock() = (first_con, unsafe {*con});
+    con
 }
 
 fn default_handler(idx: usize) {
@@ -160,12 +170,11 @@ pub fn init() {
                 if idx == NMI_FAULT_VECTOR || idx == DOUBLE_FAULT_VECTOR {
                     infra::disable_callstack();
                 }
-
                 let con = *(fetch_context() as *const CPUContext);
+                let saved_con = *(PER_CPU_LAST_CONTEXT.local().lock());
                 debug!("{:?}", con);
                 debug!("gs={:#X}, kernel_gs={:#X}", get_per_cpu_kernel_base(), get_per_cpu_base());
-
-
+                debug!("Last saved context: {:?}\n Second context: {:?}", saved_con.0, saved_con.1);
                 if idx == DOUBLE_FAULT_VECTOR {
                     panic!("{} exception!\nPossible stack overflow??", EXCP_STRINGS[idx]);
                 }
@@ -222,7 +231,7 @@ fn timer_handler(_vector: usize) {
     crate::sched::schedule();
 
     // Reload the timer
-    lapic::setup_timer_value(timer::BASE_COUNT.local().load(Ordering::Relaxed) as u32);
+    lapic::setup_timer_value(timer::BASE_COUNT.local().load(Ordering::Acquire) as u32);
 }
 
 // Do the same thing as timer handler, except we don't reload the timer register and we won't send EOI
@@ -305,14 +314,19 @@ fn ipi_handler(_vector: usize) {
                 match req_info.req_type {
                     IPIRequestType::SchedChange => {
                         debug!("Got schedule change request on core {}", core);
-                        enable_scheduler_timer();
+                        //enable_scheduler_timer();
                     },
-                    IPIRequestType::TlbInvalidate => {
+                    IPIRequestType::TlbInvalidate(desc) => {
                         // Reload cr3
                         unsafe {
-                            debug!("Got invalidate request on core {}", core);
-                            let cr3 = asm::read_cr3();
-                            asm::write_cr3(cr3);
+                            debug!("Got invalidate request on core {} with base: {:#X} and size: {}",
+                            core, desc.base_address, desc.size);
+                            //debug!("Before: {:?}", unsafe {*(fetch_context() as *const CPUContext)});
+                            for page in 0..desc.size / PAGE_SIZE {
+                                let real_page = (page * PAGE_SIZE + desc.base_address) as u64;
+                                asm::invlpg(real_page);
+                            }
+                            //debug!("After: {:?}", unsafe {*(fetch_context() as *const CPUContext)});
                         }
                     },
                     IPIRequestType::Shutdown => {
@@ -321,7 +335,7 @@ fn ipi_handler(_vector: usize) {
                     }
                 }
 
-                req_info.tag = true;
+                //req_info.tag = true;
             },
             None => {
                 break;

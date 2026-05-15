@@ -1,12 +1,12 @@
 use core::alloc::Layout;
 use core::sync::atomic::{Ordering, AtomicUsize};
 use core::hint::unlikely;
-use crate::mem::MapFetchType;
+use core::ptr::copy_nonoverlapping;
 use crate::cpu;
 use crate::{hal::x86_64::features::CPU_FEATURES, mem};
 use crate::hal::{VirtAddr, notify_core};
 use kernel_intf::info;
-use common::{PAGE_SIZE, ceil_div, en_flag, usize_to_ref_mut};
+use common::{MemoryRegion, PAGE_SIZE, ceil_div, en_flag, usize_to_ref_mut};
 use super::asm;
 use super::IPIRequestType;
 
@@ -46,6 +46,8 @@ const TOTAL_ENTRIES: usize = 512;
 impl PageMapper {
     #[cfg(not(test))]
     pub fn new(is_kernel_pml4: bool, proc_id: usize) -> Self {
+        // All remaining address spaces are created by cloning the kernel virtual address space
+        assert!(proc_id == 0);
         let layout = Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap();
         let pml4_phys = mem::allocate_memory(layout, 0)
                                 .expect("Page base table allocation failed!");
@@ -54,11 +56,31 @@ impl PageMapper {
         info!("Creating new address space with pml4 virtual address:{:#X} and physical address:{:#X}", pml4, pml4_phys.addr());
 
         // Initialize the page table (Recursive mapping)
+        let raw_addr = pml4 as *mut u64;
         unsafe {
-            let raw_addr = pml4 as *mut u64;
             raw_addr.write_bytes(0, TOTAL_ENTRIES);
             *raw_addr.add(RECURSIVE_SLOT as usize) = (pml4_phys as u64 & PTE::PHY_ADDR_MASK) | PTE::PWT | PTE::RW | PTE::P; 
         }
+
+        // Create the PDPT for the kernel half of virtual address space
+        for entry in TOTAL_ENTRIES / 2 .. TOTAL_ENTRIES - 1 {
+            let pdpt = mem::allocate_memory(layout, 0)
+                                .expect("Page directory pointer table allocation failed!");
+            
+            let pdpt_virt = mem::map_page_table(pdpt.addr(), proc_id)
+            .expect("Failed to map pdpt during kernel address space creation!") as *mut u64;
+            
+            unsafe {
+                pdpt_virt.write_bytes(0, TOTAL_ENTRIES);
+                *raw_addr.add(entry) = (pdpt as u64 & PTE::PHY_ADDR_MASK) | PTE::PWT | PTE::RW | PTE::P; 
+            }
+
+            mem::unmap_page_table(pdpt_virt.addr(), proc_id)
+            .expect("Failed to unmap pdpt during kernel address space creation!");
+        }
+        
+        mem::unmap_page_table(pml4, proc_id)
+        .expect("Failed to unmap pml4 to process address space during kernel address space creation!");
 
         if is_kernel_pml4 {
             KERNEL_PML4.store(pml4_phys.addr(), Ordering::SeqCst);
@@ -82,6 +104,52 @@ impl PageMapper {
         }
     }
 
+    // Clone the kernel address space from the current active address space
+    pub fn clone(proc_id: usize) -> Self {
+        assert!(proc_id != 0);
+        let parent_pml4 = Self::recursive_map_addr(RECURSIVE_SLOT, RECURSIVE_SLOT, RECURSIVE_SLOT);
+        
+        let layout = Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap();
+        let pml4_phys = mem::allocate_memory(layout, 0)
+                                .expect("Page base table allocation failed!");
+        
+        let pml4 = mem::map_page_table(pml4_phys.addr(), proc_id).expect("Failed to map pml4 to process address space");
+        
+        // Initialize the page table 
+        unsafe {
+            (pml4 as *mut u64).write_bytes(0, TOTAL_ENTRIES);
+        }
+
+        let raw_addr_half = unsafe {
+            (pml4 as *mut u64).add(TOTAL_ENTRIES / 2)
+        };
+
+        let parent_addr_half = unsafe {
+            (parent_pml4 as *mut u64).add(TOTAL_ENTRIES / 2)
+        };
+
+
+        // Share the page tables used by kernel virtual address space for the kernel half
+        unsafe {
+            copy_nonoverlapping(parent_addr_half, raw_addr_half, TOTAL_ENTRIES / 2 - 1);
+
+            // Create the recursive page table mapping
+            *(pml4 as *mut u64).add(RECURSIVE_SLOT as usize) = (pml4_phys as u64 & PTE::PHY_ADDR_MASK)
+            | PTE::PWT | PTE::RW | PTE::P; 
+        }
+
+
+        mem::unmap_page_table(pml4, proc_id)
+        .expect("Unable to unmap pml4 page table during clone!");
+
+        Self {
+            pml4_phys: pml4_phys as u64,
+            is_current: false,
+            proc_id,
+            is_allocated: false
+        }
+    }
+
     pub fn set_allocated(&mut self) {
         self.is_allocated = true;
     }
@@ -94,7 +162,6 @@ impl PageMapper {
 
     pub fn set_address_space(&mut self) {
         self.is_current = true;
-        core::sync::atomic::compiler_fence(Ordering::SeqCst);
         unsafe {
             // Set page table as write through
             asm::write_cr3((self.pml4_phys & PTE::PHY_ADDR_MASK) | PTE::PWT);
@@ -118,6 +185,8 @@ impl PageMapper {
         assert!(virt_addr & 0xfff == 0 && size & 0xfff == 0);
         let num_pages = ceil_div(size, PAGE_SIZE);
         self.set_current();
+
+        assert!(self.is_current);
         for i in 0..num_pages {
             let va = virt_addr + i * PAGE_SIZE;
             self.unmap_page(va as u64);
@@ -135,8 +204,7 @@ impl PageMapper {
     // In other cases, two tasks won't be working with same physical memory
     // The one legitimate case where this is true is for shared memory (shmem). However, we don't have this concept yet in the kernel.
     // The different cores will require some external synchronization mechanism to make it work. For now, this will do.
-    pub fn invalidate_other_cores() {
-        core::sync::atomic::fence(Ordering::SeqCst);
+    pub fn invalidate_other_cores(desc: MemoryRegion) {
         let cur_core = super::get_core();
         let total_cores = cpu::get_total_cores();
         
@@ -146,7 +214,7 @@ impl PageMapper {
 
         for core in 0..total_cores {
             if core != cur_core {
-                notify_core(IPIRequestType::TlbInvalidate, core, true);
+                notify_core(IPIRequestType::TlbInvalidate(desc.clone()), core, false);
             }
         }
     }
@@ -312,7 +380,6 @@ impl PageMapper {
         phy_addr
     }
 
-
     // Allocates 1 page table and returns it's virtual and physical memory
     fn allocate_page_table(&self) -> (usize, usize) {
         // If current active space, then just give the physical memory as caller will recursively map it
@@ -363,9 +430,8 @@ impl PageMapper {
         
         // Go over PML4 entries 
         let layout = Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap();
-        // Skip the last entry. That is the recursive mapping
-        // It contains the PML4 address itself, which we deallocate at the end
-        for pml4_entry in 0..TOTAL_ENTRIES-1 {
+        // Only remove the page tables associated with user half of the memory
+        for pml4_entry in 0..TOTAL_ENTRIES / 2 {
             if (pml4[pml4_entry] & PTE::P) == 0 {
                 continue;
             }

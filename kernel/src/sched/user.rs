@@ -15,10 +15,11 @@ extern "C" {
 }
 
 
-const MAX_SYSCALLS: usize = 5;
+const MAX_SYSCALLS: usize = 6;
 
 static SYSCALL_TABLE: [fn(&[u64; MAX_ARCH_ARGS]) -> i64; MAX_SYSCALLS] = [
     sys_exit_handler,
+    sys_thread_exit_handler,
     sys_write_handler,
     sys_delay_handler,
     sys_thread_handler,
@@ -96,6 +97,14 @@ fn sys_exit_handler(_args: &[u64; MAX_ARCH_ARGS]) -> i64 {
     let id = get_current_process_id().expect("Called sys_exit_handler from idle task!");
 
     kill_process(id);
+
+    E_SUCCESS
+}
+
+fn sys_thread_exit_handler(_args: &[u64; MAX_ARCH_ARGS]) -> i64 {
+    let id = get_current_task_id().expect("Called sys_thread_exit_handler from idle task!");
+
+    kill_thread(id);
 
     E_SUCCESS
 }

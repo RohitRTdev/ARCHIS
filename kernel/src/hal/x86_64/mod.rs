@@ -155,9 +155,10 @@ pub fn fire_debug_interrupt() {
 }
 
 #[cfg(debug_assertions)]
-pub fn unwind_stack(max_depth: usize, stack_base: usize, address: &mut [usize]) -> usize {
-    let mut base = get_current_stack_base();
-    let mut depth: usize = 0;
+pub fn unwind_stack(max_depth: usize, stack_base: usize, address: &mut [usize]) -> (usize, usize) {
+    let init_base = get_current_stack_base();
+    let mut base = init_base;
+    let mut depth=  0;
     while depth < max_depth && stack_base >= base + 8 {
         let prev_base = base;
         let fn_addr = unsafe {*((base + 8) as *const u64)} as usize;
@@ -171,7 +172,7 @@ pub fn unwind_stack(max_depth: usize, stack_base: usize, address: &mut [usize]) 
         depth += 1;
     }
 
-    depth
+    (depth, init_base)
 }
 
 pub fn init() -> ! {

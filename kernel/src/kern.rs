@@ -66,6 +66,7 @@ fn clear_keyboard_output_buffer() {
 
 static TASK_COUNTER: Once<KSem> = Once::new();
 static WAIT_EVENT: Once<KSem> = Once::new();
+static WAIT_EVENT2: Once<KSem> = Once::new();
 
 // Checking thread subsystem
 fn task_spawn() -> ! {
@@ -172,6 +173,17 @@ fn process_spawn() -> ! {
     hal::halt();
 }
 
+static QUEUE: Spinlock<DynList<[i64; 64]>> = Spinlock::new(List::new());
+
+fn thread_creator() -> ! {
+    let id = sched::get_current_task_id().unwrap();
+    loop {
+        sched::delay_ms(1000);
+        debug!("Running thread with id {}", id);
+        sched::create_thread(thread_creator).expect("Failed to create child thread!");
+    }
+}
+
 fn kern_main() -> ! {
     info!("Starting main kernel init");
     
@@ -210,11 +222,39 @@ fn kern_main() -> ! {
         user_proc0.wait().expect("Unable to wait on user process");
     }
 
-    info!("Main task looping");
+    //sched::create_thread(thread_creator).expect("Failed to create kernel thread!");
+
+    //sched::create_thread(|| {
+    //    loop {
+    //        {
+    //            let mut queue = QUEUE.lock();
+    //            queue.add_node([0; 64]).expect("Failed to add node from producer!");
+    //            let addr = queue.last().unwrap().as_ptr().addr();
+    //            debug!("Added new node at address {:#X}", addr);
+    //        }
+    //        sched::delay_ms(1000);
+    //    }
+    //}).expect("Failed to create producer thread!");
+
+    //sched::create_process(|| {
+    //   loop {
+    //        {
+    //            let mut queue = QUEUE.lock();
+    //            let node = queue.first();
+    //            if node.is_some() {
+    //                let node = node.unwrap();
+    //                debug!("[Consumer]: Found node at address: {:#X}", node.as_ptr().addr());
+    //            }
+    //            queue.pop_node();
+    //        }
+    //        sched::delay_ms(1000);
+    //   } 
+    //}, false).expect("Failed to create consumer process!");
+
 
     loop {
         sched::delay_ms(1000);
-        info!("Main task running...");
+        info!("Main task looping");
     }
 
     hal::sleep();

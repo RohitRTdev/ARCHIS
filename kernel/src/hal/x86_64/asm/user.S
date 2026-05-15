@@ -83,24 +83,23 @@ user_fn_start:
     movq $5, %rbx
 
 start_label:
-    movq $1, %rax
+    movq $2, %rax
     leaq msg(%rip), %rdi
     movq $13, %rsi
     syscall
 
-    movq $2, %rax
+    movq $3, %rax
     movq $1000, %rdi
     syscall
     decq %rbx
     jnz start_label
 
-    movq $3, %rax
-    syscall
     int $38
-    jmp user_fn_start
-
-    movq $0, %rax
+    // movq $1, %rax
+    // syscall
+    movq $4, %rax
     syscall
+    jmp user_fn_start
 msg: 
     .ascii "Hello, world!"
 

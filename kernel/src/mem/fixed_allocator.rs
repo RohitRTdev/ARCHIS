@@ -238,5 +238,5 @@ where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
 
 // This function should be called before using fixed allocator routines
 pub fn setup_heap() {
-    OLD_HEAP_PTR.store(HEAP.lock().buffer.as_ptr().addr() , Ordering::Relaxed);
+    OLD_HEAP_PTR.store(HEAP.lock().buffer.as_ptr().addr() , Ordering::SeqCst);
 }

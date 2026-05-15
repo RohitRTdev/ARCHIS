@@ -4,7 +4,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use common::elf::*;
 use rustc_demangle::demangle;
 use crate::{cpu, logger};
-use kernel_intf::println;
+use kernel_intf::{debug, panic_println};
 use crate::sync::Spinlock;
 use crate::hal::{self, IPIRequestType, notify_core};
 use crate::module::*;
@@ -15,6 +15,7 @@ static MP_INIT: AtomicBool = AtomicBool::new(false);
 static GLOBAL_PANIC_LOCK: Spinlock<bool> = Spinlock::new(false);
 const STACK_UNWIND_DEPTH: usize = 16;
 
+#[allow(dead_code)]
 pub fn common_panic_handler(mod_name: &str, info: &PanicInfo) -> ! {
     let _guard =  GLOBAL_PANIC_LOCK.lock();
     let core = hal::get_core();
@@ -31,44 +32,74 @@ pub fn common_panic_handler(mod_name: &str, info: &PanicInfo) -> ! {
         
     }
     
-    logger::set_panic_mode();
+    kernel_intf::disable_logger();
+    logger::set_panic_mode(core as u8);
 
     if early_panic_phase || DISABLE_CALLSTACK.load(Ordering::Acquire) {
-        println!("Kernel panic on core {}!!", core);
-        println!("Message: {}", info.message());
-        println!("Module: {}", mod_name);
+        panic_println!("Kernel panic on core {}!!", core);
+        panic_println!("Message: {}", info.message());
+        panic_println!("Module: {}", mod_name);
         
         hal::halt();
     }
     
-    println!("Kernel panic on core {}!!", core);
-    println!("Message: {}", info.message());
-    println!("Module: {}", mod_name);
+    panic_println!("Kernel panic on core {}!!", core);
+    panic_println!("Message: {}", info.message());
+    panic_println!("Module: {}", mod_name);
 
     let stack_base = cpu::get_panic_base(); 
+    start_unwind(mod_name, stack_base, true);
+
+    hal::halt();
+}
+
+pub fn start_unwind(mod_name: &str, stack_base: usize, panic_mode: bool) {
     let mut unwind_list: [usize; STACK_UNWIND_DEPTH] = [0; STACK_UNWIND_DEPTH];
 
     #[cfg(debug_assertions)]
     {
-        println!("Callstack:");
+        if panic_mode {
+            panic_println!("Callstack:");
+        }
+        else {
+            debug!("Callstack:");
+        }
 
-        let actual_depth = hal::unwind_stack(STACK_UNWIND_DEPTH, stack_base, unwind_list.as_mut_slice());
+        let (actual_depth, cur_base) = hal::unwind_stack(STACK_UNWIND_DEPTH, stack_base, unwind_list.as_mut_slice());
         let start_depth = if mod_name == env!("CARGO_PKG_NAME") { 3 } else { 4 };
+
+        if actual_depth <= start_depth + 1 {
+            if panic_mode {
+                panic_println!("(Empty) => Current stack base: {:#X}, Current stack top: {:#X}", cur_base, stack_base);
+            }
+            else {
+                debug!("(Empty) => Current stack base: {:#X}, Current stack top: {:#X}", cur_base, stack_base);
+            }
+        }
 
         for addr in start_depth..actual_depth {
             if unwind_list[addr] != 0 {
                 let sym_info = symbol_trace(unwind_list[addr]);
                 if let Some(sym) = sym_info {
-                    println!("{:#X}({}!{}+{:#X})", unwind_list[addr], sym.0, demangle(sym.1), sym.2);
+                    if panic_mode {
+                        panic_println!("{:#X}({}!{}+{:#X})", unwind_list[addr], sym.0, demangle(sym.1), sym.2);
+                    }
+                    else {
+                        debug!("{:#X}({}!{}+{:#X})", unwind_list[addr], sym.0, demangle(sym.1), sym.2);
+                    }
                 }
                 else {
-                    println!("{:#X}(??)", unwind_list[addr]);
+                    if panic_mode {
+                        panic_println!("{:#X}(??)", unwind_list[addr]);
+                    }
+                    else {
+                        debug!("{:#X}(??)", unwind_list[addr]);
+                    }
                 }
             }
         }
     }
 
-    hal::halt();
 }
 
 fn symbol_trace(addr: usize) -> Option<(&'static str, &'static str, usize)> {

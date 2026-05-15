@@ -190,6 +190,11 @@ pub fn get_current_task() -> Option<KThread> {
     Some(Arc::clone(unsafe { &*(cur_task_ptr as *const KThread) }))
 }
 
+//pub fn get_current_task() -> Option<KThread> {
+//    let con = SCHEDULER_CON_BLK.local().lock();
+//    Some(Arc::clone(unsafe {&**con.running_task.as_ref()?.as_ptr()}))
+//}
+
 // Use this, if you just want the id
 pub fn get_current_task_id() -> Option<usize> {
     Some(get_current_task()?.lock().get_id())
@@ -716,24 +721,104 @@ pub fn schedule() {
         update_timers(&mut sched_cb);
         
         if sched_cb.preemption_count > 0 {
-            return;
+            take(&mut sched_cb.notifier_list)
         }
+        else {
+            if sched_cb.running_task.is_some() {
+                let current_task = sched_cb.running_task.unwrap(); 
 
-        if sched_cb.running_task.is_some() {
-            let current_task = sched_cb.running_task.unwrap(); 
+                let mut task_info = unsafe {
+                    current_task.as_ref().lock()
+                };
 
-            let mut task_info = unsafe {
-                current_task.as_ref().lock()
-            };
+                task_info.quanta = task_info.quanta.saturating_sub(1);
+                let old_vcb = task_info.vcb.expect("VCB is none");
 
-            task_info.quanta = task_info.quanta.saturating_sub(1);
-            let old_vcb = task_info.vcb.expect("VCB is none");
+                // Switch to new task
+                if task_info.status == TaskStatus::WAITING || task_info.status == TaskStatus::TERMINATED ||
+                task_info.quanta == 0 {
+                    // First choose new task
+                    // We create NonNull here so that the node can later be removed
+                    let head_task = sched_cb.active_tasks.first().and_then(|item| {
+                        Some(NonNull::from(item))
+                    });
 
-            // Switch to new task
-            if task_info.status == TaskStatus::WAITING || task_info.status == TaskStatus::TERMINATED ||
-            task_info.quanta == 0 {
-                // First choose new task
-                // We create NonNull here so that the node can later be removed
+                    if head_task.is_some() {
+                        let mut head_task_info = unsafe {
+                            head_task.unwrap().as_ref().lock()
+                        };
+                        
+                        assert!(head_task_info.status == TaskStatus::ACTIVE); 
+                        head_task_info.status = TaskStatus::RUNNING;
+                        head_task_info.quanta = INIT_QUANTA;
+                        let new_context = head_task_info.context;
+                        let new_vcb = head_task_info.vcb.expect("VCB is none");
+
+                        let prev_context = fetch_context();
+                        task_info.context = prev_context;
+
+                        #[cfg(target_arch = "x86_64")] 
+                        {
+                            task_info.per_cpu_base = get_per_cpu_base();
+                        }
+
+                        if task_info.status == TaskStatus::RUNNING {
+                            task_info.status = TaskStatus::ACTIVE; 
+                        }
+
+                        // This ensures that list doesn't delete the node. It simply removes it from the list 
+                        let head_task = unsafe {
+                            ListNode::into_inner(sched_cb.active_tasks.remove_node(head_task.unwrap()))
+                        };
+
+                        if task_info.status == TaskStatus::WAITING {
+                            sched_cb.waiting_tasks.insert_node_at_tail(current_task);
+                        }
+                        else if task_info.status == TaskStatus::TERMINATED {
+                            sched_cb.terminated_tasks.insert_node_at_tail(current_task);
+                        }
+                        else {
+                            sched_cb.active_tasks.insert_node_at_tail(current_task);
+                        }
+
+                        sched_cb.running_task = Some(head_task);
+
+                        switch_address_space(old_vcb, new_vcb);
+                        set_panic_base(head_task_info.panic_base);
+                        switch_context(new_context);
+
+                        #[cfg(target_arch = "x86_64")]
+                        set_per_cpu_base(head_task_info.per_cpu_base);
+                    }
+                    else {
+                        if task_info.status != TaskStatus::RUNNING {
+                            let prev_context = fetch_context();
+                            task_info.context = prev_context;
+                            
+                            #[cfg(target_arch = "x86_64")] 
+                            {
+                                task_info.per_cpu_base = get_per_cpu_base();
+                            }
+
+                            if task_info.status == TaskStatus::WAITING {
+                                sched_cb.waiting_tasks.insert_node_at_tail(current_task);
+                            }
+                            else if task_info.status == TaskStatus::TERMINATED {
+                                debug!("Adding task {} to terminated list", task_info.id);
+                                sched_cb.terminated_tasks.insert_node_at_tail(current_task);
+                            }
+
+                            prep_idle_task(&mut sched_cb, old_vcb);
+                        }
+                        else {
+                            // No other task to run. Continue with this task
+                            task_info.quanta = INIT_QUANTA;
+                        }
+                    }
+                }
+            }
+            else {
+                // This means we're in idle task. Check and run any active tasks
                 let head_task = sched_cb.active_tasks.first().and_then(|item| {
                     Some(NonNull::from(item))
                 });
@@ -742,129 +827,49 @@ pub fn schedule() {
                     let mut head_task_info = unsafe {
                         head_task.unwrap().as_ref().lock()
                     };
-                    
+
                     assert!(head_task_info.status == TaskStatus::ACTIVE); 
                     head_task_info.status = TaskStatus::RUNNING;
                     head_task_info.quanta = INIT_QUANTA;
                     let new_context = head_task_info.context;
-                    let new_vcb = head_task_info.vcb.expect("VCB is none");
-
-                    let prev_context = fetch_context();
-                    task_info.context = prev_context;
-
-                    #[cfg(target_arch = "x86_64")] 
-                    {
-                        task_info.per_cpu_base = get_per_cpu_base();
-                    }
-
-                    if task_info.status == TaskStatus::RUNNING {
-                        task_info.status = TaskStatus::ACTIVE; 
-                    }
-
-                    // This ensures that list doesn't delete the node. It simply removes it from the list 
+                    
                     let head_task = unsafe {
                         ListNode::into_inner(sched_cb.active_tasks.remove_node(head_task.unwrap()))
                     };
-
-                    if task_info.status == TaskStatus::WAITING {
-                        sched_cb.waiting_tasks.insert_node_at_tail(current_task);
-                    }
-                    else if task_info.status == TaskStatus::TERMINATED {
-                        sched_cb.terminated_tasks.insert_node_at_tail(current_task);
-                    }
-                    else {
-                        sched_cb.active_tasks.insert_node_at_tail(current_task);
-                    }
-
                     sched_cb.running_task = Some(head_task);
+                    
+                    // Idle task uses the default kernel virtual address space
+                    let new_vcb = head_task_info.vcb.unwrap();
 
-                    switch_address_space(old_vcb, new_vcb);
+                    switch_address_space_from_idle(new_vcb);
                     set_panic_base(head_task_info.panic_base);
                     switch_context(new_context);
-
+                    
                     #[cfg(target_arch = "x86_64")]
                     set_per_cpu_base(head_task_info.per_cpu_base);
                 }
                 else {
-                    if task_info.status != TaskStatus::RUNNING {
-                        let prev_context = fetch_context();
-                        task_info.context = prev_context;
-                        
-                        #[cfg(target_arch = "x86_64")] 
-                        {
-                            task_info.per_cpu_base = get_per_cpu_base();
-                        }
-
-                        if task_info.status == TaskStatus::WAITING {
-                            sched_cb.waiting_tasks.insert_node_at_tail(current_task);
-                        }
-                        else if task_info.status == TaskStatus::TERMINATED {
-                            debug!("Adding task {} to terminated list", task_info.id);
-                            sched_cb.terminated_tasks.insert_node_at_tail(current_task);
-                        }
-
-                        prep_idle_task(&mut sched_cb, old_vcb);
-                    }
-                    else {
-                        // No other task to run. Continue with this task
-                        task_info.quanta = INIT_QUANTA;
+                    // If stack deletions / timers are pending, don't go into idle task yet
+                    if can_sleep(&mut sched_cb) {
+                        //disable_scheduler_timer(); 
                     }
                 }
             }
-        }
-        else {
-            // This means we're in idle task. Check and run any active tasks
-            let head_task = sched_cb.active_tasks.first().and_then(|item| {
-                Some(NonNull::from(item))
-            });
 
-            if head_task.is_some() {
-                let mut head_task_info = unsafe {
-                    head_task.unwrap().as_ref().lock()
-                };
+            setup_current_task_ptr(&mut sched_cb);
 
-                assert!(head_task_info.status == TaskStatus::ACTIVE); 
-                head_task_info.status = TaskStatus::RUNNING;
-                head_task_info.quanta = INIT_QUANTA;
-                let new_context = head_task_info.context;
-                
-                let head_task = unsafe {
-                    ListNode::into_inner(sched_cb.active_tasks.remove_node(head_task.unwrap()))
-                };
-                sched_cb.running_task = Some(head_task);
-                
-                // Idle task uses the default kernel virtual address space
-                let new_vcb = head_task_info.vcb.unwrap();
-
-                switch_address_space_from_idle(new_vcb);
-                set_panic_base(head_task_info.panic_base);
-                switch_context(new_context);
-                
-                #[cfg(target_arch = "x86_64")]
-                set_per_cpu_base(head_task_info.per_cpu_base);
+            // We do the flip flop technique since we are still using the same terminated task stack at this point
+            // But we won't be using it from the next schedule on
+            if sched_cb.flip_flop {
+                sched_cb.flip_flop = false;
             }
             else {
-                // If stack deletions / timers are pending, don't go into idle task yet
-                if can_sleep(&mut sched_cb) {
-                    debug!("Disabling timer on core {}", hal::get_core());
-                    disable_scheduler_timer(); 
-                }
+                sched_cb.leftover_stack.clear();
             }
-        }
 
-        setup_current_task_ptr(&mut sched_cb);
-
-        // We do the flip flop technique since we are still using the same terminated task stack at this point
-        // But we won't be using it from the next schedule on
-        if sched_cb.flip_flop {
-            sched_cb.flip_flop = false;
+            reap_tasks(&mut sched_cb);
+            take(&mut sched_cb.notifier_list)
         }
-        else {
-            sched_cb.leftover_stack.clear();
-        }
-
-        reap_tasks(&mut sched_cb);
-        take(&mut sched_cb.notifier_list)
     };
 
     notify_watchers(&notifier_list);
@@ -882,7 +887,7 @@ fn prep_idle_task(sched_cb: &mut TaskQueue, old_vcb: VCB) {
     set_per_cpu_base(get_per_cpu_kernel_base());
     
     if can_sleep(sched_cb) {
-        disable_scheduler_timer(); 
+        //disable_scheduler_timer(); 
     }
 }
 
@@ -891,13 +896,13 @@ fn idle_task() -> ! {
 }
 
 fn notify_other_cpu(target_core: usize) {
-    if hal::get_core() == target_core {
-        enable_scheduler_timer();
-        return;
-    }
+    //if hal::get_core() == target_core {
+    //    enable_scheduler_timer();
+    //    return;
+    //}
 
-    info!("Notifying core {}", target_core);
-    hal::notify_core(IPIRequestType::SchedChange, target_core, false);
+    //info!("Notifying core {}", target_core);
+    //hal::notify_core(IPIRequestType::SchedChange, target_core, false);
 }
 
 fn create_thread_common(handler: fn() -> !, user_function: Option<fn() -> !>) -> Result<(KThread, usize), KError> {
@@ -983,8 +988,6 @@ pub fn create_thread_do_work(handler: fn() -> !, user_fn: Option<fn() -> !>) -> 
             if guard.get_status() == ProcessStatus::Terminated {
                 return Err(KError::ProcessTerminated);
             }
-
-            debug!("Creating thread id {} under process id {} on core {}", thread_id, guard.get_id(), core);
 
             guard.attach_thread_to_current_process(thread_id)?;
             thread.lock().process = Some(process_ref);

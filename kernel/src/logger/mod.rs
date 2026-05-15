@@ -14,9 +14,9 @@ pub extern "C" fn clear_screen() {
     FRAMEBUFFER_LOGGER.lock().clear_screen();
 }
 
-pub fn set_panic_mode() {
+pub fn set_panic_mode(core: u8) {
     PANIC_MODE.store(true, Ordering::Release);
-    PANIC_CORE.store(hal::get_core() as u8, Ordering::Release);
+    PANIC_CORE.store(core, Ordering::Release);
     clear_screen();
 }
 
@@ -28,8 +28,8 @@ extern "C" fn serial_print_ffi(s: *const u8, len: usize) {
         core::str::from_utf8_unchecked(slice)
     }; 
 
-    
-    if !PANIC_MODE.load(Ordering::Relaxed) || PANIC_CORE.load(Ordering::Relaxed) == hal::get_core() as u8 {
+    // During kernel panic, only allow the panicking core to log
+    if !PANIC_MODE.load(Ordering::Acquire) || PANIC_CORE.load(Ordering::Acquire) == hal::get_core() as u8 {
         // Write to serial
         uart::SERIAL.lock().write(s);
         
