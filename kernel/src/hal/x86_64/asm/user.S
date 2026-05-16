@@ -91,13 +91,13 @@ start_label:
     movq $3, %rax
     movq $1000, %rdi
     syscall
+    movq $4, %rax
+    syscall
     decq %rbx
     jnz start_label
 
     int $38
-    // movq $1, %rax
-    // syscall
-    movq $4, %rax
+    movq $0, %rax
     syscall
     jmp user_fn_start
 msg: 

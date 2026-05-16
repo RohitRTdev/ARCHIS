@@ -41,8 +41,7 @@ pub enum IPIRequestType {
 
 struct IPIRequest {
     req_type: IPIRequestType,
-    core: usize,
-    tag: bool
+    core: usize
 }
 
 static NEXT_AVAILABLE_VECTOR: AtomicUsize = AtomicUsize::new(USER_VECTOR_START);
@@ -54,10 +53,6 @@ pub static mut DEBUG_HANDLER_FN: Option<fn()> = None;
 
 static PER_CPU_GLOBAL_CONTEXT: PerCpu<AtomicUsize> = PerCpu::new_with(
     [const {AtomicUsize::new(0)}; MAX_CPUS]
-);
-
-static PER_CPU_LAST_CONTEXT: PerCpu<Spinlock<(CPUContext, CPUContext)>> = PerCpu::new_with(
-    [const {Spinlock::new((CPUContext::new(), CPUContext::new()))}; MAX_CPUS]
 );
 
 static IPI_REQUESTS: Spinlock<FixedList<IPIRequest, {Region4 as usize}>> = Spinlock::new(List::new());
@@ -152,10 +147,7 @@ extern "C" fn global_interrupt_handler(vector: u64, cpu_context: *const CPUConte
         eoi();
     }
     
-    let con = PER_CPU_GLOBAL_CONTEXT.local().load(Ordering::Acquire) as *const CPUContext;
-    
-    *PER_CPU_LAST_CONTEXT.local().lock() = (first_con, unsafe {*con});
-    con
+    PER_CPU_GLOBAL_CONTEXT.local().load(Ordering::Acquire) as *const CPUContext
 }
 
 fn default_handler(idx: usize) {
@@ -172,10 +164,8 @@ pub fn init() {
                     infra::disable_callstack();
                 }
                 let con = *(fetch_context() as *const CPUContext);
-                let saved_con = *(PER_CPU_LAST_CONTEXT.local().lock());
                 debug!("{:?}", con);
                 debug!("gs={:#X}, kernel_gs={:#X}", get_per_cpu_kernel_base(), get_per_cpu_base());
-                debug!("Last saved context: {:?}\n Second context: {:?}", saved_con.0, saved_con.1);
                 if idx == DOUBLE_FAULT_VECTOR {
                     panic!("{} exception!\nPossible stack overflow??", EXCP_STRINGS[idx]);
                 }
@@ -317,28 +307,23 @@ fn ipi_handler(_vector: usize) {
                 match req_info.req_type {
                     IPIRequestType::SchedChange => {
                         debug!("Got schedule change request on core {}", core);
-                        //enable_scheduler_timer();
+                        enable_scheduler_timer();
                     },
                     IPIRequestType::TlbInvalidate(desc) => {
                         // Reload cr3
                         unsafe {
                             debug!("Got invalidate request on core {} with base: {:#X} and size: {}",
                             core, desc.base_address, desc.size);
-                            //debug!("Before: {:?}", unsafe {*(fetch_context() as *const CPUContext)});
                             for page in 0..desc.size / PAGE_SIZE {
                                 let real_page = (page * PAGE_SIZE + desc.base_address) as u64;
                                 asm::invlpg(real_page);
                             }
-                            //debug!("After: {:?}", unsafe {*(fetch_context() as *const CPUContext)});
                         }
                     },
                     IPIRequestType::Shutdown => {
-                        req_info.tag = true;
                         halt();
                     }
                 }
-
-                //req_info.tag = true;
             },
             None => {
                 break;
@@ -350,29 +335,18 @@ fn ipi_handler(_vector: usize) {
 // Function should only be called after scheduler is up
 // if wait_for_completion is set, caller needs to ensure that no locks are held during a call to notify_core
 // Otherwise, this may lead to deadlock
-pub fn notify_core(req_type: IPIRequestType, target_core: usize, wait_for_completion: bool) {
+pub fn notify_core(req_type: IPIRequestType, target_core: usize) {
     assert!(target_core < cpu::get_total_cores());
     
     let apic_id = super::get_apic_id(target_core);
 
     let req = IPIRequest {
         req_type, 
-        core: target_core,
-        tag: false 
+        core: target_core
     };
 
-    let tag_ptr = {
-        let mut req_queue = IPI_REQUESTS.lock();
-        req_queue.add_node(req).expect("Failed to queue ipi request");
-
-        &req_queue.last().unwrap().tag as *const bool
-    };
+    let mut req_queue = IPI_REQUESTS.lock();
+    req_queue.add_node(req).expect("Failed to queue ipi request");
 
     lapic::send_ipi(apic_id as u32, IPI_VECTOR as u8);
-    
-    if wait_for_completion {
-        while unsafe {!core::ptr::read_volatile(tag_ptr)} {
-            core::hint::spin_loop();
-        }
-    }
 }

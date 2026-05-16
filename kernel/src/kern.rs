@@ -217,12 +217,9 @@ fn kern_main() -> ! {
         //.expect("Failed to create user process 1");
 
         sched::create_thread(watchdog).unwrap();
-
-        info!("Main task waiting for user process to complete");
-        user_proc0.wait().expect("Unable to wait on user process");
     }
 
-    //sched::create_thread(thread_creator).expect("Failed to create kernel thread!");
+    sched::create_thread(thread_creator).expect("Failed to create kernel thread!");
 
     //sched::create_thread(|| {
     //    loop {

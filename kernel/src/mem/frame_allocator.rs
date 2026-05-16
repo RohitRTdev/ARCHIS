@@ -217,9 +217,6 @@ pub fn frame_allocator_init() {
                     start_phy_address: desc.val.base_address, start_virt_address: 0, flags: 0, is_mapped: false }).unwrap();
                 
                 init_mem_cb.avl_memory += desc.val.size;
-                unsafe {
-                    (desc.val.base_address as *mut u8).write_bytes(0, desc.val.size);
-                }
             },
             MemType::Allocated | MemType::Identity => {
                 init_mem_cb.alloc_block_list.add_node(PageDescriptor { num_pages: common::ceil_div(desc.val.size, PAGE_SIZE), 

@@ -851,7 +851,7 @@ pub fn schedule() {
                 else {
                     // If stack deletions / timers are pending, don't go into idle task yet
                     if can_sleep(&mut sched_cb) {
-                        //disable_scheduler_timer(); 
+                        disable_scheduler_timer(); 
                     }
                 }
             }
@@ -887,7 +887,7 @@ fn prep_idle_task(sched_cb: &mut TaskQueue, old_vcb: VCB) {
     set_per_cpu_base(get_per_cpu_kernel_base());
     
     if can_sleep(sched_cb) {
-        //disable_scheduler_timer(); 
+        disable_scheduler_timer(); 
     }
 }
 
@@ -896,13 +896,13 @@ fn idle_task() -> ! {
 }
 
 fn notify_other_cpu(target_core: usize) {
-    //if hal::get_core() == target_core {
-    //    enable_scheduler_timer();
-    //    return;
-    //}
+    if hal::get_core() == target_core {
+        enable_scheduler_timer();
+        return;
+    }
 
-    //info!("Notifying core {}", target_core);
-    //hal::notify_core(IPIRequestType::SchedChange, target_core, false);
+    info!("Notifying core {}", target_core);
+    hal::notify_core(IPIRequestType::SchedChange, target_core);
 }
 
 fn create_thread_common(handler: fn() -> !, user_function: Option<fn() -> !>) -> Result<(KThread, usize), KError> {

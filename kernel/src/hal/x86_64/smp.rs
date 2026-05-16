@@ -236,7 +236,9 @@ pub fn init() {
             tramp_size,
         );
         
-        patch_trampoline(ap_start_code, page_mapper::get_kernel_pml4() as u32, ap_init as *const () as u64);
+        // Here, we manually fix all the addresses in the trampoline
+        // PML4 address + bit 3 is set to enable PWT mode for base table
+        patch_trampoline(ap_start_code, page_mapper::get_kernel_pml4() as u32 | (1 << 3), ap_init as *const () as u64);
     }
     
     let bsp_id = get_bsp_lapic_id();
@@ -341,8 +343,6 @@ extern "C" fn ap_init() -> ! {
     AP_CORES_INIT.fetch_add(1, Ordering::Release);
     
 
-    super::enable_scheduler_timer();
-    
     // This will internally enable interrupts
     sleep();
 }

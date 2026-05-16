@@ -429,11 +429,6 @@ impl VirtMemConBlk {
 
         let phy_addr; 
         if let Some(desc) = blk {
-            // Zero the memory before reclaiming it
-            //unsafe {
-            //    (virt_addr as *mut u8).write_bytes(0, size);
-            //}
-            
             desc.is_mapped = false;
 
             phy_addr = desc.start_phy_address;
@@ -752,9 +747,9 @@ pub fn deallocate_memory(addr: *mut u8, layout: Layout, flags: u8) -> Result<(),
             assert!(!(flags & PageDescriptor::USER != 0 && flags & PageDescriptor::NO_ALLOC != 0), "USER and NO_ALLOC flag combination not supported right now");
             
             // Zero memory before reclaiming it
-            unsafe {
-                set_user_memory(addr, 0, layout.size());
-            }
+            //unsafe {
+            //    set_user_memory(addr, 0, layout.size());
+            //}
             
             let phy_addr = unsafe {
                 (*active_addr_space.as_ptr())
@@ -780,11 +775,6 @@ pub fn deallocate_memory(addr: *mut u8, layout: Layout, flags: u8) -> Result<(),
             let mut phy_addr = null_mut();
             if flags & PageDescriptor::NO_ALLOC == 0 {
                 let active_addr_space = get_active_vcb();
-                
-                // Zero memory before reclaiming it
-                unsafe {
-                    addr.write_bytes(0, layout.size());
-                }
                 
                 // This call is for registering the mapping with the control structures
                 if kern_addr_space.as_ptr() != active_addr_space.as_ptr() {
@@ -872,10 +862,6 @@ pub fn unmap_memory(virt_addr: usize, size: usize, flags: u8) -> Result<(), KErr
         let active_addr_space = get_active_vcb();
         let kernel_addr_space = get_kernel_addr_space();
         unsafe {
-            if flags & PageDescriptor::ZERO != 0 {
-                (virt_addr as *mut u8).write_bytes(0, size);
-            }
-
             if flags & PageDescriptor::USER == 0 && kernel_addr_space.as_ptr() != active_addr_space.as_ptr() {
                 (*kernel_addr_space.as_ptr())
                 .lock()

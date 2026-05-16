@@ -454,7 +454,7 @@ impl PageMapper {
 
         for core in 0..total_cores {
             if core != cur_core {
-                notify_core(IPIRequestType::TlbInvalidate(desc.clone()), core, false);
+                notify_core(IPIRequestType::TlbInvalidate(desc.clone()), core);
             }
         }
     }
