@@ -51,7 +51,6 @@ pub unsafe fn get_per_cpu_data<const OFFSET: usize>() -> u64 {
         const OFFSET,
         options(nostack, preserves_flags, readonly)
     );
-    core::sync::atomic::fence(Ordering::SeqCst);
 
     per_cpu_data
 } 
@@ -64,8 +63,6 @@ pub unsafe fn set_per_cpu_data<const OFFSET: usize>(per_cpu_data: u64) {
         in(reg) per_cpu_data,
         options(nostack, preserves_flags) 
     );
-
-    core::sync::atomic::fence(Ordering::SeqCst);
 }
 
 

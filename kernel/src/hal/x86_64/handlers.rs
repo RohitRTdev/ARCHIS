@@ -52,8 +52,8 @@ const EXCEPTION_VECTOR_RANGE: usize = 32;
 // This is set at init time and then never changed
 pub static mut DEBUG_HANDLER_FN: Option<fn()> = None;
 
-static PER_CPU_GLOBAL_CONTEXT: PerCpu<AtomicPtr<u8>> = PerCpu::new_with(
-    [const {AtomicPtr::new(core::ptr::null_mut())}; MAX_CPUS]
+static PER_CPU_GLOBAL_CONTEXT: PerCpu<AtomicUsize> = PerCpu::new_with(
+    [const {AtomicUsize::new(0)}; MAX_CPUS]
 );
 
 static PER_CPU_LAST_CONTEXT: PerCpu<Spinlock<(CPUContext, CPUContext)>> = PerCpu::new_with(
@@ -141,7 +141,8 @@ impl CPUContext {
 
 #[no_mangle]
 extern "C" fn global_interrupt_handler(vector: u64, cpu_context: *const CPUContext) -> *const CPUContext {
-    PER_CPU_GLOBAL_CONTEXT.local().store(cpu_context as *mut u8, Ordering::Release);
+    assert!(cpu_context as usize % 16 == 0);
+    PER_CPU_GLOBAL_CONTEXT.local().store(cpu_context.addr(), Ordering::Release);
     let first_con = unsafe {*cpu_context};
     unsafe {
         VECTOR_TABLE[vector as usize](vector as usize);
@@ -257,15 +258,15 @@ fn page_fault_handler(_vector: usize) {
     on_page_fault(fault_address as usize);
 }
 
-pub fn fetch_context() -> *const u8 {
+pub fn fetch_context() -> usize {
     PER_CPU_GLOBAL_CONTEXT.local().load(Ordering::Acquire)
 }
 
-pub fn switch_context(new_context: *const u8) {
-    PER_CPU_GLOBAL_CONTEXT.local().store(new_context as *mut u8, Ordering::Release);
+pub fn switch_context(new_context: usize) {
+    PER_CPU_GLOBAL_CONTEXT.local().store(new_context, Ordering::Release);
 }
 
-pub fn create_kernel_context(handler: fn() -> !, stack_base: *mut u8) -> *const u8 {
+pub fn create_kernel_context(handler: fn() -> !, stack_base: *mut u8) -> usize {
     let mut sp = stack_base as usize;
 
     // 16 byte alignment is maintained since stack_base already aligned to 4096 bytes
@@ -286,10 +287,12 @@ pub fn create_kernel_context(handler: fn() -> !, stack_base: *mut u8) -> *const 
         super::cpu_regs::INIT_RFLAGS
     };
 
+
     unsafe {
         (sp as *mut CPUContext).write(context);
-    }
-    sp as *const u8
+    };
+
+    sp
 }
 
 fn ipi_handler(_vector: usize) {

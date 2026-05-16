@@ -12,28 +12,48 @@ use crate::module::*;
 static DISABLE_CALLSTACK: AtomicBool = AtomicBool::new(false);
 static EARLY_PANIC_PHASE: AtomicBool = AtomicBool::new(true);
 static MP_INIT: AtomicBool = AtomicBool::new(false);
-static GLOBAL_PANIC_LOCK: Spinlock<bool> = Spinlock::new(false);
+static GLOBAL_PANIC_LOCK: hal::Spinlock = hal::Spinlock::new();
+static IS_NESTED: AtomicBool = AtomicBool::new(false);
+static PANIC_CORE: Spinlock<Option<usize>> = Spinlock::new(None); 
 const STACK_UNWIND_DEPTH: usize = 16;
 
 #[allow(dead_code)]
 pub fn common_panic_handler(mod_name: &str, info: &PanicInfo) -> ! {
-    let _guard =  GLOBAL_PANIC_LOCK.lock();
     let core = hal::get_core();
+
+    // In case of nested panic, only allow the initially panicked core 
+    if !IS_NESTED.load(Ordering::Acquire) || 
+    PANIC_CORE.lock().is_none() ||
+    *PANIC_CORE.lock().as_ref().unwrap() != core {
+        GLOBAL_PANIC_LOCK.lock();
+        *PANIC_CORE.lock() = Some(core);
+    }
+
     let early_panic_phase = EARLY_PANIC_PHASE.load(Ordering::Acquire);
     let mp_init = MP_INIT.load(Ordering::Acquire);
-
-    if !early_panic_phase && mp_init {
-        // Shutdown all the other cores
-        for cpu in 0..cpu::get_total_cores() {
-            if cpu != core {
-                notify_core(IPIRequestType::Shutdown, cpu, false);
+    
+    if !IS_NESTED.load(Ordering::Acquire) {
+        if !early_panic_phase && mp_init {
+            // Shutdown all the other cores
+            for cpu in 0..cpu::get_total_cores() {
+                if cpu != core {
+                    notify_core(IPIRequestType::Shutdown, cpu, false);
+                }
             }
+            
         }
         
+        kernel_intf::disable_logger();
+        logger::set_panic_mode(core as u8);
+        kernel_intf::enable_logger();
     }
-    
-    kernel_intf::disable_logger();
-    logger::set_panic_mode(core as u8);
+
+    if IS_NESTED.load(Ordering::Acquire) {
+        panic_println!("====Nested panic!!====");
+    }
+
+    // Try and recover any more panics that might occur beyond this point
+    IS_NESTED.store(true, Ordering::Release);
 
     if early_panic_phase || DISABLE_CALLSTACK.load(Ordering::Acquire) {
         panic_println!("Kernel panic on core {}!!", core);

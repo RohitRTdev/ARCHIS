@@ -272,7 +272,8 @@ pub fn complete_handoff() {
     // We have moved the init-fs metadata into kernel binary
     // So we can remove the descriptors we had
     // We can't call mem::deallocate_memory with VIRTUAL flag alone as the physical memory was allocated by blr. So we just unmap instead
-    mem::unmap_memory(boot_info.init_fs.start, boot_info.init_fs.size, 0).expect("Could not deallocate init-fs descriptor memory");
+    debug!("Deallocating init_fs at start: {:#X} with size: {}", boot_info.init_fs.start, boot_info.init_fs.size);
+    mem::unmap_memory(boot_info.init_fs.start, boot_info.init_fs.size, PageDescriptor::ZERO).expect("Could not deallocate init-fs descriptor memory");
     mem::deallocate_memory(boot_info.init_fs.start as *mut u8, Layout::from_size_align(boot_info.init_fs.size, PAGE_SIZE).unwrap(), PageDescriptor::VIRTUAL | PageDescriptor::NO_ALLOC)
     .expect("Unable to unreserve virtual address space for init fs");
     info!("Handoff procedure completed");

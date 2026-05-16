@@ -30,6 +30,11 @@ pub fn usize_to_ref_mut<A>(r: usize) ->  &'static mut A {
     unsafe {&mut *(r as *mut A)}
 }
 
+#[inline(always)]
+pub fn usize_to_ptr<A>(r: usize) ->  *mut A {
+    r as *mut A
+}
+
 #[macro_export]
 macro_rules! en_flag {
     ($cond:expr, $($flags:expr),+) => {

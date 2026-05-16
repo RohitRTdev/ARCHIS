@@ -63,6 +63,23 @@ pub unsafe fn copy_user_memory(to: *mut u8, from: *const u8, len: usize) {
     );
 }
 
+pub unsafe fn set_user_memory(to: *mut u8, value: u8, len: usize) {
+    if len == 0 {
+        return;
+    }
+
+    core::arch::asm!(
+        "cld",
+        "stac",
+        "rep stosb",
+        "clac",
+        in("rdi") to,
+        in("al") value,
+        in("rcx") len,
+        options(nostack)
+    );
+}
+
 pub fn switch_to_new_address_space(pml4_phys: usize, stack_address: usize, kernel_address: usize) -> ! {
     debug!("kern_address_space_start address = {:#X}", kernel_address);
 

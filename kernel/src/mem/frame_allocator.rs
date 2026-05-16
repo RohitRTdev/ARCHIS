@@ -90,6 +90,7 @@ impl PhyMemConBlk {
 
     pub fn allocate(&mut self, layout: Layout) -> Result<*mut u8, KError> {
         if layout.size() >= self.avl_memory {
+            info!("Frame allocator our of memory!. Requested: {}, Available: {}", layout.size(), self.avl_memory);
             return Err(KError::OutOfMemory);
         }
 

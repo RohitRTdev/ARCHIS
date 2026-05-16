@@ -175,3 +175,9 @@ pub fn disable_logger() {
         crate::acquire_spinlock(&mut crate::LOGGER.lock);    
     }
 }
+
+pub fn enable_logger() {
+    unsafe {
+        crate::release_spinlock(&mut crate::LOGGER.lock);    
+    }
+}
