@@ -968,12 +968,23 @@ pub fn start_task(thread: &KThread, core: usize, process: &KProcess, registry: &
 
 pub fn create_thread_do_work(handler: fn() -> !, user_fn: Option<fn() -> !>) -> Result<KThread, KError> {
     disable_preemption();
-    let (thread, core) = create_thread_common(handler, user_fn)?;
+
+    let (thread, core) = match create_thread_common(handler, user_fn) {
+        Ok(v) => v,
+        Err(e) => {
+            enable_preemption();
+            return Err(e);
+        }
+    };
+
     let thread_id = thread.lock().get_id();
     let cur_process = get_current_process();
 
     // Lock order => Scheduler -> Process -> Task
-    {
+    // We compute the setup result inside this block so that all the locks
+    // (scheduler, process, task) drop before we call enable_preemption(),
+    // which itself acquires the local scheduler lock.
+    let setup_result: Result<(), KError> = {
         let mut sched_cb = unsafe {
             SCHEDULER_CON_BLK.get(core).lock()
         };
@@ -981,31 +992,44 @@ pub fn create_thread_do_work(handler: fn() -> !, user_fn: Option<fn() -> !>) -> 
         if let Some(process) = cur_process {
             let process_ref = Arc::clone(&process);
             let mut guard = process.lock();
-            
+
             assert!(guard.get_user_flag() == user_fn.is_some(), "Thread type mismatch!");
 
             let proc_addr_space = guard.get_vcb();
             if guard.get_status() == ProcessStatus::Terminated {
-                return Err(KError::ProcessTerminated);
+                Err(KError::ProcessTerminated)
             }
+            else if let Err(e) = guard.attach_thread_to_current_process(thread_id) {
+                Err(e)
+            }
+            else {
+                thread.lock().process = Some(process_ref);
+                thread.lock().vcb = Some(proc_addr_space);
+                drop(guard);
 
-            guard.attach_thread_to_current_process(thread_id)?;
-            thread.lock().process = Some(process_ref);
-            thread.lock().vcb = Some(proc_addr_space);
+                match sched_cb.active_tasks.add_node(Arc::clone(&thread)) {
+                    Ok(_) => {
+                        TASKS.lock().insert(thread_id, Arc::clone(&thread));
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
+                }
+            }
         }
         else {
             panic!("create_thread() called from idle task!!");
         }
-        
-        sched_cb.active_tasks.add_node(Arc::clone(&thread))?;
-        TASKS.lock().insert(thread_id, Arc::clone(&thread));
+    };
+
+    if let Err(e) = setup_result {
+        enable_preemption();
+        return Err(e);
     }
 
     notify_other_cpu(core);
     enable_preemption();
 
     Ok(thread)
-
 }
 
 // Must be called from valid process context 

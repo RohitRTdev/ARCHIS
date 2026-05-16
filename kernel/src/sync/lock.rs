@@ -142,9 +142,18 @@ extern "C" fn acquire_spinlock(lock: &mut Lock) {
 #[no_mangle]
 extern "C" fn release_spinlock(lock: &mut Lock) {
     unsafe {
-        (*ptr_to_ref_mut::<_, hal::Spinlock>(&lock.lock)).unlock(); 
+        // Snapshot int_status BEFORE releasing the lock. Once unlock() runs,
+        // another core can acquire the lock and overwrite lock.int_status with
+        // its own pre-acquire flag, which would cause us to restore the wrong
+        // interrupt state on this core (potentially leaving interrupts
+        // permanently disabled).
         #[cfg(not(test))]
-        hal::enable_interrupts(lock.int_status);
+        let int_status = lock.int_status;
+
+        (*ptr_to_ref_mut::<_, hal::Spinlock>(&lock.lock)).unlock();
+
+        #[cfg(not(test))]
+        hal::enable_interrupts(int_status);
     }
 }
         

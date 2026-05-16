@@ -186,20 +186,38 @@ pub fn get_process_info(proc_id: usize) -> Option<KProcess> {
 
 pub fn create_process(start_function: fn() -> !, is_user: bool) -> Result<KProcess, KError> {
     disable_preemption();
-    
-    let process = Process::new(true, is_user)?;
-    let init_notify_sem = process.lock().init_notify.clone(); 
-    let thread = sched::create_init_thread(start_function, Arc::clone(&process))?;
+
+    let process = match Process::new(true, is_user) {
+        Ok(p) => p,
+        Err(e) => {
+            enable_preemption();
+            return Err(e);
+        }
+    };
+
+    let init_notify_sem = process.lock().init_notify.clone();
+
+    let thread = match sched::create_init_thread(start_function, Arc::clone(&process)) {
+        Ok(t) => t,
+        Err(e) => {
+            enable_preemption();
+            return Err(e);
+        }
+    };
+
     let core = thread.lock().get_core();
 
-    start_task(&thread, core, &process, &PROCESSES)?;
+    if let Err(e) = start_task(&thread, core, &process, &PROCESSES) {
+        enable_preemption();
+        return Err(e);
+    }
 
-    enable_preemption();    
+    enable_preemption();
 
     if is_user {
         init_notify_sem.wait().expect("Wait failed on init_notify semaphore!");
     }
-    
+
     Ok(process)
 }
 
@@ -216,10 +234,12 @@ pub fn kill_process(proc_id: usize) {
 
     disable_preemption();
 
-    // We clone the list here in order to release the process lock 
+    // We clone the list here in order to release the process lock
     let threads = {
         let mut guard = proc.lock();
         if guard.status != ProcessStatus::Ready {
+            drop(guard);
+            enable_preemption();
             return;
         }
 

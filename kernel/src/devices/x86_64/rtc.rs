@@ -1,8 +1,14 @@
 use crate::hal::{write_port_u8, read_port_u8};
+use crate::sync::Spinlock;
 use kernel_intf::RtcTime;
 
 const CMOS_ADDRESS: u16 = 0x70;
 const CMOS_DATA: u16 = 0x71;
+
+// CMOS uses an index/data port pair (0x70/0x71). All accesses must be
+// serialised so that a register-select on one core can't interleave with
+// a data read from another core.
+static RTC_LOCK: Spinlock<()> = Spinlock::new(());
 
 const RTC_SECONDS: u8 = 0x00;
 const RTC_MINUTES: u8 = 0x02;
@@ -33,6 +39,10 @@ fn bcd_to_bin(val: u8) -> u8 {
 // We don't want compiler to think that this is a pure function
 #[inline(never)]
 pub fn read_realtime() -> RtcTime {
+    // Serialise CMOS port access across cores. The guard also disables
+    // interrupts on the current core for the duration of the read.
+    let _rtc_guard = RTC_LOCK.lock();
+
     // Wait until not updating
     while is_updating() {}
 

@@ -97,15 +97,13 @@ macro_rules! println {
 #[macro_export]
 macro_rules! level_print {
     ($level: literal, $($arg:tt)*) => {
+        // log_timestamp is an AtomicBool, so we can read it without taking
+        // the logger lock. The subsequent $crate::println! call still
+        // serialises the actual write under LOGGER.lock.
         let timestamp = unsafe {
-            $crate::acquire_spinlock(&mut $crate::LOGGER.lock);
-            $crate::LOGGER.log_timestamp
+            $crate::LOGGER.log_timestamp.load(::core::sync::atomic::Ordering::Acquire)
         };
 
-        unsafe {
-            $crate::release_spinlock(&mut $crate::LOGGER.lock);
-        }
-        
         if timestamp {
             $crate::println!("[{}]-[{}]-[{}]-[{}]: {}", $level, unsafe {$crate::read_rtc()}, unsafe {$crate::read_timestamp()}, crate::hal::get_core(), format_args!($($arg)*));
         } else {
@@ -147,11 +145,14 @@ impl core::fmt::Write for KernelLogger {
 } 
 
 pub struct KernelLogger {
-    pub log_timestamp: bool,
+    pub log_timestamp: core::sync::atomic::AtomicBool,
     pub lock: crate::Lock
 }
 
-pub static mut LOGGER: KernelLogger = KernelLogger { log_timestamp: false, lock: crate::Lock { lock: 0, int_status: false } };
+pub static mut LOGGER: KernelLogger = KernelLogger {
+    log_timestamp: core::sync::atomic::AtomicBool::new(false),
+    lock: crate::Lock { lock: 0, int_status: false }
+};
 
 pub fn init_logger() {
     unsafe {
@@ -161,9 +162,7 @@ pub fn init_logger() {
 
 pub fn enable_timestamp() {
     unsafe {
-        crate::acquire_spinlock(&mut crate::LOGGER.lock);    
-        crate::LOGGER.log_timestamp = true;
-        crate::release_spinlock(&mut crate::LOGGER.lock);
+        crate::LOGGER.log_timestamp.store(true, core::sync::atomic::Ordering::Release);
     }
 }
 
