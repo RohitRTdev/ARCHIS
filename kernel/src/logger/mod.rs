@@ -1,7 +1,7 @@
 mod framebuffer_logger;
 
 use framebuffer_logger::FRAMEBUFFER_LOGGER;
-use crate::devices::uart;
+use crate::{devices::uart, logger::framebuffer_logger::flush_log};
 use crate::hal;
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 pub use framebuffer_logger::relocate_framebuffer;
@@ -34,8 +34,8 @@ extern "C" fn serial_print_ffi(s: *const u8, len: usize) {
         uart::SERIAL.lock().write(s);
         
         // Write to framebuffer
-    #[cfg(not(debug_assertions))]
         FRAMEBUFFER_LOGGER.lock().write(s);
+        flush_log();
     }
 }
 

@@ -107,6 +107,9 @@ impl EFER {
 
 impl PAT {
     pub const ADDRESS: u32 = 0x277;
+
+    // Reprogram entry 6 to WC 
+    pub const WC_MSR_VALUE: u64 = 0x00_01_04_06_00_07_04_06;
 }
 
 #[cfg(debug_assertions)]
@@ -127,6 +130,10 @@ pub fn init() {
 
         CPUReg::<EFER>::init(EFER::SCE | EFER::LME | EFER::LMA);
         CPUReg::<RFLAGS>::clear(RFLAGS::IOPL | RFLAGS::AC);
+
+        if features.pat {
+            asm::wrmsr(PAT::ADDRESS, PAT::WC_MSR_VALUE);
+        }
 
         // Set this as initial RFLAGS value when creating a new task. Also enable interrupts
         if get_core() == 0 {

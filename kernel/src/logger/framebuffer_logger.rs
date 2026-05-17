@@ -26,15 +26,16 @@ static FONT_DATA: &[u8] = include_bytes!("../../../resources/zap-ext-light20.psf
 const FRAMEBUFFER_MAX_SIZE: usize = PAGE_SIZE * PAGE_SIZE;
 
 #[repr(C)]
-#[cfg_attr(target_arch="x86_64", repr(align(4096)))]
+#[cfg_attr(target_arch = "x86_64", repr(align(4096)))]
 struct Framebuffer {
-    buffer: UnsafeCell<[u8; FRAMEBUFFER_MAX_SIZE]>
+    buffer: UnsafeCell<[u8; FRAMEBUFFER_MAX_SIZE]>,
 }
 
-unsafe impl Sync for Framebuffer{}
+unsafe impl Sync for Framebuffer {}
 
-static FRAMEBUFFER: Framebuffer = Framebuffer { 
-    buffer: UnsafeCell::new([0; FRAMEBUFFER_MAX_SIZE])
+// Scratch buffer
+static FRAMEBUFFER: Framebuffer = Framebuffer {
+    buffer: UnsafeCell::new([0; FRAMEBUFFER_MAX_SIZE]),
 };
 
 pub struct FramebufferLogger {
@@ -45,7 +46,10 @@ pub struct FramebufferLogger {
     current_x: usize,
     current_y: usize,
     font_header: PSFHeader,
-    font_glyphs: *const u8
+    font_glyphs: *const u8,
+    dirty_min_y: usize,
+    dirty_max_y: usize,
+    display_start_row: usize,
 }
 
 unsafe impl Send for FramebufferLogger {}
@@ -67,112 +71,118 @@ pub static FRAMEBUFFER_LOGGER: Spinlock<FramebufferLogger> = Spinlock::new(Frame
         height: 0,
         width: 0,
     },
-    font_glyphs: core::ptr::null()
+    font_glyphs: core::ptr::null(),
+    dirty_min_y: usize::MAX,
+    dirty_max_y: 0,
+    display_start_row: 0,
 });
 
 impl FramebufferLogger {
     fn init(&mut self) {
         let boot_info = BOOT_INFO.get().unwrap();
         let fb_info = boot_info.framebuffer_desc;
-        
+
         self.fb_base = fb_info.fb.base_address as *mut u8;
         self.width = fb_info.width;
         self.height = fb_info.height;
         self.stride = fb_info.stride;
-        
+
         self.load_font();
         self.clear_screen();
     }
-    
+
     fn load_font(&mut self) {
-        // Parse PSF header manually to handle endianness
         if FONT_DATA.len() < 32 {
             panic!("Font data too small");
         }
-        
-        // Read header fields manually (little-endian)
+
         self.font_header.magic = u32::from_le_bytes([
-            FONT_DATA[0], FONT_DATA[1], FONT_DATA[2], FONT_DATA[3]
+            FONT_DATA[0], FONT_DATA[1], FONT_DATA[2], FONT_DATA[3],
         ]);
         self.font_header.version = u32::from_le_bytes([
-            FONT_DATA[4], FONT_DATA[5], FONT_DATA[6], FONT_DATA[7]
+            FONT_DATA[4], FONT_DATA[5], FONT_DATA[6], FONT_DATA[7],
         ]);
         self.font_header.headersize = u32::from_le_bytes([
-            FONT_DATA[8], FONT_DATA[9], FONT_DATA[10], FONT_DATA[11]
+            FONT_DATA[8], FONT_DATA[9], FONT_DATA[10], FONT_DATA[11],
         ]);
         self.font_header.flags = u32::from_le_bytes([
-            FONT_DATA[12], FONT_DATA[13], FONT_DATA[14], FONT_DATA[15]
+            FONT_DATA[12], FONT_DATA[13], FONT_DATA[14], FONT_DATA[15],
         ]);
         self.font_header.numglyph = u32::from_le_bytes([
-            FONT_DATA[16], FONT_DATA[17], FONT_DATA[18], FONT_DATA[19]
+            FONT_DATA[16], FONT_DATA[17], FONT_DATA[18], FONT_DATA[19],
         ]);
         self.font_header.bytesperglyph = u32::from_le_bytes([
-            FONT_DATA[20], FONT_DATA[21], FONT_DATA[22], FONT_DATA[23]
+            FONT_DATA[20], FONT_DATA[21], FONT_DATA[22], FONT_DATA[23],
         ]);
         self.font_header.height = u32::from_le_bytes([
-            FONT_DATA[24], FONT_DATA[25], FONT_DATA[26], FONT_DATA[27]
+            FONT_DATA[24], FONT_DATA[25], FONT_DATA[26], FONT_DATA[27],
         ]);
         self.font_header.width = u32::from_le_bytes([
-            FONT_DATA[28], FONT_DATA[29], FONT_DATA[30], FONT_DATA[31]
+            FONT_DATA[28], FONT_DATA[29], FONT_DATA[30], FONT_DATA[31],
         ]);
 
         // A panic at this stage is technically not correct, since panic internally calls
         // framebuffer_logger which results in double lock (since this call already holds lock)
-        // This will cause system to hang. However, since we don't want system to continue boot 
+        // This will cause system to hang. However, since we don't want system to continue boot
         // process if framebuffer init fails, this behaviour is fine
         if self.font_header.magic != PSF_MAGIC {
             panic!("Invalid PSF magic number: {:#X}", self.font_header.magic);
         }
-        
-        // Calculate glyph data offset
+
         let glyph_offset = self.font_header.headersize as usize;
         if glyph_offset >= FONT_DATA.len() {
             panic!("Glyph offset beyond font data");
         }
 
         self.font_glyphs = unsafe { FONT_DATA.as_ptr().add(glyph_offset) };
-        
-        // PSF v2 might store height differently - let's check the actual bytes per glyph
-        let expected_height = self.font_header.bytesperglyph / ceil_div(self.font_header.width, 8);
+
+        // PSF v2 might store height differently — derive it from bytes-per-glyph
+        let expected_height =
+            self.font_header.bytesperglyph / ceil_div(self.font_header.width, 8);
         if expected_height != self.font_header.height {
-            // Use the calculated height instead
             self.font_header.height = expected_height;
         }
     }
-    
+
     fn get_glyph(&self, char_code: u32) -> Option<*const u8> {
-        // PSF fonts typically have 256 or 512 characters starting from 0
         if char_code >= self.font_header.numglyph {
             return None;
         }
-        
         let glyph_offset = (char_code * self.font_header.bytesperglyph) as usize;
         Some(unsafe { self.font_glyphs.add(glyph_offset) })
     }
-    
+
     pub fn clear_screen(&mut self) {
+        let fb_size = self.height * self.stride * 4;
+
+        self.display_start_row = 0;
+
         unsafe {
-            #[cfg(debug_assertions)]
-            {
-                self.fb_base.write_bytes(0, self.height * self.stride * 4);
-            }
-
-            #[cfg(not(debug_assertions))] 
-            {
-                let fb = self.fb_base as *mut u32;
-                for i in 0..self.height * self.stride {
-                    core::ptr::write_volatile(fb.add(i), 0);
-                }
-
-            }
-
-            ((*FRAMEBUFFER.buffer.get()).as_ptr() as *mut u8).write_bytes(0, self.height * self.stride * 4);
+            ((*FRAMEBUFFER.buffer.get()).as_ptr() as *mut u8).write_bytes(0, fb_size);
+            
+            core::ptr::copy_nonoverlapping(
+                (*FRAMEBUFFER.buffer.get()).as_ptr(),
+                self.fb_base,
+                fb_size,
+            );
         }
-        
+
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            core::arch::asm!(
+                "sfence", 
+                options(nostack, preserves_flags)
+            );
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+
         self.current_x = 0;
         self.current_y = 0;
+        self.dirty_min_y = usize::MAX;
+        self.dirty_max_y = 0;
     }
-    
+
     fn put_char(&mut self, c: char) {
         match c {
             '\n' => {
@@ -181,10 +191,10 @@ impl FramebufferLogger {
                 if self.current_y >= self.height {
                     self.scroll_screen();
                 }
-            },
+            }
             '\r' => {
                 self.current_x = 0;
-            },
+            }
             '\t' => {
                 let tab_width = self.font_header.width as usize * 4;
                 self.current_x += tab_width - (self.current_x % tab_width);
@@ -195,7 +205,7 @@ impl FramebufferLogger {
                         self.scroll_screen();
                     }
                 }
-            },
+            }
             _ => {
                 self.draw_char(c);
                 self.current_x += self.font_header.width as usize;
@@ -209,107 +219,100 @@ impl FramebufferLogger {
             }
         }
     }
-    
+
     fn draw_char(&mut self, c: char) {
         let char_code = c as u32;
-        
-        // Try to get glyph from font
-        let glyph_data = if let Some(glyph) = self.get_glyph(char_code) {
-            glyph
-        } else {
-            // Fallback to space if character not found
-            return;
+
+        let glyph_data = match self.get_glyph(char_code) {
+            Some(g) => g,
+            None => return,
         };
-        
-        let start_x = self.current_x;
-        let start_y = self.current_y;
-        let font_width = self.font_header.width;
-        let font_height = self.font_header.height;
-        
-        // Draw the character
-        for y in 0..font_height {
-            for x in 0..font_width {
-                let pixel_x = start_x + x as usize;
-                let pixel_y = start_y + y as usize;
-                
-                if pixel_x < self.width && pixel_y < self.height {
-                    // Calculate which byte contains this pixel
-                    let bytes_per_row = ceil_div(font_width, 8); 
-                    let byte_index = y * bytes_per_row + (x >> 3);
-                    let bit_index = 7 - (x % 8); // PSF uses MSB first
-                    
-                    if byte_index < self.font_header.bytesperglyph {
-                        let glyph_byte = unsafe { *glyph_data.add(byte_index as usize) };
-                        let is_set = (glyph_byte & (1 << bit_index)) != 0;
-                        
-                        if is_set {
-                            self.set_pixel(pixel_x, pixel_y, 0xAAAAAA); // Grey
-                        } else {
-                            self.set_pixel(pixel_x, pixel_y, 0x000000); // Black
+
+        let start_x     = self.current_x;
+        let start_y     = self.current_y; 
+        let font_width  = self.font_header.width  as usize;
+        let font_height = self.font_header.height as usize;
+        let bytes_per_row = ceil_div(self.font_header.width, 8) as usize;
+
+        if start_x >= self.width || start_y >= self.height {
+            return;
+        }
+        let draw_width  = font_width.min(self.width  - start_x);
+        let draw_height = font_height.min(self.height - start_y);
+
+        self.mark_dirty(start_y, start_y + font_height);
+
+        let logical_row = start_y / font_height;
+        let max_rows    = self.height / font_height;
+        let phys_row    = (self.display_start_row + logical_row) % max_rows;
+        // Physical Y of the topmost scanline of this character in the scratch buffer
+        let phys_top    = phys_row * font_height;
+
+        let scratch = unsafe { 
+            (*FRAMEBUFFER.buffer.get()).as_ptr() as *mut u32 
+        };
+
+        for y in 0..draw_height {
+            let row_base = (phys_top + y) * self.stride + start_x;
+
+            // Pointer to the first glyph byte for this scanline
+            let glyph_row = unsafe { 
+                glyph_data.add(y * bytes_per_row) 
+            };
+
+            // Process 8 pixels per byte; read each glyph byte exactly once
+            for bx in 0..bytes_per_row {
+                let glyph_byte = unsafe { *glyph_row.add(bx) };
+
+                if glyph_byte == 0 {
+                    continue;
+                }
+
+                // PSF is in MSB order 
+                let x_start = bx * 8;
+                let x_end   = (x_start + 8).min(draw_width);
+
+                for bit_pos in x_start..x_end {
+                    let bit_index = 7 - (bit_pos - x_start);
+                    if (glyph_byte & (1u8 << bit_index)) != 0 {
+                        unsafe { 
+                            *scratch.add(row_base + bit_pos) = 0x00AA_AAAA;
                         }
                     }
                 }
             }
         }
     }
-    
-    fn set_pixel(&mut self, x: usize, y: usize, color: u32) {
-        let offset = (y * self.stride + x) * 4; // stride is in pixels, 4 bytes per pixel
-        if offset < self.height * self.stride * 4 {
-            unsafe {
-                let pixel_ptr = self.fb_base.add(offset) as *mut u32;
-                let buffer_ptr = (*FRAMEBUFFER.buffer.get()).as_ptr().add(offset) as *mut u32;
-                core::ptr::write_volatile(pixel_ptr, color);
-                core::ptr::write(buffer_ptr, color);
-            }
-        }
+
+    // Expand the dirty logical-scanline range to cover [y_start, y_end).
+    fn mark_dirty(&mut self, y_start: usize, y_end: usize) {
+        self.dirty_min_y = self.dirty_min_y.min(y_start);
+        self.dirty_max_y = self.dirty_max_y.max(y_end);
     }
-    
+
     fn scroll_screen(&mut self) {
-        // Scroll the screen up by one line (font height only)
-        let line_size = self.font_header.height as usize * self.stride * 4; // stride in pixels, *4 for bytes
-        let fb_size = self.height * self.stride * 4;
+        let font_height = self.font_header.height as usize;
+        let max_rows = self.height / font_height;
+        let row_bytes = font_height * self.stride * 4;
 
+        // Advance ring-buffer head 
+        self.display_start_row = (self.display_start_row + 1) % max_rows;
+
+        // Clear last logical line 
+        let new_bottom_phys = (self.display_start_row + max_rows - 1) % max_rows;
         unsafe {
-            // Scroll the scratch buffer
-            core::ptr::copy(
-                (*FRAMEBUFFER.buffer.get()).as_ptr().add(line_size),
-                (*FRAMEBUFFER.buffer.get()).as_ptr() as *mut u8,
-                fb_size - line_size
-            );
-            
-            // Clear the bottom line in scratch buffer
-            core::ptr::write_bytes(
-                (*FRAMEBUFFER.buffer.get()).as_ptr().add(fb_size - line_size) as *mut u8,
-                0,
-                line_size
-            );
-
-            // Copy scratch buffer to real fb
-            #[cfg(debug_assertions)]
-            {
-                core::ptr::copy_nonoverlapping(
-                    (*FRAMEBUFFER.buffer.get()).as_ptr(),
-                    self.fb_base,
-                    fb_size
-                );
-            }
-
-            #[cfg(not(debug_assertions))]
-            {
-                let src = (*FRAMEBUFFER.buffer.get()).as_ptr() as *const u32;
-                let dst = self.fb_base as *mut u32;
-
-                for i in 0..fb_size / 4 {
-                    let v = core::ptr::read(src.add(i));
-                    core::ptr::write_volatile(dst.add(i), v);
-                }
-            }
+            ((*FRAMEBUFFER.buffer.get())
+                .as_ptr()
+                .add(new_bottom_phys * row_bytes) as *mut u8)
+                .write_bytes(0, row_bytes);
         }
 
-        self.current_y -= self.font_header.height as usize;
+        // Mark entire screen dirty 
+        self.mark_dirty(0, self.height);
+
+        self.current_y -= font_height;
     }
-    
+
     pub fn write(&mut self, s: &str) {
         for c in s.chars() {
             self.put_char(c);
@@ -324,27 +327,118 @@ impl core::fmt::Write for FramebufferLogger {
     }
 }
 
+pub fn flush_log() {
+    let mut l = FRAMEBUFFER_LOGGER.lock();
+    if l.dirty_max_y <= l.dirty_min_y {
+        return; // nothing to flush
+    }
+
+    let s = (
+        l.dirty_min_y,
+        l.dirty_max_y,
+        l.fb_base as usize,
+        l.stride,
+        l.height,
+        l.font_header.height as usize,
+        l.display_start_row,
+    );
+
+    l.dirty_min_y = usize::MAX;
+    l.dirty_max_y = 0;
+
+    let (dirty_min_y, dirty_max_y, fb_base, stride, height, font_height, display_start_row) = s;
+
+    let max_rows  = height / font_height;
+    let row_bytes = font_height * stride * 4; // bytes for one full text row
+
+    // Convert pixel-unit dirty range to text-row range.
+    // dirty_min_y / dirty_max_y are always multiples of font_height (cursor
+    // advances by font_height; scroll marks height which equals max_rows * font_height).
+    let dirty_min_row = dirty_min_y / font_height;
+    let dirty_max_row = dirty_max_y / font_height;
+    let num_rows = dirty_max_row - dirty_min_row;
+
+    // Physical scratch-buffer row that holds logical row dirty_min_row
+    let phys_start = (display_start_row + dirty_min_row) % max_rows;
+    // phys_end may exceed max_rows — that signals a ring-buffer wrap
+    let phys_end   = phys_start + num_rows;
+
+    let scratch = unsafe { (*FRAMEBUFFER.buffer.get()).as_ptr() };
+
+    if phys_end <= max_rows {
+        // No wrap => one contiguous copy
+        let src = unsafe { scratch.add(phys_start * row_bytes) };
+        let dst = (fb_base as *mut u8).wrapping_add(dirty_min_row * row_bytes);
+        unsafe {
+            core::ptr::copy_nonoverlapping(src, dst, num_rows * row_bytes);
+        }
+    } else {
+        // Ring-buffer wrap => 2 contiguous copies
+        let part1_rows = max_rows - phys_start; 
+        let part2_rows = num_rows - part1_rows; 
+
+        let src1 = unsafe { scratch.add(phys_start * row_bytes) };
+        let dst1 = (fb_base as *mut u8).wrapping_add(dirty_min_row * row_bytes);
+        unsafe {
+            core::ptr::copy_nonoverlapping(src1, dst1, part1_rows * row_bytes);
+        }
+
+        let src2 = scratch;
+        let dst2 = (fb_base as *mut u8).wrapping_add((dirty_min_row + part1_rows) * row_bytes);
+        unsafe {
+            core::ptr::copy_nonoverlapping(src2, dst2, part2_rows * row_bytes);
+        }
+    }
+
+    // Drain all Write-Combining Buffers so pixels are visible on screen.
+    // sfence is sufficient (and cheaper than mfence) for WC draining.
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        core::arch::asm!(
+            "sfence", 
+            options(nostack, preserves_flags)
+        );
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+}
+
 pub fn init() {
     let mut logger = FRAMEBUFFER_LOGGER.lock();
     logger.init();
-    
+
     REMAP_LIST.lock().add_node(RemapEntry {
         value: MemoryRegion {
             base_address: logger.fb_base as usize,
-            size: logger.height * logger.stride * 4
+            size: logger.height * logger.stride * 4,
         },
         map_type: OffsetMapped(|new_fb_base| {
             debug!("Framebuffer relocated to new base:{:#X}", new_fb_base);
-            // Do not change framebuffer address here. We will do it right before switching to new address space
+            // Do not change framebuffer address here.
+            // We will do it right before switching to the new address space.
         }),
-        flags: PageDescriptor::MMIO
-    }).unwrap();
+        flags: PageDescriptor::WC,
+    })
+    .unwrap();
 }
 
 pub fn relocate_framebuffer() {
     let mut logger = FRAMEBUFFER_LOGGER.lock();
-    let new_fb_base = crate::mem::get_virtual_address(logger.fb_base as usize, 0, MapFetchType::Any).expect("Could not find virtual address for boot display framebuffer");
-    let new_font_glyph_ptr = crate::mem::get_virtual_address(logger.font_glyphs as usize,  0, MapFetchType::Kernel).expect("Could not find virtual address for boot font glyphs");
+    let new_fb_base = crate::mem::get_virtual_address(
+        logger.fb_base as usize,
+        0,
+        MapFetchType::Any,
+    )
+    .expect("Could not find virtual address for boot display framebuffer");
+
+    let new_font_glyph_ptr = crate::mem::get_virtual_address(
+        logger.font_glyphs as usize,
+        0,
+        MapFetchType::Kernel,
+    )
+    .expect("Could not find virtual address for boot font glyphs");
+
     logger.fb_base = new_fb_base as *mut u8;
     logger.font_glyphs = new_font_glyph_ptr as *const u8;
 }

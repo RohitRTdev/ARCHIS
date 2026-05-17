@@ -4,7 +4,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use common::elf::*;
 use rustc_demangle::demangle;
 use crate::{cpu, logger};
-use kernel_intf::{debug, panic_println};
+use kernel_intf::println;
 use crate::sync::Spinlock;
 use crate::hal::{self, IPIRequestType, notify_core};
 use crate::module::*;
@@ -19,6 +19,7 @@ const STACK_UNWIND_DEPTH: usize = 16;
 
 #[allow(dead_code)]
 pub fn common_panic_handler(mod_name: &str, info: &PanicInfo) -> ! {
+    hal::disable_interrupts();
     let core = hal::get_core();
 
     // In case of nested panic, only allow the initially panicked core 
@@ -40,81 +41,60 @@ pub fn common_panic_handler(mod_name: &str, info: &PanicInfo) -> ! {
                     notify_core(IPIRequestType::Shutdown, cpu);
                 }
             }
-            
         }
-        
+
         kernel_intf::disable_logger();
         logger::set_panic_mode(core as u8);
         kernel_intf::enable_logger();
     }
 
     if IS_NESTED.load(Ordering::Acquire) {
-        panic_println!("====Nested panic!!====");
+        println!("====Nested panic!!====");
     }
 
     // Try and recover any more panics that might occur beyond this point
     IS_NESTED.store(true, Ordering::Release);
 
     if early_panic_phase || DISABLE_CALLSTACK.load(Ordering::Acquire) {
-        panic_println!("Kernel panic on core {}!!", core);
-        panic_println!("Message: {}", info.message());
-        panic_println!("Module: {}", mod_name);
+        println!("Kernel panic on core {}!!", core);
+        println!("Message: {}", info.message());
+        println!("Module: {}", mod_name);
         
         hal::halt();
     }
     
-    panic_println!("Kernel panic on core {}!!", core);
-    panic_println!("Message: {}", info.message());
-    panic_println!("Module: {}", mod_name);
+    println!("Kernel panic on core {}!!", core);
+    println!("Message: {}", info.message());
+    println!("Module: {}", mod_name);
 
     let stack_base = cpu::get_panic_base(); 
-    start_unwind(mod_name, stack_base, true);
+    start_unwind(mod_name, stack_base);
 
     hal::halt();
 }
 
-pub fn start_unwind(mod_name: &str, stack_base: usize, panic_mode: bool) {
+pub fn start_unwind(mod_name: &str, stack_base: usize) {
     let mut unwind_list: [usize; STACK_UNWIND_DEPTH] = [0; STACK_UNWIND_DEPTH];
 
     #[cfg(debug_assertions)]
     {
-        if panic_mode {
-            panic_println!("Callstack:");
-        }
-        else {
-            debug!("Callstack:");
-        }
+        println!("Callstack:");
 
         let (actual_depth, cur_base) = hal::unwind_stack(STACK_UNWIND_DEPTH, stack_base, unwind_list.as_mut_slice());
         let start_depth = if mod_name == env!("CARGO_PKG_NAME") { 3 } else { 4 };
 
         if actual_depth <= start_depth + 1 {
-            if panic_mode {
-                panic_println!("(Empty) => Current stack base: {:#X}, Current stack top: {:#X}", cur_base, stack_base);
-            }
-            else {
-                debug!("(Empty) => Current stack base: {:#X}, Current stack top: {:#X}", cur_base, stack_base);
-            }
+            println!("(Empty) => Current stack base: {:#X}, Current stack top: {:#X}", cur_base, stack_base);
         }
 
         for addr in start_depth..actual_depth {
             if unwind_list[addr] != 0 {
                 let sym_info = symbol_trace(unwind_list[addr]);
                 if let Some(sym) = sym_info {
-                    if panic_mode {
-                        panic_println!("{:#X}({}!{}+{:#X})", unwind_list[addr], sym.0, demangle(sym.1), sym.2);
-                    }
-                    else {
-                        debug!("{:#X}({}!{}+{:#X})", unwind_list[addr], sym.0, demangle(sym.1), sym.2);
-                    }
+                    println!("{:#X}({}!{}+{:#X})", unwind_list[addr], sym.0, demangle(sym.1), sym.2);
                 }
                 else {
-                    if panic_mode {
-                        panic_println!("{:#X}(??)", unwind_list[addr]);
-                    }
-                    else {
-                        debug!("{:#X}(??)", unwind_list[addr]);
-                    }
+                    println!("{:#X}(??)", unwind_list[addr]);
                 }
             }
         }

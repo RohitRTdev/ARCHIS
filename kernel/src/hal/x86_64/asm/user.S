@@ -80,6 +80,7 @@ ENDF jump_to_user_code
 // User stub
 .global user_fn_start, user_fn_end
 user_fn_start:
+    movq $2, %r12
     movq $5, %rbx
 
 start_label:
@@ -97,9 +98,13 @@ start_label:
     jnz start_label
 
     int $38
+    movq $5, %rax
+    syscall
+    movq $3, %rbx
+    decq %rcx
+    jnz start_label
     movq $0, %rax
     syscall
-    jmp user_fn_start
 msg: 
     .ascii "Hello, world!"
 

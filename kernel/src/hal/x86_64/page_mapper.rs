@@ -19,6 +19,7 @@ impl PTE {
     pub const PWT: u64 = 1 << 3;
     pub const PCD: u64 = 1 << 4;
     pub const G: u64 = 1 << 8;
+    pub const PAT: u64 = 1 << 7;
     pub const PHY_ADDR_MASK: u64 = 0x000fffff_fffff000;
 }
 
@@ -201,6 +202,11 @@ impl PageMapper {
 
         let is_user = flags & mem::PageDescriptor::USER != 0;
         let is_mmio = flags & mem::PageDescriptor::MMIO != 0;
+        let is_wc   = flags & mem::PageDescriptor::WC   != 0;
+        let is_global_feature = CPU_FEATURES.get().unwrap().lock().pge;
+        let is_pat_feature = CPU_FEATURES.get().unwrap().lock().pat;
+
+        assert!(!(is_mmio && is_wc), "PageDescriptor::MMIO and WC are mutually exclusive");
 
         let pml4 = self.get_table_mut(
             PageLevel::PML4,
@@ -303,11 +309,16 @@ impl PageMapper {
                     (*pt).as_mut_ptr().add(pt_idx),
                     (pa & PTE::PHY_ADDR_MASK)
                         | en_flag!(is_user, PTE::U)
-                        | en_flag!(is_mmio, PTE::PCD)
+                        | en_flag!(is_mmio || is_wc, PTE::PCD)
                         | en_flag!(is_mmio, PTE::PWT)
                         | en_flag!(
+                            is_wc && 
+                            is_pat_feature,
+                            PTE::PAT
+                        )
+                        | en_flag!(
                             !is_user &&
-                            CPU_FEATURES.get().unwrap().lock().pge,
+                            is_global_feature,
                             PTE::G
                         )
                         | PTE::RW
@@ -408,42 +419,17 @@ impl PageMapper {
         }
     }
 
-    //pub fn map_memory(&mut self, virt_addr: usize, phys_addr: usize, size: usize, flags: u8) {
-    //    assert!(virt_addr & 0xfff == 0  && phys_addr & 0xfff == 0 && size & 0xfff == 0);
-    //    let num_pages = ceil_div(size, PAGE_SIZE);
-    //    self.set_current();
-    //    for i in 0..num_pages {
-    //        let va = virt_addr + i * PAGE_SIZE;
-    //        let pa = phys_addr + i * PAGE_SIZE;
-    //        self.map_page(va as u64, pa as u64, flags & mem::PageDescriptor::USER != 0, 
-    //        flags & mem::PageDescriptor::MMIO != 0);
-    //    }
-    //    core::sync::atomic::fence(Ordering::SeqCst);
-    //}
-
-    //pub fn unmap_memory(&mut self, virt_addr: usize, size: usize) {
-    //    assert!(virt_addr & 0xfff == 0 && size & 0xfff == 0);
-    //    let num_pages = ceil_div(size, PAGE_SIZE);
-    //    self.set_current();
-
-    //    assert!(self.is_current);
-    //    for i in 0..num_pages {
-    //        let va = virt_addr + i * PAGE_SIZE;
-    //        self.unmap_page(va as u64);
-    //    }
-    //    core::sync::atomic::fence(Ordering::SeqCst);
-    //}
-
     // This is not a perfect solution. There is a brief period (The time from which these IPIs are sent
-    // and the time they are received by the other cores), where the other cores won't observe the new mapping.
+    // and the time they are received by the other cores) where the other cores won't observe the new mapping.
     // However this only becomes a problem if 2 or more cores are 
     // a) sharing the same address space
     // b) actively working with a region of virtual memory whose mapping has been currently changed on one of the cores
     // Unless we're changing the physical mapping of one of the core regions that are mapped during page map init,
     // we won't run into situation b
-    // In other cases, two tasks won't be working with same physical memory
-    // The one legitimate case where this is true is for shared memory (shmem). However, we don't have this concept yet in the kernel.
-    // The different cores will require some external synchronization mechanism to make it work. For now, this will do.
+    // However, the current design is to first unmap the region, and then remap it if needed
+    // There is no provision to just change the mapping directly. This means that the 2 threads which are accessing this region
+    // will have to undergo some sort of synchronization anyway to not enter race condition. 
+    // Therefore, this problem can be avoided at a higher level than over here.
     pub fn invalidate_other_cores(desc: MemoryRegion) {
         let cur_core = super::get_core();
         let total_cores = cpu::get_total_cores();
@@ -464,55 +450,6 @@ impl PageMapper {
             unsafe { asm::invlpg(VirtAddr::new(virt_addr as usize).get() as u64); }
         }
     }
-
-    //fn unmap_page(&mut self, virt_addr: u64) {
-    //    let (pml4_idx, pdpt_idx, pd_idx, pt_idx) = Self::split_indices(virt_addr);
-    //    let mut pml_addr = 0;
-    //    let mut pdpt_addr = 0;
-    //    let mut pd_addr = 0;
-    //    let pt = if !self.is_current {
-    //        unsafe {
-    //            pml_addr = mem::map_page_table(self.pml4_phys as usize, self.proc_id).expect("Page table could not be mapped to process address space");
-    //            let pdpt = *(pml_addr as *mut u64).add(pml4_idx) & PTE::PHY_ADDR_MASK;
-    //            pdpt_addr = mem::map_page_table(pdpt as usize, self.proc_id).expect("Page table could not be mapped to process address space");
-    //            let pd = *(pdpt_addr as *mut u64).add(pdpt_idx) & PTE::PHY_ADDR_MASK;
-    //            pd_addr = mem::map_page_table(pd as usize, self.proc_id).expect("Page table could not be mapped to process address space");
-    //            let pt = *(pd_addr as *mut u64).add(pd_idx) & PTE::PHY_ADDR_MASK;
-    //            let pt_addr = mem::map_page_table(pt as usize, self.proc_id).expect("Page table could not be mapped to process address space");
-    //            
-    //            usize_to_ref_mut::<[u64; TOTAL_ENTRIES]>(pt_addr)
-    //        }
-    //    }
-    //    else {
-    //        self.get_table_mut(PageLevel::PT, pml4_idx, pdpt_idx, pd_idx, 0)
-    //    };
-
-    //    // Unmap this entry
-    //    assert!(pt[pt_idx] & PTE::P != 0);
-    //    pt[pt_idx] = 0;
-
-    //    self.invalidate_tlb(virt_addr as usize);
-    //    self.unmap_page_tables(pml_addr, pdpt_addr, pd_addr, pt.as_ptr().addr());
-
-    //    // TODO:
-    //    // Unmap the page tables also incase they become empty?
-    //}
-
-    //fn map_page(&mut self, virt_addr: u64, phys_addr: u64, is_user: bool, is_mmio: bool) {
-    //    let (pml4_idx, pdpt_idx, pd_idx, pt_idx) = Self::split_indices(virt_addr);
-
-    //    let pml4 = self.get_table_mut(PageLevel::PML4, 0, 0, 0, self.pml4_phys as usize);
-    //    let pdpt = self.get_or_alloc_table(pml4, pml4_idx, PageLevel::PDPT, pml4_idx, 0, 0);
-    //    let pd = self.get_or_alloc_table(pdpt, pdpt_idx, PageLevel::PD, pml4_idx, pdpt_idx, 0);
-    //    let pt = self.get_or_alloc_table(pd, pd_idx, PageLevel::PT, pml4_idx, pdpt_idx, pd_idx);
-
-    //    pt[pt_idx] = (phys_addr & PTE::PHY_ADDR_MASK) | en_flag!(is_user, PTE::U) | 
-    //    en_flag!(is_mmio, PTE::PCD) | en_flag!(is_mmio, PTE::PWT) | en_flag!(!is_user && CPU_FEATURES.get().unwrap().lock().pge, PTE::G) 
-    //    | PTE::RW | PTE::P; 
-    //    
-    //    self.invalidate_tlb(virt_addr as usize);
-    //    self.unmap_page_tables(pml4.as_ptr().addr(), pdpt.as_ptr().addr(), pd.as_ptr().addr(), pt.as_ptr().addr());
-    //}
 
     fn unmap_page_tables(&mut self, pml4: usize, pdpt: usize, pd: usize, pt: usize) {
         if self.is_current {
@@ -719,8 +656,6 @@ impl PageMapper {
 
             mem::map_page_table(pdpt_virt, pdpt_phy as usize, self.proc_id)
             .expect("Unable to map pdpt to process address space");
-
-            core::sync::atomic::compiler_fence(Ordering::SeqCst);
 
             let pdpt = usize_to_ptr::<[u64; TOTAL_ENTRIES]>(pdpt_virt);
 

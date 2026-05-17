@@ -1,5 +1,7 @@
 #![allow(static_mut_refs)]
 
+const LOG_SCRATCH_BUFFER_SIZE: usize = 1024;
+
 #[macro_export]
 macro_rules! print {
     () => {};
@@ -11,48 +13,13 @@ macro_rules! print {
                 use core::fmt::Write;
 
                 $crate::acquire_spinlock(&mut $crate::LOGGER.lock);
-                
                 $crate::LOGGER.write_fmt(args).unwrap();
-                
+                $crate::LOGGER.flush();
                 $crate::release_spinlock(&mut $crate::LOGGER.lock);
             }
         }
     };
 }
-
-#[macro_export]
-macro_rules! panic_println {
-    () => {
-        #[cfg(test)]
-        {
-            ::std::println!();
-        }
-        #[cfg(not(test))]
-        {
-            use core::fmt::Write;
-            unsafe {
-                $crate::LOGGER.write_fmt(::core::format_args!("\n")).unwrap();
-            }
-        }
-    };
-    ($($arg:tt)*) => {
-        #[cfg(test)]
-        {
-            ::std::println!($($arg)*);
-        }
-        #[cfg(not(test))]
-        {
-            unsafe {
-                use core::fmt::Write;
-
-                $crate::LOGGER.write_fmt(::core::format_args!($($arg)*))
-                .and_then(|_| $crate::LOGGER.write_str("\n"))
-                .unwrap();
-            }
-        }
-    };
-}
-
 
 #[macro_export]
 macro_rules! println {
@@ -67,6 +34,7 @@ macro_rules! println {
             unsafe {
                 $crate::acquire_spinlock(&mut $crate::LOGGER.lock);
                 $crate::LOGGER.write_fmt(::core::format_args!("\n")).unwrap();
+                $crate::LOGGER.flush();
                 $crate::release_spinlock(&mut $crate::LOGGER.lock);
             }
         }
@@ -83,11 +51,10 @@ macro_rules! println {
                 use core::fmt::Write;
 
                 $crate::acquire_spinlock(&mut $crate::LOGGER.lock);
-
                 $crate::LOGGER.write_fmt(args)
                 .and_then(|_| $crate::LOGGER.write_str("\n"))
                 .unwrap();
-                
+                $crate::LOGGER.flush();
                 $crate::release_spinlock(&mut $crate::LOGGER.lock);
             }
         }
@@ -97,9 +64,6 @@ macro_rules! println {
 #[macro_export]
 macro_rules! level_print {
     ($level: literal, $($arg:tt)*) => {
-        // log_timestamp is an AtomicBool, so we can read it without taking
-        // the logger lock. The subsequent $crate::println! call still
-        // serialises the actual write under LOGGER.lock.
         let timestamp = unsafe {
             $crate::LOGGER.log_timestamp.load(::core::sync::atomic::Ordering::Acquire)
         };
@@ -137,21 +101,40 @@ macro_rules! debug {
 impl core::fmt::Write for KernelLogger {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         unsafe {
-            crate::serial_print_ffi(s.as_ptr(), s.len());
+            let s = s.as_bytes();
+            let mut len = s.len();
+            if s.len() + self.buf_size > LOG_SCRATCH_BUFFER_SIZE {
+                len = LOG_SCRATCH_BUFFER_SIZE - self.buf_size;
+            }
+
+            ::core::ptr::copy_nonoverlapping(s.as_ptr(), self.scratch_buffer.as_mut_ptr().add(self.buf_size), len);
+            self.buf_size += len;
         }
-        
         Ok(())
     }
 } 
 
+impl KernelLogger {
+    pub fn flush(&mut self) {
+        unsafe {
+            crate::serial_print_ffi(self.scratch_buffer.as_ptr(), self.buf_size);
+            self.buf_size = 0;
+        }
+    }
+}
+
 pub struct KernelLogger {
     pub log_timestamp: core::sync::atomic::AtomicBool,
-    pub lock: crate::Lock
+    pub lock: crate::Lock,
+    pub scratch_buffer: [u8; LOG_SCRATCH_BUFFER_SIZE],
+    pub buf_size: usize
 }
 
 pub static mut LOGGER: KernelLogger = KernelLogger {
     log_timestamp: core::sync::atomic::AtomicBool::new(false),
-    lock: crate::Lock { lock: 0, int_status: false }
+    lock: crate::Lock { lock: 0, int_status: false },
+    scratch_buffer: [0; LOG_SCRATCH_BUFFER_SIZE],
+    buf_size: 0
 };
 
 pub fn init_logger() {
@@ -165,7 +148,6 @@ pub fn enable_timestamp() {
         crate::LOGGER.log_timestamp.store(true, core::sync::atomic::Ordering::Release);
     }
 }
-
 
 // Holding lock indefinitely effectively disables the logger
 // It also waits for any existing cores to complete logging

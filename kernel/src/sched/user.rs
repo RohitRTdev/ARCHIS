@@ -130,7 +130,7 @@ fn sys_write_handler(args: &[u64; MAX_ARCH_ARGS]) -> i64 {
     //    E_INVALID
     //}
 
-    kernel_intf::println!("Hello world!");
+    info!("Hello world!");
 
     E_SUCCESS
 }
@@ -144,7 +144,7 @@ fn sys_delay_handler(args: &[u64; MAX_ARCH_ARGS]) -> i64 {
 }
 
 fn sys_thread_handler(_args: &[u64; MAX_ARCH_ARGS]) -> i64 {
-    debug!("Creating new user thread..");
+    info!("Creating new user thread..");
     let stat: KError = create_user_thread(|| {loop{}}).into();
 
     stat.into()

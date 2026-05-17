@@ -177,10 +177,19 @@ static QUEUE: Spinlock<DynList<[i64; 64]>> = Spinlock::new(List::new());
 
 fn thread_creator() -> ! {
     let id = sched::get_current_task_id().unwrap();
+    let mut counter = 1;
     loop {
         sched::delay_ms(1000);
         debug!("Running thread with id {}", id);
         sched::create_thread(thread_creator).expect("Failed to create child thread!");
+        if counter % 5 == 0 {
+            sched::create_process(thread_creator, false).expect("Failed to create child process!");
+        }
+        
+        if counter % 10 == 0 {
+            sched::exit_process();
+        }
+        counter += 1;
     }
 }
 
@@ -198,7 +207,7 @@ fn kern_main() -> ! {
     sched::init();
 
     // Some tests just to test out process and thread subsystem
-    {
+    //{
     //    let spawn_proc = sched::create_process(process_spawn, false).expect("Failed to create second process");
     //    info!("Main task waiting for process id 1 to complete");
     //    spawn_proc.wait().expect("Unable to wait on process id 1");
@@ -207,7 +216,7 @@ fn kern_main() -> ! {
 
     //    info!("Main task waiting for task id 1 to complete");
     //    spawn_task.wait().expect("Unable to wait on task id 1");
-    }
+    //}
 
     {
         let user_proc0 = sched::create_process(|| -> ! {loop{}}, true)
@@ -219,7 +228,7 @@ fn kern_main() -> ! {
         sched::create_thread(watchdog).unwrap();
     }
 
-    sched::create_thread(thread_creator).expect("Failed to create kernel thread!");
+    //sched::create_thread(thread_creator).expect("Failed to create kernel thread!");
 
     //sched::create_thread(|| {
     //    loop {

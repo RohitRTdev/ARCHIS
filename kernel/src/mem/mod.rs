@@ -39,6 +39,7 @@ impl PageDescriptor {
     pub const USER: u8 = 1 << 1;
     pub const NO_ALLOC: u8 = 1 << 2;
     pub const MMIO: u8 = 1 << 3;
+    pub const WC: u8 = 1 << 4;
 }
 
 pub fn init() {

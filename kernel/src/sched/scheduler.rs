@@ -1003,6 +1003,7 @@ pub fn create_thread_do_work(handler: fn() -> !, user_fn: Option<fn() -> !>) -> 
                 Err(e)
             }
             else {
+                debug!("Creating new task {} under process {}", thread_id, guard.get_id());
                 thread.lock().process = Some(process_ref);
                 thread.lock().vcb = Some(proc_addr_space);
                 drop(guard);

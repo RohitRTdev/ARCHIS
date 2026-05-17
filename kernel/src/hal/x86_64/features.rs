@@ -26,11 +26,12 @@ pub struct CPUFeatures {
     pub mtrr: bool,
     pub tsc_invariant: bool,
     pub x2apic: bool,
+    pub pat: bool,
 
     pub phy_addr_width: u8
 }
 
-const FEATURE_MAP: [FeatureDescriptor; 12] = [
+const FEATURE_MAP: [FeatureDescriptor; 13] = [
     FeatureDescriptor {
         fn_num: 0x1,
         ext_fn_num: 0,
@@ -128,6 +129,15 @@ const FEATURE_MAP: [FeatureDescriptor; 12] = [
         bit_idx: 12,
         is_required: FeatureState::NotRequired(|val| {
             val.mtrr = true;
+        })
+    },
+    FeatureDescriptor {
+        fn_num: 0x1,
+        ext_fn_num: 0,
+        reg_idx: 3,
+        bit_idx: 16,
+        is_required: FeatureState::NotRequired(|val| {
+            val.pat = true;
         })
     }
 ];
