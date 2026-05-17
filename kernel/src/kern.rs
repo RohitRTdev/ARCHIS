@@ -222,13 +222,10 @@ fn kern_main() -> ! {
         let user_proc0 = sched::create_process(|| -> ! {loop{}}, true)
         .expect("Failed to create user process 0");
         
-        //let user_proc1 = sched::create_process(|| -> ! {loop{}}, true)
-        //.expect("Failed to create user process 1");
-
         sched::create_thread(watchdog).unwrap();
     }
 
-    //sched::create_thread(thread_creator).expect("Failed to create kernel thread!");
+    sched::create_thread(thread_creator).expect("Failed to create kernel thread!");
 
     //sched::create_thread(|| {
     //    loop {
