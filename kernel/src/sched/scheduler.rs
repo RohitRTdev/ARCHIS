@@ -284,6 +284,7 @@ pub fn add_cur_task_to_wait_queue_with_timer(wait_semaphore: KSemInnerType, time
         return false;
     }
 
+    assert!(task.wait_semaphores.get_nodes() == 0);
     let res = task.wait_semaphores.add_node(wait_semaphore);
     if res.is_err() {
         sched_cb.timer_list.pop_node();
@@ -309,6 +310,8 @@ pub fn add_cur_task_to_wait_queue(wait_semaphore: KSemInnerType) -> bool {
     if task.status == TaskStatus::TERMINATED {
         return false;
     }
+    
+    assert!(task.wait_semaphores.get_nodes() == 0);
 
     let res = task.wait_semaphores.add_node(wait_semaphore);
     if res.is_err() {
@@ -322,6 +325,8 @@ pub fn add_cur_task_to_wait_queue(wait_semaphore: KSemInnerType) -> bool {
 fn remove_wait_semaphore(task: &mut Task, wait_semaphore: KSemInnerType) {
     let mut sem = None;
     let sem_val = (&*wait_semaphore) as *const _;
+
+    assert!(task.wait_semaphores.get_nodes() == 1);
 
     for semaphore in task.wait_semaphores.iter() {
         let val = (&***semaphore) as *const _;
@@ -489,8 +494,6 @@ pub fn kill_thread(task_id: usize) {
             },
 
             TaskStatus::RUNNING => {
-                // The current task is killing itself (exit)
-                
                 // Since the task is currently running, we can't immediately drop it as it is using this stack
                 // So, delay the stack destruction
                 
@@ -520,6 +523,9 @@ pub fn kill_thread(task_id: usize) {
     // Inform semaphore that this task is about to be killed, remove it from the blocked list
     if drop_task {
         while this_task.lock().wait_semaphores.get_nodes() != 0 {
+            // Right now, there is no option for a task to be in multiple wait lists
+            // So this should be valid
+            assert!(this_task.lock().wait_semaphores.get_nodes() == 1);
             // We do it in this weird fashion since we don't want the task to be locked during call to drop_task
             let (sem_wrap, sem_inner) = {
                 let task = this_task.lock();
