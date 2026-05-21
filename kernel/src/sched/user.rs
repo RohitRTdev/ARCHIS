@@ -1,17 +1,23 @@
 use core::alloc::Layout;
-use core::ffi::CStr;
 use common::PAGE_SIZE;
 use kernel_intf::{KError, info};
-use alloc::vec;
 use crate::cpu::Stack;
 use crate::hal::{MAX_ARCH_ARGS, copy_user_memory, transfer_control_to_user};
 use crate::mem::{PageDescriptor, allocate_memory};
 use super::*;
 use kernel_intf::*;
 
+#[cfg(test)]
+static USER_FN_START: u8 = 0;
+
+#[cfg(test)]
+static USER_FN_END: u8 = 0;
+
+
+#[cfg(not(test))]
 extern "C" {
-    static user_fn_start: u8;
-    static user_fn_end: u8;
+    static USER_FN_START: u8;
+    static USER_FN_END: u8;
 }
 
 
@@ -51,11 +57,11 @@ pub fn user_init_handler() -> ! {
     let stack_base = Stack::into_inner(&mut stack).addr().get();
 
     let user_fn_top = unsafe {
-        &user_fn_start as *const u8 as usize
+        &USER_FN_START as *const u8 as usize
     };
     
     let user_fn_last = unsafe {
-        &user_fn_end as *const u8 as usize
+        &USER_FN_END as *const u8 as usize
     };
 
     let user_stub_size = user_fn_last - user_fn_top;
@@ -65,7 +71,7 @@ pub fn user_init_handler() -> ! {
 
     info!("Allocated user stub at addr: {:#X} with size {}", user_stub_base.addr(), user_stub_size);
     unsafe {
-        copy_user_memory(user_stub_base, &user_fn_start as *const u8, user_stub_size);
+        copy_user_memory(user_stub_base, &USER_FN_START as *const u8, user_stub_size);
     }
 
     add_memory_range_to_cur_process(user_stub_base.addr(), user_stub_size, true);

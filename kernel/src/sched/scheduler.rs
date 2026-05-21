@@ -3,7 +3,7 @@ use common::PAGE_SIZE;
 use crate::cpu::{self, MAX_CPUS, PerCpu, Stack, get_panic_base, get_total_cores, get_worker_stack, set_panic_base};
 use crate::hal::{self, IPIRequestType, create_kernel_context, disable_scheduler_timer, enable_scheduler_timer, fetch_context, get_per_cpu_base, get_per_cpu_data, get_per_cpu_kernel_base, set_per_cpu_base, set_per_cpu_data, switch_context};
 use crate::mem::{PoolAllocatorGlobal, VCB, get_kernel_addr_space, set_address_space};
-use crate::{ds::*, sched};
+use crate::ds::*;
 use crate::sync::{KSem, KSemInnerType, Spinlock};
 use super::{KProcess, ProcessStatus, get_current_process, get_process_info, KTimerInnerType};
 use core::sync::atomic::{AtomicU8,AtomicUsize, Ordering};
@@ -647,6 +647,7 @@ pub fn disable_preemption() {
 
 pub fn enable_preemption() {
     let mut sched_cb = SCHEDULER_CON_BLK.local().lock();
+    assert!(sched_cb.preemption_count >= 1);
     sched_cb.preemption_count = sched_cb.preemption_count.saturating_sub(1);
 }
 

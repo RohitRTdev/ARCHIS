@@ -30,8 +30,8 @@ fn list_clear_test() {
 
     #[derive(Debug, Clone)]
     struct TestStruct {
-        a: u32,
-        b: u32
+        _a: u32,
+        _b: u32
     }
 
     #[derive(Debug, Clone)]
@@ -49,8 +49,8 @@ fn list_clear_test() {
                 _b
             };
             
-            inst.list.add_node(TestStruct{a: _a, b: _b}).unwrap();
-            inst.list.add_node(TestStruct{a: _a + 1, b: _b + 1}).unwrap();
+            inst.list.add_node(TestStruct{_a: _a, _b: _b}).unwrap();
+            inst.list.add_node(TestStruct{_a: _a + 1, _b: _b + 1}).unwrap();
             inst
         }
     }

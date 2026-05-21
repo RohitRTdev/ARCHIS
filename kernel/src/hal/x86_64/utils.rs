@@ -21,7 +21,7 @@ impl VirtAddr {
     
     #[cfg(test)]
     pub fn new(addr: usize) -> Self {
-        Self(addr as u64)
+        Self (Self::canonicalize(addr as u64, 47))
     }
 
     #[inline(always)]

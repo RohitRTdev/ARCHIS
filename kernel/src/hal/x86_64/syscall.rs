@@ -9,8 +9,12 @@ const LSTAR: u32 = 0xc000_0082;
 const CSTAR: u32 = 0xc000_0083;
 const SFMASK: u32 = 0xc000_0084;
 
+#[cfg(test)]
+static SYSCALL_ENTRY: u8 = 0; 
+
+#[cfg(not(test))]
 extern "C" {
-    static syscall_entry: u8;
+    static SYSCALL_ENTRY: u8;
 }
 
 pub const MAX_ARCH_ARGS: usize = 6;
@@ -57,7 +61,7 @@ extern "C" fn arch_syscall_handler(context: *mut SyscallContext) -> i64 {
 pub fn init() {
     let cstar: u64 = 0;
     let lstar: u64 = unsafe {
-        &syscall_entry as *const u8 as u64
+        &SYSCALL_ENTRY as *const u8 as u64
     };
     
     // Mask the TF=8, IF=9 and DF=10 flag

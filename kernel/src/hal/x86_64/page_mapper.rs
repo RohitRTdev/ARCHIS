@@ -736,6 +736,7 @@ impl PageMapper {
     }
 }
 
+#[allow(dead_code)]
 pub fn enable_invalidation() {
     unsafe {
         DISABLE_INVALIDATION = false;

@@ -175,28 +175,6 @@ where [(); mem::size_of::<T>() - MIN_SLOT_SIZE]: {
         }
     }
     
-    fn query_free_nodes() -> usize {
-        let heap = HEAP.lock(); 
-        let (_, hdr_offset) = Self::fetch_hdr_and_base();
-        
-        let num_slots = Self::calculate_total_slots();
-        
-        let mut num_slots_found = 0;
-
-        for slot_idx in 0..num_slots {
-            let slot_group_idx = slot_idx >> 3;
-            let bit_idx = slot_idx % 8;
-            let slot = heap.bitmap[hdr_offset + slot_group_idx] & (1 << bit_idx);
-
-            if slot == 0 {
-                num_slots_found += 1;
-            }
-        }
-
-
-        num_slots_found
-    } 
-
     unsafe fn dealloc(address: NonNull<T>, layout: Layout) {
         assert!(layout.size() != 0 && layout.size() % mem::size_of::<T>() == 0);
 

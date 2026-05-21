@@ -5,10 +5,6 @@ use crate::sync::Spinlock;
 use kernel_intf::{debug, info};
 use super::{asm, syscall, MAX_INTERRUPT_VECTORS, handlers, lapic, timer, init_per_cpu_data};
 
-extern "C" {
-    pub static kernel_stack_top: u8;
-}
-
 #[cfg(not(test))]
 use super::smp;
 

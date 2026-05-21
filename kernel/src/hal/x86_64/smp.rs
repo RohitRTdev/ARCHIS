@@ -19,11 +19,11 @@ use super::cpu_regs;
 use super::sleep;
 use super::disable_interrupts;
 use super::syscall;
-use super::handlers;
 
 #[cfg(feature = "acpi")]
 use {crate::acpica::{self, AcpiTableMadt}, common::madt::*};
 
+#[allow(dead_code)]
 #[derive(Debug)]
 struct Lapic {
     id: usize,
@@ -31,6 +31,7 @@ struct Lapic {
     is_x2apic: bool
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 struct Nmi {
     uid: usize,

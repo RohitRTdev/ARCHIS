@@ -19,6 +19,7 @@ pub struct LinkedListAllocator {
 unsafe impl Send for LinkedListAllocator {}
 
 impl LinkedListAllocator {
+    #[cfg(not(test))]
     pub const fn new() -> Self {
         Self {
             head: core::ptr::null_mut(),

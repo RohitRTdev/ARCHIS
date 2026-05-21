@@ -1,5 +1,5 @@
 use core::sync::atomic::{AtomicBool, Ordering};
-use crate::{cpu::{self, MAX_CPUS, PerCpu}, sync::Spinlock};
+use crate::{cpu::{MAX_CPUS, PerCpu}, sync::Spinlock};
 use super::asm;
 use super::lapic::*;
 

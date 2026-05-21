@@ -32,7 +32,7 @@ mod tests;
 
 use sync::{Once, Spinlock};
 use cpu::install_interrupt_handler;
-use crate::hal::{disable_interrupts, read_port_u8};
+use crate::hal::read_port_u8;
 use crate::mem::Regions::*;
 use crate::ds::*;
 use crate::sched::KThread;

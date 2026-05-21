@@ -25,6 +25,8 @@ pub use syscall::*;
 
 const MAX_INTERRUPT_VECTORS: usize = 256;
 
+
+#[cfg(not(test))]
 pub fn disable_interrupts() -> bool {
     let flags: u64;
     unsafe {
@@ -42,6 +44,7 @@ pub fn disable_interrupts() -> bool {
     is_int_enabled
 }
 
+#[cfg(not(test))]
 pub fn enable_interrupts(int_status: bool) {
     if int_status {
         unsafe { 
@@ -50,6 +53,15 @@ pub fn enable_interrupts(int_status: bool) {
             )
         }
     }
+}
+
+#[cfg(test)]
+pub fn disable_interrupts() -> bool {
+    true
+}
+
+#[cfg(test)]
+pub fn enable_interrupts(_: bool) {
 }
 
 pub use asm::read_port_u8;
@@ -147,6 +159,8 @@ pub fn get_current_stack_base() -> usize {
     rsp
 }
 
+
+#[allow(dead_code)]
 #[inline(always)]
 pub fn fire_debug_interrupt() {
     unsafe {
@@ -189,6 +203,7 @@ pub fn init() -> ! {
         crate::mem::get_virtual_address(tables::kern_addr_space_start as *const () as usize, 0,  MapFetchType::Kernel).expect("kern_addr_space_start virtual address not found!"));
 }
 
+#[allow(dead_code)]
 pub fn register_debug_fn(handler: fn()) {
     unsafe {
         handlers::DEBUG_HANDLER_FN = Some(handler);

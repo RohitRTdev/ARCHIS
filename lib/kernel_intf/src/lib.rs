@@ -2,7 +2,7 @@
 
 mod log;
 pub use log::*;
-use core::{fmt, panic::PanicInfo};
+use core::fmt;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -18,6 +18,7 @@ pub struct SpinlockGuard<'a, T> {
     lock: &'a hal::Spinlock,
 #[cfg(test)]
     _lock: MutexGuard<'a, u32>,
+#[cfg(not(test))]
     int_status: bool,
     data: *mut T
 }
@@ -94,7 +95,7 @@ impl<T> Spinlock<T> {
 #[cfg(test)]
     pub fn lock(&self) -> SpinlockGuard<'_, T> {        
         let guard = self.lock.lock().unwrap();
-        SpinlockGuard { _lock: guard, int_status: false, data: self.data.get()}
+        SpinlockGuard { _lock: guard, data: self.data.get()}
     }
 }
 

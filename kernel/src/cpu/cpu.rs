@@ -15,6 +15,13 @@ pub const TOTAL_STACK_SIZE: usize = INIT_STACK_SIZE + INIT_GUARD_PAGE_SIZE;
 
 static TOTAL_CPUS: AtomicUsize = AtomicUsize::new(1);
 
+#[cfg(test)]
+static KERNEL_STACK: u8 = 0;
+
+#[cfg(test)]
+static KERNEL_STACK_TOP: u8 = 0;
+
+
 #[cfg_attr(target_arch = "x86_64", repr(align(4096)))]
 struct KStackGood {
     stack: [u8; PAGE_SIZE]
@@ -36,9 +43,10 @@ pub struct Stack {
     allocated: bool
 }
 
+#[cfg(not(test))]
 extern "C" {
-    static kernel_stack: u8;
-    static kernel_stack_top: u8;
+    static KERNEL_STACK: u8;
+    static KERNEL_STACK_TOP: u8;
 }
 
 
@@ -207,6 +215,7 @@ pub fn get_total_cores() -> usize {
     TOTAL_CPUS.load(Ordering::Acquire)
 }
 
+#[allow(dead_code)]
 pub fn set_total_cores(total_count: usize) {
     TOTAL_CPUS.store(total_count, Ordering::Release);
 }
@@ -220,11 +229,11 @@ pub fn register_cpu() -> usize {
         
         // We will be using this stack set up from the assembly stub till we switch address spaces
         let boot_stack = unsafe {
-            &kernel_stack as *const u8 as *mut u8
+            &KERNEL_STACK as *const u8 as *mut u8
         };
 
         let boot_stack_top = unsafe {
-            &kernel_stack_top as *const u8 as usize
+            &KERNEL_STACK_TOP as *const u8 as usize
         };
 
         let stack = Stack {
@@ -318,14 +327,6 @@ pub struct PerCpu<T: Sync> {
 
 unsafe impl<T: Sync> Sync for PerCpu<T> {}
 
-impl<T: Copy + Sync> PerCpu<T> {
-    pub const fn new(init: T) -> Self {
-        Self {
-            data: [init; MAX_CPUS],
-        }
-    }
-}
-
 impl<T: Sync> PerCpu<T> {
     pub const fn new_with(init: [T; MAX_CPUS]) -> Self {
         Self { data: init }
@@ -343,11 +344,5 @@ impl<T: Sync> PerCpu<T> {
     #[inline(always)]
     pub unsafe fn get(&self, cpu: usize) -> &T {
         &self.data[cpu]
-    }
-    
-    // Caller must ensure correctness.
-    #[inline(always)]
-    pub unsafe fn get_mut(&mut self, cpu: usize) -> &mut T {
-        &mut self.data[cpu]
     }
 }

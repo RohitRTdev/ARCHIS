@@ -19,10 +19,6 @@ impl<T> Once<T> {
         }
     }
 
-    pub fn is_init(&self) -> bool {
-        self.is_init.load(Ordering::Acquire)
-    }
-
     // Should not call from interrupt handler
     pub fn call_once<F>(&self, init: F)
     where

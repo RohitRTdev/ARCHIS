@@ -1,5 +1,7 @@
-use crate::hal::{disable_interrupts, enable_interrupts, init_per_cpu_data};
-use crate::mem::{MapFetchType, PageDescriptor, allocate_memory, get_virtual_address, map_memory};
+#![allow(dead_code)]
+
+use crate::hal::{disable_interrupts, enable_interrupts};
+use crate::mem::{PageDescriptor, allocate_memory, map_memory};
 
 use super::asm::{rdmsr, wrmsr};
 use super::handlers::{SPURIOUS_VECTOR, ERROR_VECTOR, TIMER_VECTOR};

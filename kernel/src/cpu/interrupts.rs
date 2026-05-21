@@ -4,6 +4,7 @@ use crate::hal::{disable_interrupts, enable_interrupts, register_interrupt_handl
 use kernel_intf::debug;
 
 // TODO: Have ability to chain interrupts
+#[allow(dead_code)]
 struct InterruptDescriptor {
     irq: usize,
     handler: fn(usize)

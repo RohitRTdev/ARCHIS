@@ -44,6 +44,7 @@ fn generate_interrupt_stubs(arch: &str, is_test: bool) {
 
     let mut rs = String::new();
     rs.push_str(GEN_MSG); rs.push('\n');
+    rs.push_str("#![allow(unused_variables)]\n");
     rs.push_str("extern \"C\" {\n");
 
     for vector in 0..MAX_VECTORS {

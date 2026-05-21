@@ -1,4 +1,4 @@
-use crate::{REMAP_LIST, cpu::{self, PerCpu}, hal::{copy_user_memory, set_user_memory}, mem::{KERNEL_HALF_OFFSET, KERNEL_HALF_OFFSET_RAW, PageDescriptor, fixed_allocator::Regions::*}};
+use crate::{REMAP_LIST, cpu::{self, PerCpu}, mem::{KERNEL_HALF_OFFSET, KERNEL_HALF_OFFSET_RAW, PageDescriptor, fixed_allocator::Regions::*}};
 use crate::sync::{Once, Spinlock};
 use crate::hal::{self, PageMapper};
 use crate::ds::*;
@@ -9,7 +9,7 @@ use crate::RemapType::*;
 use core::alloc::Layout;
 use core::ptr::{null_mut, NonNull};
 use core::hint::likely;
-use core::sync::atomic::{AtomicU8, AtomicBool, AtomicPtr, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use common::{MemoryRegion, PAGE_SIZE, ceil_div, ptr_to_ref_mut};
 use super::PHY_MEM_CB;
 
@@ -43,7 +43,7 @@ pub type VCB = NonNull<Spinlock<VirtMemConBlk>>;
 
 impl VirtMemConBlk {
     // Only used for process 0 address space creation
-    #[cfg(target_arch="x86_64")]
+    #[cfg(all(target_arch="x86_64", not(test)))]
     fn new(is_init_address_space: bool) -> Self {
         // Since virtual address has max size of 48 bits
         // But from address 0x1ff << 39 onwards we reserve for page tables, so don't use it for conventional memory
@@ -71,6 +71,34 @@ impl VirtMemConBlk {
             alloc_block_list: List::new(),
             page_mapper: PageMapper::new(is_init_address_space, 0),
             proc_id: 0 
+        }
+    }
+    
+    #[cfg(test)]
+    fn new(_: bool) -> Self {
+        let total_memory = (0x1ff << 39) - PAGE_SIZE;
+        let num_pages_user = ceil_div(KERNEL_HALF_OFFSET_RAW - PAGE_SIZE, PAGE_SIZE);
+
+        let num_pages_kernel = ceil_div((0x1ff << 39) - KERNEL_HALF_OFFSET_RAW, PAGE_SIZE);
+        let mut free_block_list= List::new();
+        
+        // Create separate blocks for user and kernel memory
+        free_block_list.add_node(PageDescriptor {
+            num_pages: num_pages_user, start_phy_address: 0, start_virt_address: PAGE_SIZE, flags: 0, is_mapped: false
+        }).unwrap();
+        
+        free_block_list.add_node(PageDescriptor {
+            num_pages: num_pages_kernel, start_phy_address: 0, start_virt_address: KERNEL_HALF_OFFSET, flags: 0, is_mapped: false
+        }).unwrap();
+
+        // Allocate in process 1 to allow user blocks too
+        Self {
+            total_memory,
+            avl_memory: total_memory,
+            free_block_list,
+            alloc_block_list: List::new(),
+            page_mapper: PageMapper::new(true, 1),
+            proc_id: 1 
         }
     }
 
@@ -602,6 +630,7 @@ fn get_active_vcb_for_core(core: usize) -> NonNull<Spinlock<VirtMemConBlk>> {
     NonNull::new(vcb).unwrap()
 }
 
+#[allow(dead_code)]
 pub fn ap_init() {
     let kernel_addr_space = unsafe {
         PER_CPU_ACTIVE_VCB.get(0).load(Ordering::Acquire)
@@ -658,6 +687,7 @@ pub fn unmap_page_table(virt_addr: usize, proc_id: usize) -> Result<(), KError> 
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn reserve_virtual_memory(virt_addr: usize, layout: Layout) -> Result<(), KError> {
     assert!(IS_ADDR_SPACE_INIT.load(Ordering::Relaxed));
     
@@ -1061,7 +1091,7 @@ pub fn virtual_allocator_init() {
 
 #[cfg(test)]
 pub fn virtual_allocator_test() {
-    let mut allocator = VirtMemConBlk::new(false);
+    let mut allocator = VirtMemConBlk::new(true);
 
     // Check allocating from user memory
     let layout = Layout::from_size_align(10 * PAGE_SIZE, 4096).unwrap();
@@ -1078,7 +1108,7 @@ pub fn virtual_allocator_test() {
 
     allocator.deallocate(ptr1, layout).unwrap();
     assert_eq!(allocator.free_block_list.get_nodes(), 3);    
-    let nodes = [31 * PAGE_SIZE, KERNEL_HALF_OFFSET + 4 * PAGE_SIZE, 11 * common::PAGE_SIZE];
+    let nodes = [31 * PAGE_SIZE, KERNEL_HALF_OFFSET, 11 * common::PAGE_SIZE];
     allocator.free_block_list.iter().zip(nodes).for_each(|(blk, address)| {
         assert_eq!(blk.start_virt_address, address);
     });
@@ -1086,7 +1116,7 @@ pub fn virtual_allocator_test() {
     // Check coalescing
     allocator.deallocate(ptr, layout).unwrap();
     assert_eq!(allocator.free_block_list.get_nodes(), 3);
-    let nodes = [31 * PAGE_SIZE, KERNEL_HALF_OFFSET + 4 * PAGE_SIZE, common::PAGE_SIZE];
+    let nodes = [31 * PAGE_SIZE, KERNEL_HALF_OFFSET, common::PAGE_SIZE];
     allocator.free_block_list.iter().zip(nodes).for_each(|(blk, address)| {
         assert_eq!(blk.start_virt_address, address);
     });
@@ -1098,27 +1128,27 @@ pub fn virtual_allocator_test() {
     allocator.deallocate(ptr2, layout).unwrap();
     assert_eq!(allocator.free_block_list.get_nodes(), 2);
     
-    let nodes = [KERNEL_HALF_OFFSET + 4 * PAGE_SIZE, PAGE_SIZE];
+    let nodes = [KERNEL_HALF_OFFSET, PAGE_SIZE];
     allocator.free_block_list.iter().zip(nodes).for_each(|(blk, address)| {
         assert_eq!(blk.start_virt_address, address);
     });
 
     // Try allocating from kernel memory and checking
     let ptr = allocator.allocate(layout, false).unwrap();
-    assert_eq!(ptr as usize, KERNEL_HALF_OFFSET + 4 * PAGE_SIZE);
+    assert_eq!(ptr as usize, KERNEL_HALF_OFFSET);
 
     let ptr1 = allocator.allocate(layout, false).unwrap();
-    assert_eq!(ptr1 as usize, KERNEL_HALF_OFFSET + 14 * PAGE_SIZE);
+    assert_eq!(ptr1 as usize, KERNEL_HALF_OFFSET + 10 * PAGE_SIZE);
     assert_eq!(allocator.free_block_list.get_nodes(), 2);
     
-    let nodes = [KERNEL_HALF_OFFSET + 24 * PAGE_SIZE, common::PAGE_SIZE];
+    let nodes = [KERNEL_HALF_OFFSET + 20 * PAGE_SIZE, common::PAGE_SIZE];
     allocator.free_block_list.iter().zip(nodes).for_each(|(blk, address)| {
         assert_eq!(blk.start_virt_address, address);
     });
     
     allocator.deallocate(ptr, layout).unwrap();
     assert_eq!(allocator.free_block_list.get_nodes(), 3);
-    let nodes = [KERNEL_HALF_OFFSET + 24 * PAGE_SIZE, common::PAGE_SIZE, KERNEL_HALF_OFFSET + 4 * PAGE_SIZE];
+    let nodes = [KERNEL_HALF_OFFSET + 20 * PAGE_SIZE, common::PAGE_SIZE, KERNEL_HALF_OFFSET];
     allocator.free_block_list.iter().zip(nodes).for_each(|(blk, address)| {
         assert_eq!(blk.start_virt_address, address);
     });
@@ -1126,7 +1156,7 @@ pub fn virtual_allocator_test() {
     // Back to square 1
     allocator.deallocate(ptr1, layout).unwrap();
     assert_eq!(allocator.free_block_list.get_nodes(), 2);
-    let nodes = [PAGE_SIZE, KERNEL_HALF_OFFSET + 4 * PAGE_SIZE];
+    let nodes = [PAGE_SIZE, KERNEL_HALF_OFFSET];
     allocator.free_block_list.iter().zip(nodes).for_each(|(blk, address)| {
         assert_eq!(blk.start_virt_address, address);
     });

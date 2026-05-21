@@ -20,8 +20,6 @@ const KERNEL_HALF_OFFSET_RAW: usize = 0x0000800000000000;
 pub trait Allocator<T> {
     fn alloc(layout: Layout) -> Result<NonNull<T>, KError>;
     unsafe fn dealloc(address: NonNull<T>, layout: Layout);
-
-    fn query_free_nodes() -> usize; 
 }
 
 #[derive(Debug, Clone)]

@@ -81,6 +81,7 @@ impl PhyMemConBlk {
         self.hard_limit = upper_limit;
     }
     
+    #[allow(dead_code)]
     #[cfg(target_arch = "x86_64")]
     pub fn disable_limits(&mut self) {
         info!("Disabling frame allocator upper and lower limit");

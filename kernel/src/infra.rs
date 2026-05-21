@@ -157,6 +157,7 @@ pub fn disable_callstack() {
     DISABLE_CALLSTACK.store(true, Ordering::Release);
 }
 
+#[allow(dead_code)]
 pub fn enable_mp_init() {
     MP_INIT.store(true, Ordering::Release);
 }

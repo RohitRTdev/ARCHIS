@@ -1,11 +1,10 @@
 use common::{MemoryRegion, PAGE_SIZE};
 use kernel_intf::{debug, info};
-use core::sync::atomic::{AtomicUsize, AtomicPtr, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 use core::ptr::NonNull;
 use crate::cpu::{self, MAX_CPUS, PerCpu, general_interrupt_handler};
 use crate::hal::{enable_scheduler_timer, get_core, get_per_cpu_base, get_per_cpu_kernel_base};
 use crate::infra;
-use crate::sched::get_current_task_id;
 use crate::sync::Spinlock;
 use super::{lapic, timer};
 use crate::mem::on_page_fault;
@@ -18,7 +17,6 @@ use crate::devices::ioapic::add_redirection_entry;
 use crate::ds::*;
 use crate::mem::Regions::Region4;
 
-pub const GENERAL_PROTECTION_FAULT_VECTOR: usize = 13;
 pub const PAGE_FAULT_VECTOR: usize = 14;
 pub const DOUBLE_FAULT_VECTOR: usize = 8;
 pub const NMI_FAULT_VECTOR: usize = 2;
@@ -136,9 +134,7 @@ impl CPUContext {
 
 #[no_mangle]
 extern "C" fn global_interrupt_handler(vector: u64, cpu_context: *const CPUContext) -> *const CPUContext {
-    assert!(cpu_context as usize % 16 == 0);
     PER_CPU_GLOBAL_CONTEXT.local().store(cpu_context.addr(), Ordering::Release);
-    let first_con = unsafe {*cpu_context};
     unsafe {
         VECTOR_TABLE[vector as usize](vector as usize);
     }

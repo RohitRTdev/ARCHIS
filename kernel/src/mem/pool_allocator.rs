@@ -226,10 +226,6 @@ impl<T> super::Allocator<T> for PoolAllocator<T> {
 
         Self::deallocate_block(ptr.cast(), layout);
     }
-
-    fn query_free_nodes() -> usize {
-        Self::get_free_blocks()
-    }
 }
 
 unsafe impl core::alloc::Allocator for PoolAllocatorGlobal {

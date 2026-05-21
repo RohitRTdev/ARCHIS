@@ -3,7 +3,7 @@
 .extern arch_syscall_handler
 
 // rcx = saved_rip, r11 = saved_rflags,
-FUNC syscall_entry
+FUNC SYSCALL_ENTRY
     // First switch to kernel stack
     swapgs
     xchgq %rsp, %gs:16
@@ -78,8 +78,8 @@ ENDF jump_to_user_code
 
 
 // User stub
-.global user_fn_start, user_fn_end
-user_fn_start:
+.global USER_FN_START, USER_FN_END
+USER_FN_START:
     movq $2, %r12
     movq $5, %rbx
 
@@ -108,4 +108,4 @@ start_label:
 msg: 
     .ascii "Hello, world!"
 
-user_fn_end:
+USER_FN_END:
