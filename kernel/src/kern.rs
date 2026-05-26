@@ -207,25 +207,25 @@ fn kern_main() -> ! {
     sched::init();
 
     // Some tests just to test out process and thread subsystem
-    //{
-    //    let spawn_proc = sched::create_process(process_spawn, false).expect("Failed to create second process");
-    //    info!("Main task waiting for process id 1 to complete");
-    //    spawn_proc.wait().expect("Unable to wait on process id 1");
-    //    
-    //    let spawn_task = sched::create_thread(task_spawn).unwrap();
-
-    //    info!("Main task waiting for task id 1 to complete");
-    //    spawn_task.wait().expect("Unable to wait on task id 1");
-    //}
-
     {
-        let user_proc0 = sched::create_process(|| -> ! {loop{}}, true)
-        .expect("Failed to create user process 0");
+        let spawn_proc = sched::create_process(process_spawn, false).expect("Failed to create second process");
+        info!("Main task waiting for process id 1 to complete");
+        spawn_proc.wait().expect("Unable to wait on process id 1");
         
-        sched::create_thread(watchdog).unwrap();
+        let spawn_task = sched::create_thread(task_spawn).unwrap();
+
+        info!("Main task waiting for task id 1 to complete");
+        spawn_task.wait().expect("Unable to wait on task id 1");
     }
 
-    sched::create_thread(thread_creator).expect("Failed to create kernel thread!");
+    //{
+    //    let user_proc0 = sched::create_process(|| -> ! {loop{}}, true)
+    //    .expect("Failed to create user process 0");
+    //    
+    //    sched::create_thread(watchdog).unwrap();
+    //}
+
+    //sched::create_thread(thread_creator).expect("Failed to create kernel thread!");
 
     //sched::create_thread(|| {
     //    loop {

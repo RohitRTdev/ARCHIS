@@ -541,11 +541,9 @@ pub fn kill_thread(task_id: usize) {
         } 
     }
 
-    if yield_flag {
-        // Drop it explicitly since we won't return from here and rust thinks that 
-        // this stack frame here is preserved, which means that this reference gets leaked
-        drop(this_task);
-    }
+    // Drop it explicitly since we won't return from here and rust thinks that 
+    // this stack frame here is preserved, which means that this reference gets leaked
+    drop(this_task);
 
     enable_preemption();
 

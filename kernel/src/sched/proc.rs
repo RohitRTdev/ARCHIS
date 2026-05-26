@@ -109,6 +109,9 @@ impl Process {
             return self.threads.get_nodes() == 0;
         }
 
+        // This happens when all the threads in the process via 
+        // individual kill_thread calls instead of calling
+        // kill_process directly
         if self.threads.get_nodes() == 0 {
             self.destroy_process();
             return true;
