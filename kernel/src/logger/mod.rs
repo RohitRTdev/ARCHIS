@@ -40,7 +40,7 @@ extern "C" fn serial_print_ffi(s: *const u8, len: usize) {
 }
 
 pub fn init() {
-    kernel_intf::init_logger();
+    kernel_intf::init_logger(env!("CARGO_PKG_NAME"));
     uart::init();
     framebuffer_logger::init();
     

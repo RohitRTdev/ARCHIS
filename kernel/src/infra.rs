@@ -1,16 +1,18 @@
 use core::panic::PanicInfo;
 use core::ffi::CStr;
 use core::sync::atomic::{AtomicBool, Ordering};
+use core::hint::unlikely;
 use common::elf::*;
 use rustc_demangle::demangle;
 use crate::{cpu, logger};
 use kernel_intf::println;
 use crate::sync::Spinlock;
 use crate::hal::{self, IPIRequestType, notify_core};
-use crate::module::*;
+use crate::loader::{KERNEL_MODULES, module::*};
 
 static DISABLE_CALLSTACK: AtomicBool = AtomicBool::new(false);
 static EARLY_PANIC_PHASE: AtomicBool = AtomicBool::new(true);
+static PRE_LOADER_PHASE: AtomicBool = AtomicBool::new(true);
 static MP_INIT: AtomicBool = AtomicBool::new(false);
 static GLOBAL_PANIC_LOCK: hal::Spinlock = hal::Spinlock::new();
 static IS_NESTED: AtomicBool = AtomicBool::new(false);
@@ -102,51 +104,75 @@ pub fn start_unwind(mod_name: &str, stack_base: usize) {
 
 }
 
-fn symbol_trace(addr: usize) -> Option<(&'static str, &'static str, usize)> {
-    let loaded_modules = MODULE_LIST.lock();
+fn symbol_trace_do_work(addr: usize, module: &ModuleDescriptor) -> Option<(&'static str, &'static str, usize)> {
+    // Check if this symbol is part of this module
+    if (addr < module.info.base) || (addr >= module.info.base + module.info.size) {
+        return None;
+    }
 
-    for module in loaded_modules.iter() {
-        // First find which module this symbol is part of
-        if (addr >= module.info.base) && (addr < module.info.base + module.info.size) {
-            // Now iterate through symbols to find the correct one
-            if let Some(sym) = &module.info.sym_tab {
-                let strtab = module.info.sym_str.as_ref().unwrap();
+    // Now iterate through symbols to find the correct one
+    if let Some(sym) = &module.info.sym_tab {
+        let strtab = module.info.sym_str.as_ref().unwrap();
 
-                let entries = unsafe {
-                    core::slice::from_raw_parts(sym.start as *const Elf64Sym, sym.size / sym.entry_size)
-                };
+        let entries = unsafe {
+            core::slice::from_raw_parts(sym.start as *const Elf64Sym, sym.size / sym.entry_size)
+        };
 
-                let stringizer = |str_idx: usize| {
-                    let str_base = unsafe {
-                        (strtab.base_address as *const u8).add(str_idx)
-                    };
+        let stringizer = |str_idx: usize| {
+            let str_base = unsafe {
+                (strtab.base_address as *const u8).add(str_idx)
+            };
 
-                    unsafe {
-                        CStr::from_ptr(str_base as *const i8).to_str().unwrap()
-                    }
-                };
-                
-                let shift = addr - module.info.base;
-                for entry in entries {
-                    let e_type = entry.st_info & 0x0f;
-                    if e_type != STT_OBJECT && e_type != STT_FUNC {
-                        continue;
-                    }
-                    
-                    let lower_bound = entry.st_value as usize;
-                    let upper_bound = lower_bound + entry.st_size as usize;
-                    
-                    // We found the data object or function this symbol belong to
-                    if shift >= lower_bound && shift < upper_bound {
-                        let offset = shift - lower_bound;
-                        return Some((module.name, stringizer(entry.st_name as usize), offset))
-                    }
-                }
+            unsafe {
+                CStr::from_ptr(str_base as *const i8).to_str().unwrap()
+            }
+        };
+        
+        let shift = addr - module.info.base;
+        for entry in entries {
+            let e_type = entry.st_info & 0x0f;
+            if e_type != STT_OBJECT && e_type != STT_FUNC {
+                continue;
+            }
+            
+            let lower_bound = entry.st_value as usize;
+            let upper_bound = lower_bound + entry.st_size as usize;
+            
+            // We found the data object or function this symbol belong to
+            if shift >= lower_bound && shift < upper_bound {
+                let offset = shift - lower_bound;
+                return Some((module.name, stringizer(entry.st_name as usize), offset))
             }
         }
     }
 
     None
+}   
+
+fn symbol_trace(addr: usize) -> Option<(&'static str, &'static str, usize)> {
+    if unlikely(PRE_LOADER_PHASE.load(Ordering::Acquire)) {
+        let aris = ARIS.get().unwrap().lock();
+        symbol_trace_do_work(addr, &*aris)
+    }
+    else {
+
+        let loaded_images = KERNEL_MODULES.lock();
+        for image in loaded_images.iter() {
+            let entry = image.upgrade();
+            if entry.is_none() {
+                continue;
+            }
+
+            let module = entry.as_ref().unwrap().lock();
+            let res = symbol_trace_do_work(addr, &*module);
+
+            if res.is_some() {
+                return res;
+            }
+        }
+
+        None
+    }
 }
 
 pub fn disable_early_panic_phase() {
@@ -155,6 +181,10 @@ pub fn disable_early_panic_phase() {
 
 pub fn disable_callstack() {
     DISABLE_CALLSTACK.store(true, Ordering::Release);
+}
+
+pub fn disable_preloader_phase() {
+    PRE_LOADER_PHASE.store(false, Ordering::Release);
 }
 
 #[allow(dead_code)]

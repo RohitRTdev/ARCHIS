@@ -4,28 +4,32 @@ use core::alloc::Layout;
 use alloc::{collections::BTreeMap};
 use common::{elf::*, ArrayTable, PAGE_SIZE};
 use common::{MemoryRegion, ModuleInfo, FileDescriptor};
+use crate::fs::FileInstance;
 use crate::{RemapEntry, RemapType::*, BOOT_INFO, REMAP_LIST};
-use crate::ds::{FixedList, List};
-use crate::sync::Spinlock;
+use crate::sync::{Once, Spinlock};
 use kernel_intf::{info, debug};
-use crate::mem::{self, MapFetchType, PageDescriptor, Regions::*};
+use crate::mem::{self, MapFetchType, PageDescriptor};
 
+#[derive(Clone)]
 pub struct ModuleDescriptor {
     pub name: &'static str,
+    pub file_handle: Option<FileInstance>,
     pub info: ModuleInfo
 }
 
-pub static MODULE_LIST: Spinlock<FixedList<ModuleDescriptor, {Region2 as usize}>> = Spinlock::new(List::new());
-
+pub static ARIS: Once<Spinlock<ModuleDescriptor>> = Once::new(); 
 
 static FILE_INDEX: AtomicUsize = AtomicUsize::new(0);
 
 pub fn early_init() {
-    let mut mod_cb = MODULE_LIST.lock();
     let info = BOOT_INFO.get().unwrap();
     let kernel_base_address = info.kernel_desc.base;  
     let kernel_total_size = info.kernel_desc.total_size; 
-    mod_cb.add_node(ModuleDescriptor { name: env!("CARGO_PKG_NAME"), info: info.kernel_desc}).unwrap();
+    let mod_cb = ModuleDescriptor { 
+        name: env!("CARGO_PKG_NAME"),
+        file_handle: None,
+        info: info.kernel_desc
+    };
     
     // Map the kernel and auxiliary tables onto upper half
     let mut remap_list = REMAP_LIST.lock();
@@ -35,8 +39,7 @@ pub fn early_init() {
             size: info.kernel_desc.total_size
         },
         map_type: OffsetMapped(|kern_base| {
-            let mut mod_glob = MODULE_LIST.lock();
-            let mod_cb = mod_glob.first_mut().unwrap();
+            let mut mod_cb = ARIS.get().unwrap().lock();
             let offset = kern_base as isize - mod_cb.info.base as isize;
             let add_offset = |a: usize| {
                 (a as isize + offset) as usize
@@ -139,13 +142,17 @@ pub fn early_init() {
         map_type: IdentityMapped,
         flags: 0
     }).unwrap();
+
+
+    ARIS.call_once(|| {
+        Spinlock::new(mod_cb)
+    });
 }
 
 
 pub fn complete_handoff() {
     info!("Reapplying relocations to switch to new address space");
-    let mut mod_list = MODULE_LIST.lock();
-    let mod_cb = mod_list.first_mut().unwrap();
+    let mut mod_cb = ARIS.get().unwrap().lock();
     let boot_info = BOOT_INFO.get().unwrap();
     
     if mod_cb.info.rlc_shn.is_none() {
@@ -241,12 +248,15 @@ pub fn complete_handoff() {
     }
     
     // The module name needs to be patched up to new address
-    let name_ptr = mem::get_virtual_address(mod_cb.name.as_ptr() as usize, 0,  MapFetchType::Kernel).expect("Unable to find virtual address for module name");
-    
+    let name_ptr = mem::get_virtual_address(mod_cb.name.as_ptr() as usize, 0,  MapFetchType::Kernel)
+    .expect("Unable to find virtual address for module name");
+
     mod_cb.name = unsafe {
         let slice = core::slice::from_raw_parts(name_ptr as *const u8, mod_cb.name.len());
         core::str::from_utf8_unchecked(slice)
     }; 
+
+    kernel_intf::set_logger_name(mod_cb.name);
 
     debug!("Module address:{:#X}, mod_name={}", mod_cb.name.as_ptr() as usize, mod_cb.name);
 

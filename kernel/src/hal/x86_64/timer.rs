@@ -34,6 +34,10 @@ pub fn delay_ns(value: usize) {
 pub fn init() {
     let core = get_core();
 
+    // Only 1 core should execute this calibration code at a time
+    // This is because we're using the hpet shared timer to track the time
+    // across all cores. This would cause core contention which will 
+    // result in wrong timings 
     while EXPECTED_VISITOR.load(Ordering::Relaxed) != core {
         core::hint::spin_loop();
     }
@@ -41,13 +45,13 @@ pub fn init() {
     // Measure the CPU clock frequency
     let old = asm::rdtsc();
 
-    //Let's wait for 100ms
-    delay_ns(100_000_000);
+    //Let's wait for 1ms
+    delay_ns(1_000_000);
     
     let new = asm::rdtsc();
 
     let num_ticks_passed = new.wrapping_sub(old);
-    let base_freq = num_ticks_passed * 10;
+    let base_freq = num_ticks_passed * 1000;
     
     info!("CPU Base Clock frequency measured as {}Hz", base_freq);
     
@@ -56,13 +60,13 @@ pub fn init() {
 
     let old = lapic::get_timer_value();
 
-    //Let's wait for 100ms
-    delay_ns(100_000_000);
+    //Let's wait for 1ms
+    delay_ns(1_000_000);
 
     let new = lapic::get_timer_value();
     // This is a countdown timer
     let num_ticks_passed = old.wrapping_sub(new) as u64;
-    let apic_freq = num_ticks_passed * 10;
+    let apic_freq = num_ticks_passed * 1000;
     
     info!("CPU APIC Clock frequency measured as {}Hz", apic_freq);
 

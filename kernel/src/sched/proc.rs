@@ -1,7 +1,10 @@
 use alloc::sync::Arc;
 use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 use common::{MemoryRegion, PAGE_SIZE};
 use kernel_intf::{KError, info, debug};
+use crate::fs::FileInstance;
+use crate::loader::LoadedImage;
 use crate::{ds::*, sched};
 use crate::hal;
 use crate::mem::{self, PageDescriptor, PoolAllocatorGlobal, VCB, VirtMemConBlk, deallocate_memory, get_physical_address};
@@ -15,6 +18,11 @@ static PROCESS_ID: AtomicUsize = AtomicUsize::new(0);
 static PROCESSES: Spinlock<BTreeMap<usize, KProcess>> = Spinlock::new(BTreeMap::new());
 
 pub type KProcess = Arc<Spinlock<Process>, PoolAllocatorGlobal>;
+
+pub enum Handle {
+    FileHandle(FileInstance),
+    ImgHandle(LoadedImage)
+}
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum ProcessStatus {
@@ -33,6 +41,8 @@ pub struct Process {
     is_user: bool,
     term_notify: KSem,
     init_notify: KSem,
+
+    file_table: Vec<Option<Handle>>,
 
     // List of physical addresses that are deallocated once the process is killed
     // The virtual address space would be destroyed prior to this deallocation
@@ -60,7 +70,8 @@ impl Process {
             is_user,
             term_notify: KSem::new(0, 1),
             init_notify: KSem::new(0, 1),
-            memory_list: List::new()
+            memory_list: List::new(),
+            file_table: Vec::new()
         }), PoolAllocatorGlobal);
         
         info!("Creating new process with id {}", id);
@@ -136,6 +147,10 @@ impl Process {
         self.status = ProcessStatus::Terminated;
         PROCESSES.lock().remove(&self.id);
         kernel_intf::debug!("Called destroy process {}", self.id);
+    }
+
+    pub fn get_num_handles(&self) -> usize {
+        self.file_table.len()
     }
 }
 
@@ -314,6 +329,27 @@ pub fn add_memory_range_to_cur_process(virtual_base: usize, size: usize, is_user
     process.lock().memory_list.add_node(range)
     .expect("Failed to add node to process memory list!");
 }
+
+pub fn add_new_handle(handle: Handle) -> usize {
+    let proc = get_current_process()
+    .expect("add_new_handle() called in idle task!");
+
+    let mut guard = proc.lock();
+
+    // If we have free entry in table, then use that
+    for fd in 0..guard.file_table.len() {
+        if guard.file_table[fd].is_none() {
+            guard.file_table[fd] = Some(handle);
+            return fd;
+        }
+    }
+
+    // Otherwise, allocate new entry
+    guard.file_table.push(Some(handle));
+
+    guard.file_table.len() - 1
+}
+
 
 impl Spinlock<Process> {
     pub fn wait(&self) -> Result<(), KError> {

@@ -33,7 +33,7 @@ impl<'a> FileTable<'a> {
         let layout = Layout::from_size_align(init_cap, PAGE_SIZE).unwrap();
         Self {
             descriptors: unsafe {
-                    core::slice::from_raw_parts_mut(loader_alloc(layout) as *mut FileDescriptor, length)
+                core::slice::from_raw_parts_mut(loader_alloc(layout) as *mut FileDescriptor, length)
             },
             capacity: init_cap,
             length: 0
@@ -118,7 +118,15 @@ pub fn load_init_fs<'a>(root: &Handle, files: &[&str]) -> FileTable<'a> {
     let mut dir = boot_fs.open_volume().expect("Could not open root partition");
     let mut map = FileTable::new();
     for filename in files {
-        let mut filename_dos = CString16::try_from(*filename).unwrap();
+        let tmp_name = filename.strip_prefix('/');
+        let filename_new = if tmp_name.is_none() {
+            filename
+        }
+        else {
+            tmp_name.unwrap()
+        };
+
+        let mut filename_dos = CString16::try_from(filename_new).unwrap();
         filename_dos.replace_char(Char16::try_from('/').unwrap(), Char16::try_from('\\').unwrap());
 
         let file = dir.open(&filename_dos, FileMode::Read, FileAttribute::READ_ONLY).
@@ -133,7 +141,7 @@ pub fn load_init_fs<'a>(root: &Handle, files: &[&str]) -> FileTable<'a> {
         reg_file.read(buf.as_mut_slice()).unwrap();
 
         info!("Loaded file={} of size={} at location={:#X}", filename, file_size, buf.as_ptr() as usize);
-        map.insert(*filename, buf.as_slice());
+        map.insert(filename, buf.as_slice());
     }
 
     map

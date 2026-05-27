@@ -8,11 +8,12 @@ mod hal;
 mod sync;
 mod mem;
 mod ds;
-mod module;
 mod logger;
 mod cpu;
 mod devices;
 mod sched;
+mod fs;
+mod loader;
 
 #[cfg(feature = "acpi")]
 mod acpica;
@@ -21,6 +22,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use kernel_intf::{info, debug};
 use common::*;
+use loader::module;
 
 extern crate alloc;
 use alloc::collections::BTreeMap;
@@ -32,11 +34,13 @@ mod tests;
 
 use sync::{Once, Spinlock};
 use cpu::install_interrupt_handler;
-use crate::hal::read_port_u8;
-use crate::mem::Regions::*;
-use crate::ds::*;
-use crate::sched::KThread;
-use crate::sync::KSem;
+use fs::FileBuffer;
+use hal::read_port_u8;
+use mem::Regions::*;
+use ds::*;
+use sched::KThread;
+use sched::get_current_process;
+use sync::KSem;
 
 static BOOT_INFO: Once<BootInfo> = Once::new();
 
@@ -53,6 +57,7 @@ struct RemapEntry {
     flags: u8
 }
 
+const KERNEL_PATH: &'static str = "/sys/aris";
 static INIT_FS: Once<BTreeMap<&'static str, &'static [u8]>> = Once::new();  
 static REMAP_LIST: Spinlock<FixedList<RemapEntry, {Region3 as usize}>> = Spinlock::new(List::new());
 
@@ -121,7 +126,6 @@ fn task_spawn() -> ! {
         else {
             info!("Killing self");
             sched::exit_thread();
-            info!("This shouldn't be printed");
         }
     }
 }
@@ -167,8 +171,6 @@ fn process_spawn() -> ! {
     // This is here incase this process is killed before it gets a chance to wait forever
     sched::exit_thread();
 
-    info!("Should never reach here");
-    
     // Just to appease the type system
     hal::halt();
 }
@@ -205,6 +207,24 @@ fn kern_main() -> ! {
     install_interrupt_handler(1, key_notifier, true, true);
 
     sched::init();
+    loader::init();
+
+    let proc = get_current_process().unwrap();
+    debug!("Num handles: {}", proc.lock().get_num_handles());
+
+    let file = fs::open("/sys/drivers/libtest1.so")
+    .expect("Unable to open driver!");
+    let mut file_guard = file.lock();
+    let file_buf = FileBuffer::new(file_guard.len(), false)
+    .expect("Failed to create FileBuffer!");
+
+    file_guard.read(&file_buf);
+    debug!("File of size: {}", file_guard.len());
+    let ptr = file_buf.as_slice();
+    for i in 0..ptr.len().min(10) {
+        kernel_intf::print!("{}", ptr[i] as char);
+    }
+    kernel_intf::println!();
 
     // Some tests just to test out process and thread subsystem
     {

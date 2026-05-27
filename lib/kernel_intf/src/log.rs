@@ -63,33 +63,37 @@ macro_rules! println {
 
 #[macro_export]
 macro_rules! level_print {
-    ($level: literal, $($arg:tt)*) => {
+    ($level: literal, $($arg:tt)*) => {{
         let timestamp = unsafe {
             $crate::LOGGER.log_timestamp.load(::core::sync::atomic::Ordering::Acquire)
         };
 
+        let name = unsafe {$crate::LOGGER.module_name};
         if timestamp {
-            $crate::println!("[{}]-[{}]-[{}]-[{}]: {}", $level, unsafe {$crate::read_rtc()}, unsafe {$crate::read_timestamp()}, crate::hal::get_core(), format_args!($($arg)*));
+            let rtc = unsafe {$crate::read_rtc()};
+            let ts = unsafe {$crate::read_timestamp()};
+            let core = crate::hal::get_core();
+            $crate::println!("[{}]-[{}]-[{}]-[{}]-[{}]: {}", name, $level, rtc, ts, core, format_args!($($arg)*));
         } else {
-            $crate::println!("[{}]: {}", $level, format_args!($($arg)*));
+            $crate::println!("[{}]-[{}]: {}", name, $level, format_args!($($arg)*));
         }
-    };
+    }};
 }
 
 
 #[macro_export]
 macro_rules! info {
-    ($($arg:tt)*) => {
+    ($($arg:tt)*) => {{
         $crate::level_print!("INFO", $($arg)*);
-    };
+    }};
 }
 
 #[cfg(debug_assertions)]
 #[macro_export]
 macro_rules! debug {
-    ($($arg:tt)*) => {
+    ($($arg:tt)*) => {{
         $crate::level_print!("DEBUG", $($arg)*);
-    };
+    }};
 }
 
 #[cfg(not(debug_assertions))]
@@ -124,6 +128,7 @@ impl KernelLogger {
 }
 
 pub struct KernelLogger {
+    pub module_name: &'static str,
     pub log_timestamp: core::sync::atomic::AtomicBool,
     pub lock: crate::Lock,
     pub scratch_buffer: [u8; LOG_SCRATCH_BUFFER_SIZE],
@@ -131,14 +136,16 @@ pub struct KernelLogger {
 }
 
 pub static mut LOGGER: KernelLogger = KernelLogger {
+    module_name: env!("CARGO_PKG_NAME"),
     log_timestamp: core::sync::atomic::AtomicBool::new(false),
     lock: crate::Lock { lock: 0, int_status: false },
     scratch_buffer: [0; LOG_SCRATCH_BUFFER_SIZE],
     buf_size: 0
 };
 
-pub fn init_logger() {
+pub fn init_logger(module_name: &'static str) {
     unsafe {
+        LOGGER.module_name = module_name;
         crate::create_spinlock(&mut LOGGER.lock);
     }
 }
@@ -160,5 +167,15 @@ pub fn disable_logger() {
 pub fn enable_logger() {
     unsafe {
         crate::release_spinlock(&mut crate::LOGGER.lock);    
+    }
+}
+
+
+// This is only to be called by relocation code during very early init
+// This is not for randomly changing logger name of a module (not lock protected)
+// That is to be decided at init time of a module
+pub fn set_logger_name(module_name: &'static str) {
+    unsafe {
+        crate::LOGGER.module_name = module_name;
     }
 }
