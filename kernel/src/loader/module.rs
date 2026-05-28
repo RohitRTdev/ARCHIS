@@ -1,11 +1,11 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::alloc::Layout;
 
-use alloc::{collections::BTreeMap};
+use alloc::{collections::BTreeMap, vec::Vec};
 use common::{elf::*, ArrayTable, PAGE_SIZE};
 use common::{MemoryRegion, ModuleInfo, FileDescriptor};
 use crate::fs::FileInstance;
-use crate::{RemapEntry, RemapType::*, BOOT_INFO, REMAP_LIST};
+use crate::{BOOT_INFO, InitFS, KERNEL_PATH, REMAP_LIST, RemapEntry, RemapType::*};
 use crate::sync::{Once, Spinlock};
 use kernel_intf::{info, debug};
 use crate::mem::{self, MapFetchType, PageDescriptor};
@@ -14,7 +14,8 @@ use crate::mem::{self, MapFetchType, PageDescriptor};
 pub struct ModuleDescriptor {
     pub name: &'static str,
     pub file_handle: Option<FileInstance>,
-    pub info: ModuleInfo
+    pub info: ModuleInfo,
+    pub processes: Option<Vec<usize>>
 }
 
 pub static ARIS: Once<Spinlock<ModuleDescriptor>> = Once::new(); 
@@ -25,10 +26,11 @@ pub fn early_init() {
     let info = BOOT_INFO.get().unwrap();
     let kernel_base_address = info.kernel_desc.base;  
     let kernel_total_size = info.kernel_desc.total_size; 
-    let mod_cb = ModuleDescriptor { 
+    let mod_cb = ModuleDescriptor {
         name: env!("CARGO_PKG_NAME"),
         file_handle: None,
-        info: info.kernel_desc
+        info: info.kernel_desc,
+        processes: None
     };
     
     // Map the kernel and auxiliary tables onto upper half
@@ -273,11 +275,17 @@ pub fn complete_handoff() {
             info!("Adding init fs entry:{} with start_addr:{:#X}", entry.name, entry.contents.as_ptr().addr());
             map.insert(entry.name, entry.contents);
         }
-        
-        map
+
+        let mut symlinks = BTreeMap::new();
+        symlinks.insert("/sys/libaris.so", KERNEL_PATH);
+
+        InitFS {
+            fs: map,
+            symlinks
+        }
     });
 
-    info!("Init-FS address:{:#X}, num_files={}", crate::INIT_FS.get().unwrap() as *const _ as usize, crate::INIT_FS.get().unwrap().len());
+    info!("Init-FS address:{:#X}, num_files={}", crate::INIT_FS.get().unwrap() as *const _ as usize, crate::INIT_FS.get().unwrap().fs.len());
     
     // We have moved the init-fs metadata into kernel binary
     // So we can remove the descriptors we had

@@ -17,6 +17,27 @@ pub struct FileDescriptor<'a> {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
+pub struct StrRef {
+    pub ptr: *const u8,
+    pub len: usize,
+}
+
+impl StrRef {
+    pub fn from_str(s: &str) -> Self {
+        Self { ptr: s.as_ptr(), len: s.len() }
+    }
+
+    pub unsafe fn as_str<'a>(&self) -> &'a str {
+        unsafe {
+            core::str::from_utf8_unchecked(
+                core::slice::from_raw_parts(self.ptr, self.len)
+            )
+        }
+    }
+}
+
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct ArrayTable {
     pub start: usize,

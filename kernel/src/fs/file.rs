@@ -1,8 +1,10 @@
 use core::alloc::Layout;
 use core::marker::PhantomData;
 use alloc::sync::Arc;
+use alloc::string::String;
+use alloc::borrow::ToOwned;
 use common::{MemoryRegion, PAGE_SIZE};
-use kernel_intf::KError;
+use kernel_intf::{KError, info};
 use crate::INIT_FS;
 use crate::hal::copy_user_memory;
 use crate::mem::{PageDescriptor, PoolAllocatorGlobal, allocate_memory, deallocate_memory};
@@ -139,27 +141,31 @@ impl Drop for FileBuffer {
 }
 
 pub struct FileInst {
-    file_name: &'static str,
+    file_name: String,
     offset: usize,
     total_size: usize
 }
 
-
 impl FileInst {
     pub fn read(&mut self, buffer: &FileBuffer) -> usize {
-        let init_fs = INIT_FS.get().unwrap();
+        let remaining = self.total_size.saturating_sub(self.offset);
+        let len = remaining.min(buffer.len());
+        if len == 0 {
+            return 0;
+        }
 
-        let entry=  init_fs.get(self.file_name)
+        let filename = resolve_symlink(self.file_name.as_str());
+        let init_fs = INIT_FS.get().unwrap();
+        let entry = init_fs.fs.get(filename)
         .expect("Critical error! File not found in init fs!");
 
         let start = unsafe {
             entry.as_ptr().add(self.offset)
         };
 
-        let len = (entry.len() - self.offset).min(buffer.len());
         buffer.write(start.addr(), len, 0);
         self.offset += len;
-    
+
         len
     }
 
@@ -168,27 +174,30 @@ impl FileInst {
     }
 
     pub fn len(&self) -> usize {
-        let init_fs = INIT_FS.get().unwrap();
-
-        let entry=  init_fs.get(self.file_name)
-        .expect("Critical error! File not found in init fs!");
-
-        entry.len()
+        self.total_size
     }
 
     pub fn get_offset(&self) -> usize {
         self.offset
     }
+
+    pub fn get_path(&self) -> &str {
+        self.file_name.as_str()
+    }
 }
 
-pub fn open(file_name: &'static str) -> Result<FileInstance, KError> {
+pub fn open(file_name: &str) -> Result<FileInstance, KError> {
     let init_fs = INIT_FS.get().unwrap();
+    let filename = resolve_symlink(file_name);
 
-    let entry=  init_fs.get(file_name)
-    .ok_or(KError::InvalidArgument)?;
+    let entry=  init_fs.fs.get(filename)
+    .ok_or(KError::InvalidArgument).or_else(|e| {
+        info!("Failed to open file {}", file_name);
+        Err(e)
+    })?;
     
     let file_desc = FileInst {
-        file_name,
+        file_name: filename.to_owned(),
         offset: 0,
         total_size: entry.len()
     };
@@ -203,4 +212,9 @@ pub fn open(file_name: &'static str) -> Result<FileInstance, KError> {
     add_new_handle(FileHandle(file_instance.clone()));
 
     Ok(file_instance)
+}
+
+pub fn resolve_symlink(name: &str) -> &str {
+    let init_fs = INIT_FS.get().unwrap();
+    init_fs.symlinks.get(name).copied().unwrap_or(name)
 }

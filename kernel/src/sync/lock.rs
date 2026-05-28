@@ -93,9 +93,15 @@ impl<T> Spinlock<T> {
     }
 
 #[cfg(test)]
-    pub fn lock(&self) -> SpinlockGuard<'_, T> {        
+    pub fn lock(&self) -> SpinlockGuard<'_, T> {
         let guard = self.lock.lock().unwrap();
         SpinlockGuard { _lock: guard, data: self.data.get()}
+    }
+
+    // This gives access to underlying data without locking
+    // Only used in infra code during exception handling
+    pub unsafe fn as_ref(&self) -> &T {
+        unsafe { &*self.data.get() }
     }
 }
 

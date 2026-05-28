@@ -302,14 +302,11 @@ fn ipi_handler(_vector: usize) {
             Some(req_info) => {
                 match req_info.req_type {
                     IPIRequestType::SchedChange => {
-                        debug!("Got schedule change request on core {}", core);
                         enable_scheduler_timer();
                     },
                     IPIRequestType::TlbInvalidate(desc) => {
                         // Reload cr3
                         unsafe {
-                            debug!("Got invalidate request on core {} with base: {:#X} and size: {}",
-                            core, desc.base_address, desc.size);
                             for page in 0..desc.size / PAGE_SIZE {
                                 let real_page = (page * PAGE_SIZE + desc.base_address) as u64;
                                 asm::invlpg(real_page);

@@ -16,7 +16,7 @@ endif
 include $(CONFIG_FILE)
 
 KERNEL_FLAGS := -C link-arg=-T$(LINKER_SCRIPT)
-DRIVER_FLAGS := -C link-arg=-T$(LINKER_SCRIPT) -C link-arg=-Ltarget/$(KERNEL_ARCH)/$(CONFIG)
+DRIVER_FLAGS := -C link-arg=-T$(DRIVER_LINKER_SCRIPT) -C link-arg=-Ltarget/$(KERNEL_ARCH)/$(CONFIG)
 
 ifeq ($(CONFIG),release)
     BUILD_OPTIONS := --release

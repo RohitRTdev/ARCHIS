@@ -58,7 +58,13 @@ struct RemapEntry {
 }
 
 const KERNEL_PATH: &'static str = "/sys/aris";
-static INIT_FS: Once<BTreeMap<&'static str, &'static [u8]>> = Once::new();  
+
+struct InitFS {
+    fs: BTreeMap<&'static str, &'static [u8]>,
+    symlinks: BTreeMap<&'static str, &'static str>
+}
+
+static INIT_FS: Once<InitFS> = Once::new();  
 static REMAP_LIST: Spinlock<FixedList<RemapEntry, {Region3 as usize}>> = Spinlock::new(List::new());
 
 fn clear_keyboard_output_buffer() {
@@ -209,34 +215,57 @@ fn kern_main() -> ! {
     sched::init();
     loader::init();
 
-    let proc = get_current_process().unwrap();
-    debug!("Num handles: {}", proc.lock().get_num_handles());
+    let img1 = loader::load_image("/sys/drivers/libtest1.so", false)
+    .expect("Failed to load driver!");
+    
+    let img2 = loader::load_image("/sys/drivers/libtest2.so", false)
+    .expect("Failed to load driver!");
 
-    let file = fs::open("/sys/drivers/libtest1.so")
-    .expect("Unable to open driver!");
-    let mut file_guard = file.lock();
-    let file_buf = FileBuffer::new(file_guard.len(), false)
-    .expect("Failed to create FileBuffer!");
-
-    file_guard.read(&file_buf);
-    debug!("File of size: {}", file_guard.len());
-    let ptr = file_buf.as_slice();
-    for i in 0..ptr.len().min(10) {
-        kernel_intf::print!("{}", ptr[i] as char);
+    {
+        let proc = get_current_process().unwrap();
+        proc.lock().print_handles();
     }
-    kernel_intf::println!();
+
+    sched::create_thread(|| {
+        info!("Loading driver from different thread");
+        let img1 = loader::load_image("/sys/drivers/libtest1.so", false)
+        .expect("Failed to load driver in different thread!");
+
+        {
+            let proc = get_current_process().unwrap();
+            info!("Printing handles from different thread");
+            proc.lock().print_handles();
+        } 
+        sched::exit_thread();
+    }).unwrap();
+
+    sched::create_process(|| {
+        info!("Loading driver from different process");
+        let img1 = loader::load_image("/sys/drivers/libtest2.so", false)
+        .expect("Failed to load driver in different process!");
+
+        {
+            let proc = get_current_process().unwrap();
+            info!("Printing handles from different process");
+            proc.lock().print_handles();
+        }
+
+        sched::delay_ms(1000);
+
+        sched::exit_process(); 
+    }, false).unwrap();
 
     // Some tests just to test out process and thread subsystem
-    {
-        let spawn_proc = sched::create_process(process_spawn, false).expect("Failed to create second process");
-        info!("Main task waiting for process id 1 to complete");
-        spawn_proc.wait().expect("Unable to wait on process id 1");
-        
-        let spawn_task = sched::create_thread(task_spawn).unwrap();
+    //{
+    //    let spawn_proc = sched::create_process(process_spawn, false).expect("Failed to create second process");
+    //    info!("Main task waiting for process id 1 to complete");
+    //    spawn_proc.wait().expect("Unable to wait on process id 1");
+    //    
+    //    let spawn_task = sched::create_thread(task_spawn).unwrap();
 
-        info!("Main task waiting for task id 1 to complete");
-        spawn_task.wait().expect("Unable to wait on task id 1");
-    }
+    //    info!("Main task waiting for task id 1 to complete");
+    //    spawn_task.wait().expect("Unable to wait on task id 1");
+    //}
 
     //{
     //    let user_proc0 = sched::create_process(|| -> ! {loop{}}, true)
@@ -346,4 +375,9 @@ fn watchdog() -> ! {
         }
     }
 
+}
+
+#[no_mangle]
+extern "C" fn exported_function() {
+    info!("Driver called exported function!");
 }

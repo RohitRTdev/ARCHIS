@@ -2,6 +2,7 @@ use core::panic::PanicInfo;
 use core::ffi::CStr;
 use core::sync::atomic::{AtomicBool, Ordering};
 use core::hint::unlikely;
+use core::ffi::c_char;
 use common::elf::*;
 use rustc_demangle::demangle;
 use crate::{cpu, logger};
@@ -124,7 +125,7 @@ fn symbol_trace_do_work(addr: usize, module: &ModuleDescriptor) -> Option<(&'sta
             };
 
             unsafe {
-                CStr::from_ptr(str_base as *const i8).to_str().unwrap()
+                CStr::from_ptr(str_base as *const c_char).to_str().unwrap()
             }
         };
         
@@ -150,21 +151,24 @@ fn symbol_trace_do_work(addr: usize, module: &ModuleDescriptor) -> Option<(&'sta
 }   
 
 fn symbol_trace(addr: usize) -> Option<(&'static str, &'static str, usize)> {
+    // Avoid locking — this runs from the panic handler and the locks we'd
+    // otherwise take may already be held by the panicking core. See
+    // Spinlock::as_ref safety doc.
     if unlikely(PRE_LOADER_PHASE.load(Ordering::Acquire)) {
-        let aris = ARIS.get().unwrap().lock();
-        symbol_trace_do_work(addr, &*aris)
+        let aris = unsafe { ARIS.get().unwrap().as_ref() };
+        symbol_trace_do_work(addr, aris)
     }
     else {
-
-        let loaded_images = KERNEL_MODULES.lock();
+        let loaded_images = unsafe { KERNEL_MODULES.as_ref() };
         for image in loaded_images.iter() {
             let entry = image.upgrade();
             if entry.is_none() {
                 continue;
             }
 
-            let module = entry.as_ref().unwrap().lock();
-            let res = symbol_trace_do_work(addr, &*module);
+            let arc = entry.as_ref().unwrap();
+            let module = unsafe { Spinlock::as_ref(&**arc) };
+            let res = symbol_trace_do_work(addr, module);
 
             if res.is_some() {
                 return res;
@@ -201,6 +205,6 @@ fn panic(info: &PanicInfo) -> ! {
 
 #[cfg(not(test))]
 #[no_mangle]
-extern "C" fn panic_router(mod_name: *const u8, info: &PanicInfo) -> ! {
-    common_panic_handler(unsafe {CStr::from_ptr(mod_name as *const i8).to_str().unwrap()}, info)
+extern "C" fn panic_router(mod_name: *const c_char, info: &PanicInfo) -> ! {
+    common_panic_handler(unsafe {CStr::from_ptr(mod_name).to_str().unwrap()}, info)
 }

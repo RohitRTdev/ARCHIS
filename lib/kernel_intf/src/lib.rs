@@ -11,7 +11,8 @@ pub enum KError {
     InvalidArgument,
     OutOfMemory,
     ProcessTerminated,
-    WaitFailed
+    WaitFailed,
+    CircularDependency
 }
 
 pub const E_SUCCESS: i64 = 0;
@@ -31,7 +32,7 @@ impl From<KError> for i64 {
             KError::Success => E_SUCCESS,
             KError::InvalidArgument => E_INVALID,
             KError::OutOfMemory => E_OOM,
-            KError::ProcessTerminated | KError::WaitFailed => E_INTERNAL_FAILURE
+            KError::ProcessTerminated | KError::WaitFailed | KError::CircularDependency => E_INTERNAL_FAILURE
         }
     }
 }
@@ -44,6 +45,7 @@ impl fmt::Display for KError {
             KError::OutOfMemory => "Out of memory",
             KError::ProcessTerminated => "Process terminated",
             KError::WaitFailed => "Wait internal failure",
+            KError::CircularDependency => "Circular dependency in module load",
             KError::Success => "Success"
         };
         write!(f, "{}", description)

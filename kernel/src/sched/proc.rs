@@ -152,6 +152,29 @@ impl Process {
     pub fn get_num_handles(&self) -> usize {
         self.file_table.len()
     }
+
+#[cfg(debug_assertions)]
+    pub fn print_handles(&self) {
+        let mut file_handles = 0;
+        let mut img_handles = 0;
+        self.file_table.iter().for_each(|handle| {
+            match handle.as_ref() {
+                Some(h) => {
+                    match h {
+                        Handle::FileHandle(_) => {
+                            file_handles += 1;
+                        },
+                        Handle::ImgHandle(_) => {
+                            img_handles += 1;
+                        }
+                    }
+                },
+                _ => {}
+            }
+        });
+
+        debug!("proc_id = {}, File handles = {}, image handles = {}", self.id, file_handles, img_handles);
+    }
 }
 
 impl Drop for Process {

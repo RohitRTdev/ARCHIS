@@ -7,6 +7,7 @@ BLR_EXE = target/x86_64-unknown-uefi/$(CONFIG)/boot.efi
 BLR_TARGET_EXE = $(OUTPUT_DIR)/bootx64.efi 
 KERNEL_EXE = target/x86_64/$(CONFIG)/libaris.so
 LINKER_SCRIPT = kernel/config/x86_64/linker.ld
+DRIVER_LINKER_SCRIPT = kernel/config/x86_64/driver_linker.ld
 OUTPUT_IMAGE = $(OUTPUT_DIR)/archis_os.iso
 PLATFORM = acpi
 BOOTLOADER = uefi
