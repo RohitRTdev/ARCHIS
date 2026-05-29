@@ -215,46 +215,44 @@ fn kern_main() -> ! {
     sched::init();
     loader::init();
 
-    let img1 = loader::load_image("/sys/drivers/libtest1.so", false)
-    .expect("Failed to load driver!");
-    
-    let img2 = loader::load_image("/sys/drivers/libtest2.so", false)
-    .expect("Failed to load driver!");
-
+    // Drop test for img1 and img2
     {
-        let proc = get_current_process().unwrap();
-        proc.lock().print_handles();
-    }
-
-    sched::create_thread(|| {
-        info!("Loading driver from different thread");
         let img1 = loader::load_image("/sys/drivers/libtest1.so", false)
-        .expect("Failed to load driver in different thread!");
+        .expect("Failed to load driver!");
+        
+        let img2 = loader::load_image("/sys/drivers/libtest2.so", false)
+        .expect("Failed to load driver!");
 
-        {
-            let proc = get_current_process().unwrap();
-            info!("Printing handles from different thread");
-            proc.lock().print_handles();
-        } 
-        sched::exit_thread();
-    }).unwrap();
+        sched::create_thread(|| {
+            info!("Loading driver from different thread");
+            loader::load_image("/sys/drivers/libtest1.so", false)
+            .expect("Failed to load driver in different thread!");
 
-    sched::create_process(|| {
-        info!("Loading driver from different process");
-        let img1 = loader::load_image("/sys/drivers/libtest2.so", false)
-        .expect("Failed to load driver in different process!");
+            sched::exit_thread();
+        }).unwrap();
 
-        {
-            let proc = get_current_process().unwrap();
-            info!("Printing handles from different process");
-            proc.lock().print_handles();
-        }
+        sched::create_process(|| {
+            info!("Loading driver from different process");
+            loader::load_image("/sys/drivers/libtest2.so", false)
+            .expect("Failed to load driver in different process!");
 
-        sched::delay_ms(1000);
+            sched::delay_ms(1000);
 
-        sched::exit_process(); 
-    }, false).unwrap();
+            sched::exit_process(); 
+        }, false).unwrap();
 
+        // Check if we can call driver entry function
+        let img_guard = img2.lock();
+        let entry = unsafe {core::mem::transmute::<usize, extern "C" fn()>(img_guard.info.entry)};
+        entry();
+
+        let img_guard = img1.lock();
+        let entry = unsafe {core::mem::transmute::<usize, extern "C" fn()>(img_guard.info.entry)};
+
+        info!("Calling module init!");
+        entry();
+    }
+    
     // Some tests just to test out process and thread subsystem
     //{
     //    let spawn_proc = sched::create_process(process_spawn, false).expect("Failed to create second process");

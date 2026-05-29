@@ -6,6 +6,8 @@ edition = "2021"
 [lib]
 crate-type = ["lib"]
 
+[dependencies]
+common.workspace = true
 
 [features]
 default = []

@@ -346,3 +346,8 @@ impl<T: Sync> PerCpu<T> {
         &self.data[cpu]
     }
 }
+
+#[no_mangle]
+extern "C" fn get_core_ffi() -> usize {
+    get_core()
+}

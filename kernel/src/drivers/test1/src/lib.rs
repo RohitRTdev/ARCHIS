@@ -1,4 +1,4 @@
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 
 use common::StrRef;
 use test2_exports::get_test2;
@@ -26,6 +26,9 @@ extern "C" fn module_name() -> StrRef {
 #[no_mangle]
 extern "C" fn module_init() -> i32 {
     let _boot_info: common::BootInfo;
+    kernel_intf::init_logger(MODULE_NAME_STR);
+    kernel_intf::enable_timestamp();
+    kernel_intf::debug!("Driver1 initializing...");
     unsafe {exported_function();get_test2()}
 
     25

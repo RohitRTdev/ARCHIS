@@ -2,7 +2,8 @@
 
 mod log;
 pub use log::*;
-use core::fmt;
+use core::{fmt, panic::PanicInfo};
+use common::StrRef;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +88,7 @@ extern "C" {
     pub fn clear_screen();
     pub fn read_rtc() -> RtcTime;
     pub fn read_timestamp() -> usize;
+    pub fn get_core_ffi() -> usize;
     pub fn serial_print_ffi(s: *const u8, len: usize);
     pub fn map_memory_ffi(phys_addr: usize, phys_addr: usize, size: usize, flags: u8) -> KError;
     pub fn unmap_memory_ffi(virt_addr: *mut u8, size: usize) -> KError; 

@@ -190,6 +190,12 @@ impl FileInst {
     }
 }
 
+impl Drop for FileInst {
+    fn drop(&mut self) {
+        info!("Dropped file instance: {}", self.file_name);
+    }
+}
+
 pub fn open(file_name: &str) -> Result<FileInstance, KError> {
     let init_fs = INIT_FS.get().unwrap();
     let filename = resolve_symlink(file_name);
@@ -212,8 +218,6 @@ pub fn open(file_name: &str) -> Result<FileInstance, KError> {
         ),
         PoolAllocatorGlobal
     );
-
-    add_new_handle(FileHandle(file_instance.clone()));
 
     Ok(file_instance)
 }

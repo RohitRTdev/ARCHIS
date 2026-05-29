@@ -5,6 +5,7 @@ use alloc::{collections::BTreeMap, vec::Vec};
 use common::{elf::*, ArrayTable, PAGE_SIZE};
 use common::{MemoryRegion, ModuleInfo, FileDescriptor};
 use crate::fs::FileInstance;
+use crate::loader::LoadedImage;
 use crate::{BOOT_INFO, InitFS, KERNEL_PATH, REMAP_LIST, RemapEntry, RemapType::*};
 use crate::sync::{Once, Spinlock};
 use kernel_intf::{info, debug};
@@ -15,7 +16,8 @@ pub struct ModuleDescriptor {
     pub name: &'static str,
     pub file_handle: Option<FileInstance>,
     pub info: ModuleInfo,
-    pub processes: Option<Vec<usize>>
+    // This is here so that the dependencies are not released when this image is loaded
+    pub _deps: Option<Vec<LoadedImage>>
 }
 
 pub static ARIS: Once<Spinlock<ModuleDescriptor>> = Once::new(); 
@@ -30,7 +32,7 @@ pub fn early_init() {
         name: env!("CARGO_PKG_NAME"),
         file_handle: None,
         info: info.kernel_desc,
-        processes: None
+        _deps: None
     };
     
     // Map the kernel and auxiliary tables onto upper half

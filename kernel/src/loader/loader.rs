@@ -1,6 +1,5 @@
 use alloc::sync::{Arc, Weak};
 use alloc::format;
-use alloc::vec;
 use alloc::vec::Vec;
 use alloc::string::String;
 use alloc::borrow::ToOwned;
@@ -16,9 +15,9 @@ use crate::KERNEL_PATH;
 use crate::fs::{FileBuffer, open, resolve_symlink};
 use crate::infra::disable_preloader_phase;
 use crate::loader::module::ModuleDescriptor;
-use crate::mem::{PageDescriptor, PoolAllocatorGlobal, allocate_memory};
-use crate::sched::Handle::{FileHandle, ImgHandle};
-use crate::sched::{add_new_handle, get_current_process_id};
+use crate::mem::{PageDescriptor, PoolAllocatorGlobal, allocate_memory, deallocate_memory};
+use crate::sched::Handle::ImgHandle;
+use crate::sched::add_new_handle;
 use crate::sync::Spinlock;
 use crate::ds::{List, DynList};
 use super::module;
@@ -27,15 +26,35 @@ pub static KERNEL_MODULES: Spinlock<DynList<Weak<Spinlock<ModuleDescriptor>, Poo
 
 pub type LoadedImage = Arc<Spinlock<ModuleDescriptor>, PoolAllocatorGlobal>;
 
+impl Drop for ModuleDescriptor {
+    fn drop(&mut self) {
+        {
+            let mut registry = KERNEL_MODULES.lock();
+            info!("Dropping image {}, with registry_len={}", self.name, registry.get_nodes());
+
+            // Cleanup: Remove all weak refs from the registry
+            while registry.find_and_remove(|entry| {
+                let item = entry.upgrade();
+                item.is_none()
+            }).is_some() {}
+
+            info!("New registry len = {}", registry.get_nodes());
+        }
+
+        deallocate_memory(
+            self.info.base as *mut u8, 
+            Layout::from_size_align(self.info.total_size, PAGE_SIZE).unwrap(), 
+            PageDescriptor::VIRTUAL
+        ).expect("Failed to deallocate backing memory for kernel module!");
+    }
+}
+
+
 pub fn init() {
     let mut kernel_img = module::ARIS.get().unwrap().lock().clone();
     kernel_img.file_handle = Some(
         open(KERNEL_PATH).expect("Failed to open kernel image!")
     );
-
-    let current_pid = get_current_process_id()
-    .expect("loader::init called outside any process context!");
-    kernel_img.processes = Some(vec![current_pid]);
 
     let loaded_img = Arc::new_in(
         Spinlock::new(
@@ -70,18 +89,9 @@ fn load_image_inner(
         todo!("User-mode image loading not implemented");
     }
 
-    let current_pid = get_current_process_id().expect("load_image() called from idle task!");
-
     if let Some(cached) = find_loaded_module(path, registry) {
         info!("Loading image {} from cache", path);
-        let mut guard = cached.lock();
-        let already_owned = guard.processes.as_ref().unwrap().iter().any(|&p| p == current_pid);
-        if !already_owned {
-            guard.processes.as_mut().unwrap().push(current_pid);
-            add_new_handle(ImgHandle(cached.clone()));
-            add_new_handle(FileHandle(guard.file_handle.as_ref().unwrap().clone()));
-        }
-        return Ok(cached.clone());
+        return Ok(cached);
     }
 
     if in_progress.iter().any(|n| n == path) {
@@ -91,7 +101,6 @@ fn load_image_inner(
 
     let result = load_image_uncached(
         path, 
-        current_pid, 
         is_user, 
         in_progress,
         registry
@@ -103,7 +112,6 @@ fn load_image_inner(
 
 fn load_image_uncached(
     path: &str,
-    current_pid: usize,
     is_user: bool,
     in_progress: &mut Vec<String>,
     registry: &mut DynList<Weak<Spinlock<ModuleDescriptor>, PoolAllocatorGlobal>>
@@ -131,19 +139,17 @@ fn load_image_uncached(
 
     let module_name = get_module_name(&mod_info);
 
-    let processes = vec![current_pid];
-
     let descriptor = ModuleDescriptor {
         name: module_name,
         file_handle: Some(file),
         info: mod_info,
-        processes: Some(processes)
+        _deps: Some(deps)
     };
 
     let arc = Arc::new_in(Spinlock::new(descriptor), PoolAllocatorGlobal);
     let weak = Arc::downgrade(&arc);
 
-    add_new_handle(ImgHandle(arc.clone()));
+    // Add the newly loaded module to the cache
     registry.add_node(weak)
     .expect("Failed to add image reference to module registry");
 
@@ -483,6 +489,8 @@ fn load_dependencies(
         }
         let name = unsafe { read_cstr(dyn_str.base_address, entry.val as usize) };
         let mut found_entry = false;
+
+        // Check for this image in all of these predefined directories
         for prefix in PREDEFINED_DIRECTORIES {
             let filename = format!("{}/{}", prefix, name);
             let res = load_image_inner(

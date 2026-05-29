@@ -203,8 +203,8 @@ fn panic(info: &PanicInfo) -> ! {
 }
 
 
-#[cfg(not(test))]
-#[no_mangle]
-extern "C" fn panic_router(mod_name: *const c_char, info: &PanicInfo) -> ! {
-    common_panic_handler(unsafe {CStr::from_ptr(mod_name).to_str().unwrap()}, info)
-}
+//#[cfg(not(test))]
+//#[no_mangle]
+//extern "C" fn panic_router(mod_name: StrRef, info: &PanicInfo) -> ! {
+//    common_panic_handler(unsafe {mod_name.as_str()}, info)
+//}
