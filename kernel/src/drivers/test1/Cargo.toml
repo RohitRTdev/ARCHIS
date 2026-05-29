@@ -9,3 +9,5 @@ crate-type = ["cdylib"]
 
 [dependencies]
 common.workspace = true
+kernel_intf.workspace = true 
+test2_exports = {path = "../test2_exports"}

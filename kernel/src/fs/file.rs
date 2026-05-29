@@ -24,6 +24,10 @@ pub struct FileBuffer {
 }
 
 impl FileBuffer {
+    pub fn into_inner(buf: &mut Self) {
+        buf.own = false;
+    }
+
     pub fn new(size: usize, is_user: bool) -> Result<Self, KError> {
         let base_address = allocate_memory(
             Layout::from_size_align(size, PAGE_SIZE).unwrap(),
@@ -135,7 +139,7 @@ impl Drop for FileBuffer {
                 self.region.size,
                 PAGE_SIZE
             ).unwrap(),
-            PageDescriptor::VIRTUAL
+            PageDescriptor::VIRTUAL | (if self.is_user {PageDescriptor::USER} else {0})
         ).expect("Filebuffer memory deallocation failed!");
     }
 }
@@ -190,7 +194,7 @@ pub fn open(file_name: &str) -> Result<FileInstance, KError> {
     let init_fs = INIT_FS.get().unwrap();
     let filename = resolve_symlink(file_name);
 
-    let entry=  init_fs.fs.get(filename)
+    let entry = init_fs.fs.get(filename)
     .ok_or(KError::InvalidArgument).or_else(|e| {
         info!("Failed to open file {}", file_name);
         Err(e)

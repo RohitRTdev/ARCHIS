@@ -16,9 +16,9 @@ acpi = ["common/acpi"]
 test-kernel = ["common/test-kernel"]
 
 [dependencies]
+kernel_intf = {workspace = true, features = ["link-kernel"]}
 common.workspace = true
 rustc-demangle = "*"
-kernel_intf = {path = "../lib/kernel_intf"}
 
 # Used for testing
 [dev-dependencies]

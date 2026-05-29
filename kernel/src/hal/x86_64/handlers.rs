@@ -261,10 +261,12 @@ pub fn create_kernel_context(handler: fn() -> !, stack_base: *mut u8) -> usize {
     // Sanity: ensure stack pointer remains 16-byte aligned after allocating the CPUContext
     debug_assert_eq!(sp & 0xF, 0, "create_kernel_context produced an unaligned stack pointer");
 
-    let mut context = CPUContext::new(); 
+    let mut context = CPUContext::new();
     context.rip = handler as u64;
-    context.rbp = stack_base.addr() as u64;
-    context.rsp = stack_base.addr() as u64;
+    context.rbp = 0; // Stops backtrace walkers at the base frame
+    
+    // SysV x86_64 ABI: at function entry RSP must be 16-byte aligned minus 8
+    context.rsp = (stack_base.addr() - 8) as u64;
 
     // Kernel code + Kernel data
     context.cs = 0x8;

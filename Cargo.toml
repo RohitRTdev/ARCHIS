@@ -16,4 +16,5 @@ strip = true
 
 [workspace.dependencies]
 common = {path = "lib/common"}
+kernel_intf = {path = "lib/kernel_intf"}
 log = "*"

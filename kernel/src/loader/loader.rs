@@ -11,13 +11,13 @@ use core::ptr::copy_nonoverlapping;
 use core::ffi::CStr;
 use common::{PAGE_SIZE, elf::*};
 use common::{ArrayTable, MemoryRegion, ModuleInfo, StrRef};
-use kernel_intf::{KError, debug, info};
+use kernel_intf::{KError, info};
 use crate::KERNEL_PATH;
 use crate::fs::{FileBuffer, open, resolve_symlink};
 use crate::infra::disable_preloader_phase;
 use crate::loader::module::ModuleDescriptor;
 use crate::mem::{PageDescriptor, PoolAllocatorGlobal, allocate_memory};
-use crate::sched::Handle::ImgHandle;
+use crate::sched::Handle::{FileHandle, ImgHandle};
 use crate::sched::{add_new_handle, get_current_process_id};
 use crate::sync::Spinlock;
 use crate::ds::{List, DynList};
@@ -79,6 +79,7 @@ fn load_image_inner(
         if !already_owned {
             guard.processes.as_mut().unwrap().push(current_pid);
             add_new_handle(ImgHandle(cached.clone()));
+            add_new_handle(FileHandle(guard.file_handle.as_ref().unwrap().clone()));
         }
         return Ok(cached.clone());
     }
@@ -125,7 +126,6 @@ fn load_image_uncached(
     let bytes = buf.as_slice();
 
     let mod_info = build_image_layout(bytes)?;
-
     let deps = load_dependencies(&mod_info, is_user, in_progress, registry)?;
     apply_relocations(&mod_info, &deps)?;
 
@@ -161,7 +161,6 @@ fn find_loaded_module(
 
     for node in registry.iter() {
         let entry = match node.upgrade() { Some(e) => e, None => continue };
-
         let matches = {
             let guard = entry.lock();
             let fh = guard.file_handle.as_ref().unwrap();

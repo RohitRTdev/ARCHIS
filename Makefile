@@ -6,7 +6,8 @@ OUTPUT_DIR = output
 ENV_PLACEHOLDER = placeholder.txt
 KERN_PLACEHOLDER = kernel/placeholder_test.txt
 GEN_MSG = "Automatically generated file..\nDo not remove manually.."
-DRIVER_DIRS := $(wildcard kernel/src/drivers/*)
+#DRIVER_DIRS := $(wildcard kernel/src/drivers/*)
+DRIVER_DIRS := kernel/src/drivers/test2 kernel/src/drivers/test1
 SHELL = /bin/bash
 
 ifeq ($(wildcard $(CONFIG_FILE)),)

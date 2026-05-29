@@ -1,6 +1,8 @@
 #![no_std]
 
 use common::StrRef;
+use test2_exports::get_test2;
+use kernel_intf::exported_function;
 
 static MODULE_NAME_STR: &'static str = env!("CARGO_PKG_NAME");
 
@@ -15,24 +17,6 @@ fn panic(_info: &PanicInfo) -> ! {
         a += 2;
     }
 }
-#[cfg(test)]
-unsafe fn exported_function() {}
-
-#[cfg(not(test))]
-#[link(name="aris")]
-extern "C" {
-    fn exported_function();
-}
-
-#[cfg(test)]
-unsafe fn get_test2() {}
-
-#[cfg(not(test))]
-#[link(name="test2")]
-extern "C" {
-    fn get_test2();
-}
-
 
 #[no_mangle]
 extern "C" fn module_name() -> StrRef {
