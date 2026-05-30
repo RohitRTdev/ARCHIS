@@ -224,6 +224,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kmod"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "log"
 version = "0.4.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -384,7 +393,7 @@ version = "0.1.0"
 dependencies = [
  "common",
  "kernel_intf",
- "test2_exports",
+ "kmod",
 ]
 
 [[package]]
@@ -393,11 +402,8 @@ version = "0.1.0"
 dependencies = [
  "common",
  "kernel_intf",
+ "kmod",
 ]
-
-[[package]]
-name = "test2_exports"
-version = "0.1.0"
 
 [[package]]
 name = "tests"

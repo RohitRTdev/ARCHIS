@@ -7,9 +7,11 @@ tests::init_test_logger!(blr);
 
 // Install hooks for functionality not available during test
 #[cfg(test)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe fn loader_alloc(layout: Layout) -> *mut u8 {
-    alloc(layout)
+    unsafe {
+        alloc(layout)
+    }
 }
 
 

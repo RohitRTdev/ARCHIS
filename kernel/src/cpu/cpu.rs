@@ -44,7 +44,7 @@ pub struct Stack {
 }
 
 #[cfg(not(test))]
-extern "C" {
+unsafe extern "C" {
     static KERNEL_STACK: u8;
     static KERNEL_STACK_TOP: u8;
 }
@@ -347,7 +347,7 @@ impl<T: Sync> PerCpu<T> {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn get_core_ffi() -> usize {
     get_core()
 }

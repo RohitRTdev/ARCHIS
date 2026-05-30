@@ -24,20 +24,20 @@ trait Reg {
 
 impl<T: Reg> CPUReg<T> {
     pub unsafe fn init(data: u64) {
-        T::write(data);
+        unsafe { T::write(data); }
     }
 
     pub unsafe fn clear(mask: u64) {
         let mut reg = T::read(); 
         reg &= !mask;
 
-        T::write(reg);
+        unsafe { T::write(reg); }
     }
 }
 
 impl Reg for CR0 {
     unsafe fn write(data: u64) {
-        asm::write_cr0(data);
+        unsafe { asm::write_cr0(data); }
     }
 
     fn read() -> u64 {
@@ -47,7 +47,7 @@ impl Reg for CR0 {
 
 impl Reg for CR4 {
     unsafe fn write(data: u64) {
-        asm::write_cr4(data);
+        unsafe { asm::write_cr4(data); }
     }
     
     fn read() -> u64 {
@@ -57,7 +57,7 @@ impl Reg for CR4 {
 
 impl Reg for RFLAGS {
     unsafe fn write(data: u64) {
-        asm::write_rflags(data);
+        unsafe { asm::write_rflags(data); }
     }
     
     fn read() -> u64 {
@@ -67,7 +67,7 @@ impl Reg for RFLAGS {
 
 impl Reg for EFER {
     unsafe fn write(data: u64) {
-        asm::wrmsr(EFER::ADDRESS, data);
+        unsafe { asm::wrmsr(EFER::ADDRESS, data); }
     }
     fn read() -> u64 {
         unsafe {

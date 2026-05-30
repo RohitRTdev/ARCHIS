@@ -18,7 +18,9 @@ pub const ROOT_FILES: [&str; 3] = [
 
 pub unsafe fn jump_to_kernel(boot_info: &BootInfo) -> ! {
     let kern_addr = canonicalize(boot_info.kernel_desc.entry);
-    let kern_fn: extern "sysv64" fn(*const BootInfo) -> ! = core::mem::transmute(kern_addr); 
+    let kern_fn: extern "sysv64" fn(*const BootInfo) -> ! = unsafe {
+        core::mem::transmute(kern_addr)
+    };
 
     kern_fn(boot_info as *const BootInfo)
 }

@@ -9,7 +9,7 @@ pub use framebuffer_logger::relocate_framebuffer;
 static PANIC_MODE: AtomicBool = AtomicBool::new(false);
 static PANIC_CORE: AtomicU8 = AtomicU8::new(0);
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn clear_screen() {
     FRAMEBUFFER_LOGGER.lock().clear_screen();
 }
@@ -21,7 +21,7 @@ pub fn set_panic_mode(core: u8) {
 }
 
 // It is important to ensure that caller holds the screen lock before calling this function
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn serial_print_ffi(s: *const u8, len: usize) {
     let s = unsafe {
         let slice = core::slice::from_raw_parts(s , len);

@@ -606,7 +606,7 @@ impl VirtMemConBlk {
 pub unsafe fn set_address_space(vcb: VCB) {
     PER_CPU_ACTIVE_VCB.local().store(vcb.as_ptr() as *mut _, Ordering::Release);
 
-    vcb.as_ref().lock().page_mapper.set_address_space();
+    unsafe { vcb.as_ref().lock().page_mapper.set_address_space(); }
 }
 
 pub fn get_kernel_addr_space() -> VCB {

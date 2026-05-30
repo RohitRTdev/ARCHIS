@@ -2,7 +2,7 @@ use super::asm;
 use kernel_intf::debug;
 use crate::hal;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn read_timestamp() -> usize {
     asm::rdtsc() as usize
 }
@@ -51,16 +51,18 @@ pub unsafe fn copy_user_memory(to: *mut u8, from: *const u8, len: usize) {
         return;
     }
 
-    core::arch::asm!(
-        "cld",    
-        "stac",   
-        "rep movsb", 
-        "clac",      
-        in("rdi") to,
-        in("rsi") from,
-        in("rcx") len,
-        options(nostack)
-    );
+    unsafe {
+        core::arch::asm!(
+            "cld",    
+            "stac",   
+            "rep movsb", 
+            "clac",      
+            in("rdi") to,
+            in("rsi") from,
+            in("rcx") len,
+            options(nostack)
+        );
+    }
 }
 
 pub unsafe fn set_user_memory(to: *mut u8, value: u8, len: usize) {
@@ -68,16 +70,18 @@ pub unsafe fn set_user_memory(to: *mut u8, value: u8, len: usize) {
         return;
     }
 
-    core::arch::asm!(
-        "cld",
-        "stac",
-        "rep stosb",
-        "clac",
-        in("rdi") to,
-        in("al") value,
-        in("rcx") len,
-        options(nostack)
-    );
+    unsafe {
+        core::arch::asm!(
+            "cld",
+            "stac",
+            "rep stosb",
+            "clac",
+            in("rdi") to,
+            in("al") value,
+            in("rcx") len,
+            options(nostack)
+        );
+    }
 }
 
 pub fn switch_to_new_address_space(pml4_phys: usize, stack_address: usize, kernel_address: usize) -> ! {

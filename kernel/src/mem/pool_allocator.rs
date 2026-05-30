@@ -177,8 +177,10 @@ impl<T> PoolAllocator<T> {
         // Find the pool for this block size and add the released block back to head of free_list
         if let Some(pool) = cb.find_pool_mut(block_size) {
             let free_ptr = ptr.as_ptr() as *mut FreeBlock;
-            (*free_ptr).set_next(pool.free_list);
-            pool.free_list = Some(NonNull::new_unchecked(free_ptr));
+            unsafe {
+                (*free_ptr).set_next(pool.free_list);
+                pool.free_list = Some(NonNull::new_unchecked(free_ptr));
+            }
         }
         else {
             debug_assert!(false, "pool_allocator -> dealloc called for unknown pointer :{:#X} and layout:{:?}",
@@ -223,7 +225,7 @@ impl<T> super::Allocator<T> for PoolAllocator<T> {
             && layout.align() <= layout.size() && layout.size() % layout.align() == 0
             && layout.size() == size_of::<T>()); 
 
-        Self::deallocate_block(ptr.cast(), layout);
+        unsafe { Self::deallocate_block(ptr.cast(), layout); }
     }
 }
 
@@ -235,6 +237,8 @@ unsafe impl core::alloc::Allocator for PoolAllocatorGlobal {
     }
     
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        PoolAllocator::<u8>::deallocate_block(ptr, layout);
+        unsafe {
+            PoolAllocator::<u8>::deallocate_block(ptr, layout);
+        }
     }
 }

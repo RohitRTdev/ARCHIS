@@ -37,7 +37,7 @@ impl MapRegion {
 }
 
 
-extern "Rust" {
+unsafe extern "Rust" {
     fn loader_alloc(layout: Layout) -> *mut u8;
 }
 

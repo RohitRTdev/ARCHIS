@@ -13,7 +13,7 @@ const SFMASK: u32 = 0xc000_0084;
 static SYSCALL_ENTRY: u8 = 0; 
 
 #[cfg(not(test))]
-extern "C" {
+unsafe extern "C" {
     static SYSCALL_ENTRY: u8;
 }
 
@@ -27,7 +27,7 @@ struct SyscallContext {
     user_gs: u64
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn arch_syscall_handler(context: *mut SyscallContext) -> i64 {
     // With current design, we need to preserve the invariant that under kernel mode execution
     // a thread shall always have kernel_gs_base = user_gs_base

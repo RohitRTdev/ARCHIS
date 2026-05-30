@@ -137,7 +137,7 @@ fn load_image_uncached(
     let deps = load_dependencies(&mod_info, is_user, in_progress, registry)?;
     apply_relocations(&mod_info, &deps)?;
 
-    let module_name = get_module_name(&mod_info);
+    let module_name = configure_module(&mod_info);
 
     let descriptor = ModuleDescriptor {
         name: module_name,
@@ -187,7 +187,7 @@ unsafe fn read_cstr<'a>(base: usize, idx: usize) -> &'a str {
     }
 }
 
-fn get_module_name(info: &ModuleInfo) -> &'static str {
+fn configure_module(info: &ModuleInfo) -> &'static str {
     const FALLBACK: &str = "[none]";
     let dyn_tab = match info.dyn_tab { Some(t) => t, None => return FALLBACK };
     let dyn_str = match info.dyn_str { Some(s) => s, None => return FALLBACK };
@@ -204,7 +204,7 @@ fn get_module_name(info: &ModuleInfo) -> &'static str {
             continue;
         }
         let sym_name = unsafe { read_cstr(dyn_str.base_address, sym.st_name as usize) };
-        if sym_name != "module_name" {
+        if sym_name != "module_config" {
             continue;
         }
 

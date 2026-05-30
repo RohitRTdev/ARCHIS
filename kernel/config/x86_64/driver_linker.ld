@@ -1,5 +1,5 @@
 OUTPUT_FORMAT("elf64-x86-64")
-ENTRY(module_init)
+ENTRY(driver_init)
 
 SECTIONS {
     .text ALIGN(0x1000): {

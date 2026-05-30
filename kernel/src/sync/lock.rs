@@ -105,7 +105,7 @@ impl<T> Spinlock<T> {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn create_spinlock(lock: &mut Lock) {
     let val = hal::Spinlock::new();
 
@@ -114,7 +114,7 @@ extern "C" fn create_spinlock(lock: &mut Lock) {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn acquire_spinlock(lock: &mut Lock) {
     unsafe {
         #[cfg(not(test))]
@@ -146,7 +146,7 @@ extern "C" fn acquire_spinlock(lock: &mut Lock) {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn release_spinlock(lock: &mut Lock) {
     unsafe {
         // Snapshot int_status BEFORE releasing the lock. Once unlock() runs,

@@ -15,7 +15,7 @@ static USER_FN_END: u8 = 0;
 
 
 #[cfg(not(test))]
-extern "C" {
+unsafe extern "C" {
     static USER_FN_START: u8;
     static USER_FN_END: u8;
 }

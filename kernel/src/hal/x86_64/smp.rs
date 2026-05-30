@@ -152,29 +152,30 @@ fn parse_madt(madt: &AcpiTableMadt) {
 // The stack will be fixed per ap, so we won't do it here
 unsafe fn patch_trampoline(load_addr: *mut u8, pml4: u32, ap_init: u64) {
     debug!("Patching trampoline with pml4={:#X} and ap_init_address={:#X}", pml4, ap_init);
-    
-    let gdt = load_addr.add(GDT);
-    let gdt_desc = load_addr.add(GDT_DESC);
+    unsafe {
+        let gdt = load_addr.add(GDT);
+        let gdt_desc = load_addr.add(GDT_DESC);
 
-    (gdt_desc.add(2) as *mut u32).write_unaligned(gdt as u32);
-    let pml4_phys = load_addr.add(PML4_PHYS);
-    let ap_entry = load_addr.add(AP_ENTRY);
-    (pml4_phys as *mut u32).write(pml4);
-    (ap_entry as *mut u64).write(ap_init);
+        (gdt_desc.add(2) as *mut u32).write_unaligned(gdt as u32);
+        let pml4_phys = load_addr.add(PML4_PHYS);
+        let ap_entry = load_addr.add(AP_ENTRY);
+        (pml4_phys as *mut u32).write(pml4);
+        (ap_entry as *mut u64).write(ap_init);
 
-    // Apply manual relocation to instructions
+        // Apply manual relocation to instructions
 
-    // _patch1 -> 0f 01 modr/m addrbyte1 addrbyte2
-    (load_addr.add(_PATCH1 + 3) as *mut u16).write_unaligned(gdt_desc as u16);
-    
-    // _patch2 -> 66 ea addrbyte1 addrbyte2 addrbyte3 addrbyte4
-    (load_addr.add(_PATCH2 + 2) as *mut u32).write_unaligned((load_addr.addr() + PMODE_ENTRY) as u32);
-    
-    // _patch3 -> a1 addrbyte1-addrbyte4
-    (load_addr.add(_PATCH3 + 1) as *mut u32).write_unaligned((load_addr.addr() + PML4_PHYS) as u32);
-    
-    // _patch4 -> ea addrbyte1-addrbyte4
-    (load_addr.add(_PATCH4 + 1) as *mut u32).write_unaligned((load_addr.addr() + LMODE_ENTRY) as u32);
+        // _patch1 -> 0f 01 modr/m addrbyte1 addrbyte2
+        (load_addr.add(_PATCH1 + 3) as *mut u16).write_unaligned(gdt_desc as u16);
+        
+        // _patch2 -> 66 ea addrbyte1 addrbyte2 addrbyte3 addrbyte4
+        (load_addr.add(_PATCH2 + 2) as *mut u32).write_unaligned((load_addr.addr() + PMODE_ENTRY) as u32);
+        
+        // _patch3 -> a1 addrbyte1-addrbyte4
+        (load_addr.add(_PATCH3 + 1) as *mut u32).write_unaligned((load_addr.addr() + PML4_PHYS) as u32);
+        
+        // _patch4 -> ea addrbyte1-addrbyte4
+        (load_addr.add(_PATCH4 + 1) as *mut u32).write_unaligned((load_addr.addr() + LMODE_ENTRY) as u32);
+    } 
 }
 
 #[cfg(feature = "acpi")]
@@ -318,7 +319,7 @@ fn activate_local_core_nmi_trap() {
 }
 
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn ap_init() -> ! {
     disable_interrupts();
     

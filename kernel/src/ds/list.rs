@@ -233,15 +233,15 @@ impl<T, A: Allocator<ListNode<T>>> List<T, A> {
     // This is unsafe, since it is caller's responsibility to ensure that the given ListNode is a valid node that is 
     // part of this list
     pub unsafe fn remove_node(&mut self, this: NonNull<ListNode<T>>) -> ListNodeGuard<T, A> {
-        let node = &mut *this.as_ptr();
+        let node = unsafe { &mut *this.as_ptr() };
 
         if self.num_nodes == 1 {
             self.head = None;
             self.tail = None;
         }
         else {
-            let prev = &mut *node.prev.as_ptr();
-            let next = &mut *node.next.as_ptr();
+            let prev = unsafe { &mut *node.prev.as_ptr() };
+            let next = unsafe { &mut *node.next.as_ptr() };
 
             prev.next = node.next;
             next.prev = node.prev;

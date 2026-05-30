@@ -81,7 +81,7 @@ pub struct Lock {
 }
 
 #[cfg_attr(not(feature = "link-kernel"), link(name = "aris"))]
-extern "C" {
+unsafe extern "C" {
     pub fn create_spinlock(lock: &mut Lock);
     pub fn acquire_spinlock(lock: &mut Lock);
     pub fn release_spinlock(lock: &mut Lock);
@@ -94,6 +94,7 @@ extern "C" {
     pub fn unmap_memory_ffi(virt_addr: *mut u8, size: usize) -> KError; 
     pub fn allocate_memory_ffi(size: usize, align: usize, flags: u8) -> KError;
     pub fn deallocate_memory_ffi(addr: *mut u8, size: usize, align: usize, flags: u8) -> KError;
+    pub fn panic_router(mod_name: StrRef, info: StrRef) -> !;
     pub fn exported_function();
 }
 

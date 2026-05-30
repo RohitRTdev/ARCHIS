@@ -6,8 +6,6 @@ OUTPUT_DIR = output
 ENV_PLACEHOLDER = placeholder.txt
 KERN_PLACEHOLDER = kernel/placeholder_test.txt
 GEN_MSG = "Automatically generated file..\nDo not remove manually.."
-#DRIVER_DIRS := $(wildcard kernel/src/drivers/*)
-DRIVER_DIRS := kernel/src/drivers/test2 kernel/src/drivers/test1
 SHELL = /bin/bash
 
 ifeq ($(wildcard $(CONFIG_FILE)),)
@@ -85,17 +83,17 @@ build_kernel_test: $(OUTPUT_DIR)
 build_drivers: build_kernel
 	@echo "Building drivers..."
 	@mkdir -p $(OUTPUT_DIR)/drivers
-	@set -e; for dir in $(DRIVER_DIRS); do \
-		if [ -f $$dir/Cargo.toml ]; then \
-			driver_name=$$(basename $$dir); \
-			echo "Building driver $$dir"; \
-			(cd $$dir && \
+	@set -e; for name in $$(cat target/driver_deps.txt); do \
+		driver_path="kernel/src/drivers/$$name"; \
+		if [ -f $$driver_path/Cargo.toml ]; then \
+			echo "Building driver $$name"; \
+			(cd $$driver_path && \
 				RUSTFLAGS="$(DRIVER_FLAGS)" \
 				cargo build $(BUILD_OPTIONS) \
 				-Z build-std=core,compiler_builtins \
 				-Z build-std-features=compiler-builtins-mem \
 				--target ../../../$(KERNEL_TARGET)); \
-			cp target/$(KERNEL_ARCH)/$(CONFIG)/lib$$driver_name.so $(OUTPUT_DIR)/drivers; \
+			cp target/$(KERNEL_ARCH)/$(CONFIG)/lib$$name.so $(OUTPUT_DIR)/drivers; \
 		fi \
 	done
 

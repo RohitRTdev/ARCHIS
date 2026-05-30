@@ -59,7 +59,7 @@ pub struct AcpiGenericAddress {
     pub address: u64
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn AcpiInitializeSubsystem() -> ACPI_STATUS;
     pub fn AcpiInitializeTables(initial_storage: *mut c_void, initial_table_count: u32, allow_resize: u8) -> ACPI_STATUS;
     pub fn AcpiLoadTables() -> ACPI_STATUS;

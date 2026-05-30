@@ -149,7 +149,7 @@ idt_layout: TableLayout { limit: 0, base_address: 0}});
 static CPU_TSS: PerCpu<Spinlock<TaskStateSegment>> = PerCpu::new_with(
     [const {Spinlock::new(TaskStateSegment::create())}; MAX_CPUS]);
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn kern_addr_space_start() -> ! {
     info!("Switched to new address space");
     crate::cpu::set_panic_base(cpu::get_current_stack_base());

@@ -45,24 +45,28 @@ pub fn get_core() -> usize {
 pub unsafe fn get_per_cpu_data<const OFFSET: usize>() -> u64 {
     let per_cpu_data: u64;
 
-    core::arch::asm!(
-        "mov {}, gs:[{}]",
-        out(reg) per_cpu_data,
-        const OFFSET,
-        options(nostack, preserves_flags, readonly)
-    );
+    unsafe {
+        core::arch::asm!(
+            "mov {}, gs:[{}]",
+            out(reg) per_cpu_data,
+            const OFFSET,
+            options(nostack, preserves_flags, readonly)
+        );
+    }
 
     per_cpu_data
 } 
 
 #[inline(always)]
 pub unsafe fn set_per_cpu_data<const OFFSET: usize>(per_cpu_data: u64) {
-    core::arch::asm!(
-        "mov gs:[{}], {}",
-        const OFFSET,
-        in(reg) per_cpu_data,
-        options(nostack, preserves_flags) 
-    );
+    unsafe {
+        core::arch::asm!(
+            "mov gs:[{}], {}",
+            const OFFSET,
+            in(reg) per_cpu_data,
+            options(nostack, preserves_flags) 
+        );
+    }
 }
 
 

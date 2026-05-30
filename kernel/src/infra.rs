@@ -3,6 +3,7 @@ use core::ffi::CStr;
 use core::sync::atomic::{AtomicBool, Ordering};
 use core::hint::unlikely;
 use core::ffi::c_char;
+use common::StrRef;
 use common::elf::*;
 use rustc_demangle::demangle;
 use crate::{cpu, logger};
@@ -19,9 +20,27 @@ static GLOBAL_PANIC_LOCK: hal::Spinlock = hal::Spinlock::new();
 static IS_NESTED: AtomicBool = AtomicBool::new(false);
 static PANIC_CORE: Spinlock<Option<usize>> = Spinlock::new(None); 
 const STACK_UNWIND_DEPTH: usize = 16;
+const DEFAULT_PANIC_STRING: &'static str = "[Unknown]";
+
+struct PanicCommon<'a> {
+    msg: &'static str,
+    info: Option<&'a PanicInfo<'a>>
+}
+
+impl<'a> PanicCommon<'a> {
+    fn print(&self) {
+        if self.info.is_some() {
+            println!("Message: {}", self.info.unwrap().message());
+        }
+        else {
+            println!("Message: {}", self.msg);
+        }
+    }
+}
+
 
 #[allow(dead_code)]
-pub fn common_panic_handler(mod_name: &str, info: &PanicInfo) -> ! {
+fn common_panic_handler(mod_name: &str, info: PanicCommon) -> ! {
     hal::disable_interrupts();
     let core = hal::get_core();
 
@@ -35,7 +54,6 @@ pub fn common_panic_handler(mod_name: &str, info: &PanicInfo) -> ! {
 
     let early_panic_phase = EARLY_PANIC_PHASE.load(Ordering::Acquire);
     let mp_init = MP_INIT.load(Ordering::Acquire);
-    
     if !IS_NESTED.load(Ordering::Acquire) {
         if !early_panic_phase && mp_init {
             // Shutdown all the other cores
@@ -60,14 +78,14 @@ pub fn common_panic_handler(mod_name: &str, info: &PanicInfo) -> ! {
 
     if early_panic_phase || DISABLE_CALLSTACK.load(Ordering::Acquire) {
         println!("Kernel panic on core {}!!", core);
-        println!("Message: {}", info.message());
+        info.print();
         println!("Module: {}", mod_name);
         
         hal::halt();
     }
     
     println!("Kernel panic on core {}!!", core);
-    println!("Message: {}", info.message());
+    info.print();
     println!("Module: {}", mod_name);
 
     let stack_base = cpu::get_panic_base(); 
@@ -199,12 +217,16 @@ pub fn enable_mp_init() {
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    common_panic_handler(env!("CARGO_PKG_NAME"), info)
+    let panic_info = PanicCommon {
+        msg: DEFAULT_PANIC_STRING,
+        info: Some(info)
+    };
+    common_panic_handler(env!("CARGO_PKG_NAME"), panic_info);
 }
 
 
-//#[cfg(not(test))]
-//#[no_mangle]
-//extern "C" fn panic_router(mod_name: StrRef, info: &PanicInfo) -> ! {
-//    common_panic_handler(unsafe {mod_name.as_str()}, info)
-//}
+#[cfg(not(test))]
+#[unsafe(no_mangle)]
+extern "C" fn panic_router(mod_name: StrRef, info: StrRef) -> ! {
+    common_panic_handler(unsafe {mod_name.as_str()}, unsafe { PanicCommon {msg: info.as_str(), info: None}})
+}

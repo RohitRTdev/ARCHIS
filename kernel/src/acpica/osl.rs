@@ -4,24 +4,24 @@ use kernel_intf::info;
 
 use super::types::*;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsInitialize() -> ACPI_STATUS {
     info!("ACPICA initialize");
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsTerminate() -> ACPI_STATUS {
     info!("ACPICA terminate");
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsGetRootPointer() -> ACPI_PHYSICAL_ADDRESS {
     1
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsPredefinedOverride(predefined_obj: *const ACPI_PREDEFINED_NAMES, new_value: *mut ACPI_STRING) -> ACPI_STATUS {
     if predefined_obj.is_null() {
         return AE_ERROR;
@@ -34,7 +34,7 @@ extern "C" fn AcpiOsPredefinedOverride(predefined_obj: *const ACPI_PREDEFINED_NA
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsTableOverride (existing_table: *mut AcpiTableHeader, new_table: *mut *const AcpiTableHeader) -> ACPI_STATUS {
     if existing_table.is_null() {
         return AE_ERROR;
@@ -47,7 +47,7 @@ extern "C" fn AcpiOsTableOverride (existing_table: *mut AcpiTableHeader, new_tab
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsPhysicalTableOverride (existing_table: *const AcpiTableHeader, new_address: *mut ACPI_PHYSICAL_ADDRESS, 
     new_table_length: *mut ACPI_SIZE) -> ACPI_STATUS {
     if existing_table.is_null() {
@@ -62,7 +62,7 @@ extern "C" fn AcpiOsPhysicalTableOverride (existing_table: *const AcpiTableHeade
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsCreateCache (cache_name: *const c_char, object_size: u16, max_depth: u16, return_cache: *mut *mut c_void) -> ACPI_STATUS {
     let s = unsafe {
         CStr::from_ptr(cache_name as *const i8).to_str().unwrap()
@@ -80,7 +80,7 @@ extern "C" fn AcpiOsCreateCache (cache_name: *const c_char, object_size: u16, ma
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsDeleteCache (cache: *mut c_void) -> ACPI_STATUS {
     if cache.is_null() {
         return AE_ERROR;
@@ -89,7 +89,7 @@ extern "C" fn AcpiOsDeleteCache (cache: *mut c_void) -> ACPI_STATUS {
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsPurgeCache (cache: *mut c_void) -> ACPI_STATUS {
     if cache.is_null() {
         return AE_ERROR;
@@ -98,7 +98,7 @@ extern "C" fn AcpiOsPurgeCache (cache: *mut c_void) -> ACPI_STATUS {
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsAcquireObject (cache: *mut c_void) -> *mut c_void {
     info!("ACPICA: Acquire object:{:#X}", cache as usize);
     if cache.is_null() {
@@ -108,7 +108,7 @@ extern "C" fn AcpiOsAcquireObject (cache: *mut c_void) -> *mut c_void {
     ptr::null_mut()
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsReleaseObject (cache: *mut c_void, object: *const c_void) -> ACPI_STATUS {
     if cache.is_null() || object.is_null() {
         return AE_ERROR;
@@ -117,7 +117,7 @@ extern "C" fn AcpiOsReleaseObject (cache: *mut c_void, object: *const c_void) ->
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsMapMemory (phys_addr: ACPI_PHYSICAL_ADDRESS, length: ACPI_SIZE) -> *mut c_void {
     if length == 0 {
         return ptr::null_mut();
@@ -126,12 +126,12 @@ extern "C" fn AcpiOsMapMemory (phys_addr: ACPI_PHYSICAL_ADDRESS, length: ACPI_SI
     ptr::null_mut()
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsUnmapMemory (virt_addr: *const c_void, length: ACPI_SIZE) {
 }
 
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsGetPhysicalAddress (virt_addr: *const c_void, phys_addr: *mut ACPI_PHYSICAL_ADDRESS) -> ACPI_STATUS {
     if virt_addr.is_null() || phys_addr.is_null() {
         return AE_ERROR;
@@ -144,16 +144,16 @@ extern "C" fn AcpiOsGetPhysicalAddress (virt_addr: *const c_void, phys_addr: *mu
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsAllocate(size: ACPI_SIZE) -> *mut c_void {
     ptr::null_mut()
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsFree(ptr: *mut c_void) {
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsReadable (memory: *const c_void, length: ACPI_SIZE) -> u8 {
     if memory.is_null() || length == 0 {
         return 0;
@@ -162,7 +162,7 @@ extern "C" fn AcpiOsReadable (memory: *const c_void, length: ACPI_SIZE) -> u8 {
     1
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsWritable (memory: *const c_void, length: ACPI_SIZE) -> u8 {
     if memory.is_null() || length == 0 {
         return 0;
@@ -171,17 +171,17 @@ extern "C" fn AcpiOsWritable (memory: *const c_void, length: ACPI_SIZE) -> u8 {
     1
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsGetThreadId() -> ACPI_THREAD_ID {
     1
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsExecute(_type: u32, func: ACPI_OSD_EXEC_CALLBACK, ctx: *mut c_void) -> ACPI_STATUS {
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsSleep(milliseconds: u64) -> ACPI_STATUS {
     if milliseconds == 0 {
         return AE_ERROR;
@@ -190,7 +190,7 @@ extern "C" fn AcpiOsSleep(milliseconds: u64) -> ACPI_STATUS {
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsStall(microseconds: u64) -> ACPI_STATUS {
     if microseconds == 0 {
         return AE_ERROR;
@@ -199,11 +199,11 @@ extern "C" fn AcpiOsStall(microseconds: u64) -> ACPI_STATUS {
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsWaitEventsComplete() 
 {}
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsCreateSemaphore(max_units: u32, initial_units: u32, out_handle: *mut *mut c_void) -> ACPI_STATUS {
     if out_handle.is_null() {
         return AE_ERROR;
@@ -216,7 +216,7 @@ extern "C" fn AcpiOsCreateSemaphore(max_units: u32, initial_units: u32, out_hand
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsDeleteSemaphore(handle: *mut c_void) -> ACPI_STATUS {
     if handle.is_null() {
         return AE_ERROR;
@@ -225,7 +225,7 @@ extern "C" fn AcpiOsDeleteSemaphore(handle: *mut c_void) -> ACPI_STATUS {
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsWaitSemaphore(handle: *mut c_void, units: u32, timeout: u16) -> ACPI_STATUS {
     if handle.is_null() || units == 0 {
         return AE_ERROR;
@@ -234,7 +234,7 @@ extern "C" fn AcpiOsWaitSemaphore(handle: *mut c_void, units: u32, timeout: u16)
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsSignalSemaphore(handle: *mut c_void, units: u32) -> ACPI_STATUS {
     if handle.is_null() || units == 0 {
         return AE_ERROR;
@@ -243,7 +243,7 @@ extern "C" fn AcpiOsSignalSemaphore(handle: *mut c_void, units: u32) -> ACPI_STA
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsCreateLock(out_handle: *mut *mut c_void) -> ACPI_STATUS {
     if out_handle.is_null() {
         return AE_ERROR;
@@ -256,7 +256,7 @@ extern "C" fn AcpiOsCreateLock(out_handle: *mut *mut c_void) -> ACPI_STATUS {
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsDeleteLock(handle: *mut c_void) -> ACPI_STATUS {
     if handle.is_null() {
         return AE_ERROR;
@@ -265,7 +265,7 @@ extern "C" fn AcpiOsDeleteLock(handle: *mut c_void) -> ACPI_STATUS {
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsAcquireLock(handle: *mut c_void) -> ACPI_STATUS {
     if handle.is_null() {
         return AE_ERROR;
@@ -274,7 +274,7 @@ extern "C" fn AcpiOsAcquireLock(handle: *mut c_void) -> ACPI_STATUS {
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsReleaseLock(handle: *mut c_void) -> ACPI_STATUS {
     if handle.is_null() {
         return AE_ERROR;
@@ -283,17 +283,17 @@ extern "C" fn AcpiOsReleaseLock(handle: *mut c_void) -> ACPI_STATUS {
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsInstallInterruptHandler(interrupt_number: u32, handler: ACPI_OSD_HANDLER, context: *mut c_void) -> ACPI_STATUS {
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsRemoveInterruptHandler(interrupt_number: u32, handler: ACPI_OSD_HANDLER) -> ACPI_STATUS {
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsReadMemory(phys_addr: ACPI_PHYSICAL_ADDRESS, value: *mut u64, width: u32) -> ACPI_STATUS {
     if value.is_null() || width == 0 {
         return AE_ERROR;
@@ -302,7 +302,7 @@ extern "C" fn AcpiOsReadMemory(phys_addr: ACPI_PHYSICAL_ADDRESS, value: *mut u64
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsWriteMemory(phys_addr: ACPI_PHYSICAL_ADDRESS, value: u64, width: u32) -> ACPI_STATUS {
     if width == 0 {
         return AE_ERROR;
@@ -311,7 +311,7 @@ extern "C" fn AcpiOsWriteMemory(phys_addr: ACPI_PHYSICAL_ADDRESS, value: u64, wi
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsReadPort(port: u16, value: *mut u32, width: u32) -> ACPI_STATUS {
     if value.is_null() || width == 0 {
         return AE_ERROR;
@@ -320,7 +320,7 @@ extern "C" fn AcpiOsReadPort(port: u16, value: *mut u32, width: u32) -> ACPI_STA
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsWritePort(port: u16, value: u32, width: u32) -> ACPI_STATUS {
     if width == 0 {
         return AE_ERROR;
@@ -329,7 +329,7 @@ extern "C" fn AcpiOsWritePort(port: u16, value: u32, width: u32) -> ACPI_STATUS 
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsReadPciConfiguration(handle: AcpiPciId, reg: u32, value: *mut u64, width: u32) -> ACPI_STATUS {
     if value.is_null() || width == 0 {
         return AE_ERROR;
@@ -338,7 +338,7 @@ extern "C" fn AcpiOsReadPciConfiguration(handle: AcpiPciId, reg: u32, value: *mu
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsWritePciConfiguration(handle: AcpiPciId, reg: u32, value: u64, width: u32) -> ACPI_STATUS {
     if width == 0 {
         return AE_ERROR;
@@ -347,7 +347,7 @@ extern "C" fn AcpiOsWritePciConfiguration(handle: AcpiPciId, reg: u32, value: u6
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsPrintStr(s: *const u8) {
     if s.is_null() {
         return;
@@ -360,22 +360,22 @@ extern "C" fn AcpiOsPrintStr(s: *const u8) {
     info!("ACPICA: {}", s);     
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsRedirectOutput(_file: *mut c_void) -> ACPI_STATUS {
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsGetTimer() -> u64 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsSignal(function: u32, info: *const c_void) -> ACPI_STATUS {
     AE_OK
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn AcpiOsEnterSleep(sleep_state: u8, reg_a_val: u32, reg_b_val: u32) -> ACPI_STATUS {
     panic!("Aris currently does not support HW reduced ACPI platforms");
 }

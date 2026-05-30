@@ -132,7 +132,7 @@ impl CPUContext {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn global_interrupt_handler(vector: u64, cpu_context: *const CPUContext) -> *const CPUContext {
     PER_CPU_GLOBAL_CONTEXT.local().store(cpu_context.addr(), Ordering::Release);
     unsafe {

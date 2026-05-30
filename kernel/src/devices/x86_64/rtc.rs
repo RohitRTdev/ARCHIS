@@ -84,7 +84,7 @@ pub fn read_realtime() -> RtcTime {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn read_rtc() -> RtcTime {
     read_realtime()
 }

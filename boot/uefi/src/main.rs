@@ -20,7 +20,7 @@ use blr::{KERNEL_FILE, ROOT_FILES, load_kernel, jump_to_kernel};
 
 extern crate alloc;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "Rust" fn loader_alloc(layout: Layout) -> *mut u8 {
     assert!(layout.align() <= PAGE_SIZE, "Cannot satisfy memory alignment constraint of more than 4096 bytes!!");
     debug!("Requesting memory allocation for {:?}", layout);
