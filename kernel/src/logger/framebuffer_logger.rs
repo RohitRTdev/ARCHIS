@@ -6,6 +6,7 @@ use kernel_intf::debug;
 use common::{ceil_div, MemoryRegion, PAGE_SIZE};
 
 const PSF_MAGIC: u32 = 0x864AB572;
+const CURSOR_HEIGHT: f64 = 0.2;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -50,6 +51,10 @@ pub struct FramebufferLogger {
     dirty_min_y: usize,
     dirty_max_y: usize,
     display_start_row: usize,
+    is_cursor_disabled: bool,
+    
+    // Should be between 0-1
+    cursor_height: f64
 }
 
 unsafe impl Send for FramebufferLogger {}
@@ -75,6 +80,8 @@ pub static FRAMEBUFFER_LOGGER: Spinlock<FramebufferLogger> = Spinlock::new(Frame
     dirty_min_y: usize::MAX,
     dirty_max_y: 0,
     display_start_row: 0,
+    is_cursor_disabled: false,
+    cursor_height: CURSOR_HEIGHT
 });
 
 impl FramebufferLogger {
@@ -183,7 +190,20 @@ impl FramebufferLogger {
         self.dirty_max_y = 0;
     }
 
-    fn put_char(&mut self, c: char) {
+    fn adjust_cursor_pos(&mut self) {
+        if self.current_x >= self.width {
+            self.current_x = 0;
+            self.current_y += self.font_header.height as usize;
+            if self.current_y >= self.height {
+                self.scroll_screen();
+            }
+        }
+    }
+
+    fn put_char(&mut self, c: char, is_first: bool, is_last: bool) {
+        if is_first {
+            self.draw_cursor(false);
+        }
         match c {
             '\n' => {
                 self.current_x = 0;
@@ -191,34 +211,68 @@ impl FramebufferLogger {
                 if self.current_y >= self.height {
                     self.scroll_screen();
                 }
-            }
+            },
             '\r' => {
                 self.current_x = 0;
-            }
+            },
             '\t' => {
                 let tab_width = self.font_header.width as usize * 4;
                 self.current_x += tab_width - (self.current_x % tab_width);
-                if self.current_x >= self.width {
-                    self.current_x = 0;
-                    self.current_y += self.font_header.height as usize;
-                    if self.current_y >= self.height {
-                        self.scroll_screen();
-                    }
-                }
-            }
+                self.adjust_cursor_pos();
+            },
             _ => {
                 self.draw_char(c);
                 self.current_x += self.font_header.width as usize;
-                if self.current_x >= self.width {
-                    self.current_x = 0;
-                    self.current_y += self.font_header.height as usize;
-                    if self.current_y >= self.height {
-                        self.scroll_screen();
-                    }
+                self.adjust_cursor_pos();
+            }
+        }
+        if is_last {
+            self.draw_cursor(true);
+        }
+    }
+
+    fn draw_cursor(&mut self, is_visible: bool) {
+        if self.is_cursor_disabled {
+            return;
+        }
+        let start_x     = self.current_x;
+        let start_y     = self.current_y; 
+        let font_width  = self.font_header.width  as usize;
+        let font_height = self.font_header.height as usize;
+
+        if start_x >= self.width || start_y >= self.height {
+            return;
+        }
+        let draw_width  = font_width.min(self.width  - start_x);
+        let draw_height = font_height.min(self.height - start_y);
+        let start_height = (draw_height as f64 * (1.0 - self.cursor_height)) as usize;
+        self.mark_dirty(start_y, start_y + font_height);
+
+        let logical_row = start_y / font_height;
+        let max_rows    = self.height / font_height;
+        let phys_row    = (self.display_start_row + logical_row) % max_rows;
+        let phys_top    = phys_row * font_height;
+        
+        let scratch = unsafe { 
+            (*FRAMEBUFFER.buffer.get()).as_ptr() as *mut u32 
+        };
+        let pixel_val = if is_visible {
+            0x00AA_AAAA
+        }
+        else {
+            0
+        };
+        for y in start_height..draw_height {
+            let row_base = (phys_top + y) * self.stride + start_x;
+
+            for x in 0..draw_width {
+                unsafe { 
+                    *scratch.add(row_base + x) = pixel_val;
                 }
             }
         }
     }
+
 
     fn draw_char(&mut self, c: char) {
         let char_code = c as u32;
@@ -263,12 +317,6 @@ impl FramebufferLogger {
             // Process 8 pixels per byte; read each glyph byte exactly once
             for bx in 0..bytes_per_row {
                 let glyph_byte = unsafe { *glyph_row.add(bx) };
-
-                if glyph_byte == 0 {
-                    continue;
-                }
-
-                // PSF is in MSB order 
                 let x_start = bx * 8;
                 let x_end   = (x_start + 8).min(draw_width);
 
@@ -279,9 +327,18 @@ impl FramebufferLogger {
                             *scratch.add(row_base + bit_pos) = 0x00AA_AAAA;
                         }
                     }
+                    else {
+                        unsafe { 
+                            *scratch.add(row_base + bit_pos) = 0;
+                        }
+                    }
                 }
             }
         }
+    }
+    
+    pub fn disable_cursor(&mut self) {
+        self.is_cursor_disabled = true;
     }
 
     // Expand the dirty logical-scanline range to cover [y_start, y_end).
@@ -314,8 +371,10 @@ impl FramebufferLogger {
     }
 
     pub fn write(&mut self, s: &str) {
-        for c in s.chars() {
-            self.put_char(c);
+        for (idx, c) in s.chars().enumerate() {
+            let is_first = idx == 0;
+            let is_last = idx == s.len() - 1;
+            self.put_char(c, is_first, is_last);
         }
     }
 }

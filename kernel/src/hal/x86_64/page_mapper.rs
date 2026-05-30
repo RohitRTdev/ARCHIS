@@ -201,12 +201,18 @@ impl PageMapper {
         self.set_current();
 
         let is_user = flags & mem::PageDescriptor::USER != 0;
-        let is_mmio = flags & mem::PageDescriptor::MMIO != 0;
-        let is_wc   = flags & mem::PageDescriptor::WC   != 0;
+        let mut is_mmio = flags & mem::PageDescriptor::MMIO != 0;
+        let mut is_wc   = flags & mem::PageDescriptor::WC   != 0;
         let is_global_feature = CPU_FEATURES.get().unwrap().lock().pge;
         let is_pat_feature = CPU_FEATURES.get().unwrap().lock().pat;
 
         assert!(!(is_mmio && is_wc), "PageDescriptor::MMIO and WC are mutually exclusive");
+        
+        // If we don't have WC capability, fallback to MMIO
+        if is_wc && !is_pat_feature {
+            is_mmio = true;
+            is_wc = false;
+        }
 
         let pml4 = self.get_table_mut(
             PageLevel::PML4,

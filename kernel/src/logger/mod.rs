@@ -14,9 +14,14 @@ pub extern "C" fn clear_screen() {
     FRAMEBUFFER_LOGGER.lock().clear_screen();
 }
 
+fn disable_cursor() {
+    FRAMEBUFFER_LOGGER.lock().disable_cursor();
+}
+
 pub fn set_panic_mode(core: u8) {
     PANIC_MODE.store(true, Ordering::Release);
     PANIC_CORE.store(core, Ordering::Release);
+    disable_cursor();
     clear_screen();
 }
 
